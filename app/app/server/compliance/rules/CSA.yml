@@ -1,0 +1,349 @@
+# Canadian Standards Association (CSA) Compliance Rules
+# These rules cover structural, electrical, and material standards for Canadian construction
+
+rules:
+  # CSA A23.1/A23.2 - CONCRETE MATERIALS AND METHODS
+  
+  - id: csa_a23.1_6.2
+    title: "Concrete compressive strength requirements"
+    standard: "CSA"
+    clause: "A23.1-6.2"
+    factsNeeded: ["concrete_fc_MPa", "exposure_class", "structural_element_type"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "==": ["exposure_class", "F-1"] },
+            { ">=": ["concrete_fc_MPa", 30] }
+          ]}
+        - { "and": [
+            { "==": ["exposure_class", "F-2"] },
+            { ">=": ["concrete_fc_MPa", 35] }
+          ]}
+        - { "and": [
+            { "==": ["exposure_class", "C-1"] },
+            { ">=": ["concrete_fc_MPa", 35] }
+          ]}
+        - { "and": [
+            { "==": ["exposure_class", "C-2"] },
+            { ">=": ["concrete_fc_MPa", 40] }
+          ]}
+        - { "and": [
+            { "==": ["exposure_class", "N"] },
+            { ">=": ["concrete_fc_MPa", 25] }
+          ]}
+
+  - id: csa_a23.1_7.4
+    title: "Concrete cover requirements for reinforcement"
+    standard: "CSA"
+    clause: "A23.1-7.4"
+    factsNeeded: ["concrete_cover_mm", "exposure_condition", "member_type"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "==": ["exposure_condition", "interior"] },
+            { "==": ["member_type", "slab"] },
+            { ">=": ["concrete_cover_mm", 20] }
+          ]}
+        - { "and": [
+            { "==": ["exposure_condition", "interior"] },
+            { "==": ["member_type", "beam"] },
+            { ">=": ["concrete_cover_mm", 30] }
+          ]}
+        - { "and": [
+            { "==": ["exposure_condition", "exterior"] },
+            { ">=": ["concrete_cover_mm", 40] }
+          ]}
+        - { "and": [
+            { "==": ["exposure_condition", "cast_against_earth"] },
+            { ">=": ["concrete_cover_mm", 75] }
+          ]}
+
+  - id: csa_a23.3_8.1
+    title: "Minimum reinforcement requirements"
+    standard: "CSA"
+    clause: "A23.3-8.1"
+    factsNeeded: ["reinforcement_ratio", "member_type", "concrete_fc_MPa"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "==": ["member_type", "slab"] },
+            { ">=": ["reinforcement_ratio", 0.0018] }
+          ]}
+        - { "and": [
+            { "==": ["member_type", "beam"] },
+            { ">=": ["reinforcement_ratio", { "/": [{ "sqrt": ["concrete_fc_MPa"] }, { "*": [4, 400] }] }] }
+          ]}
+
+  # CSA S16 - DESIGN OF STEEL STRUCTURES
+  
+  - id: csa_s16_10.2
+    title: "Steel member slenderness limits"
+    standard: "CSA"
+    clause: "S16-10.2"
+    factsNeeded: ["slenderness_ratio", "member_type", "compression_member"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["compression_member", false] }
+        - { "<=": ["slenderness_ratio", 200] }
+
+  - id: csa_s16_13.2
+    title: "Bolted connection requirements"
+    standard: "CSA"
+    clause: "S16-13.2"
+    factsNeeded: ["bolt_grade", "connection_type", "bolt_spacing_mm", "bolt_diameter_mm"]
+    severity: "fail"
+    logic:
+      "and": [
+        { "in": ["bolt_grade", ["A325", "A490", "A307"]] },
+        { ">=": ["bolt_spacing_mm", { "*": ["bolt_diameter_mm", 3] }] }
+      ]
+
+  - id: csa_s16_13.11
+    title: "Welded connection requirements"
+    standard: "CSA"
+    clause: "S16-13.11"
+    factsNeeded: ["weld_type", "weld_size_mm", "base_metal_thickness_mm"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "==": ["weld_type", "fillet"] },
+            { "<=": ["weld_size_mm", { "*": ["base_metal_thickness_mm", 0.75] }] }
+          ]}
+        - { "==": ["weld_type", "groove"] }
+
+  - id: csa_s16_14.1
+    title: "Lateral bracing requirements"
+    standard: "CSA"
+    clause: "S16-14.1"
+    factsNeeded: ["unbraced_length_m", "member_depth_mm", "has_lateral_bracing"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "<=": ["unbraced_length_m", { "/": ["member_depth_mm", 50] }] }
+        - { "==": ["has_lateral_bracing", true] }
+
+  # CSA O86 - ENGINEERING DESIGN IN WOOD
+  
+  - id: csa_o86_5.5
+    title: "Wood member size factor"
+    standard: "CSA"
+    clause: "O86-5.5"
+    factsNeeded: ["member_width_mm", "member_depth_mm", "size_factor_applied"]
+    severity: "warn"
+    logic:
+      "or":
+        - { "and": [
+            { "<=": ["member_width_mm", 89] },
+            { "<=": ["member_depth_mm", 89] }
+          ]}
+        - { "==": ["size_factor_applied", true] }
+
+  - id: csa_o86_6.5
+    title: "Wood stud spacing requirements"
+    standard: "CSA"
+    clause: "O86-6.5"
+    factsNeeded: ["stud_spacing_mm", "stud_size", "wall_height_m"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "==": ["stud_size", "2x4"] },
+            { "<=": ["wall_height_m", 3.0] },
+            { "<=": ["stud_spacing_mm", 600] }
+          ]}
+        - { "and": [
+            { "==": ["stud_size", "2x6"] },
+            { "<=": ["wall_height_m", 3.6] },
+            { "<=": ["stud_spacing_mm", 600] }
+          ]}
+        - { "<=": ["stud_spacing_mm", 400] }
+
+  - id: csa_o86_10.4
+    title: "Nailing requirements for sheathing"
+    standard: "CSA"
+    clause: "O86-10.4"
+    factsNeeded: ["nail_spacing_edges_mm", "nail_spacing_field_mm", "sheathing_thickness_mm"]
+    severity: "fail"
+    logic:
+      "and": [
+        { "<=": ["nail_spacing_edges_mm", 150] },
+        { "<=": ["nail_spacing_field_mm", 300] }
+      ]
+
+  # CSA C22.1 - CANADIAN ELECTRICAL CODE
+  
+  - id: csa_c22.1_8.104
+    title: "Minimum conductor size"
+    standard: "CSA"
+    clause: "C22.1-8.104"
+    factsNeeded: ["conductor_size_AWG", "circuit_amperage", "conductor_material"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "<=": ["circuit_amperage", 15] },
+            { "<=": ["conductor_size_AWG", 14] }
+          ]}
+        - { "and": [
+            { "<=": ["circuit_amperage", 20] },
+            { "<=": ["conductor_size_AWG", 12] }
+          ]}
+        - { "and": [
+            { "<=": ["circuit_amperage", 30] },
+            { "<=": ["conductor_size_AWG", 10] }
+          ]}
+
+  - id: csa_c22.1_10.204
+    title: "Grounding conductor requirements"
+    standard: "CSA"
+    clause: "C22.1-10.204"
+    factsNeeded: ["has_grounding_conductor", "circuit_voltage", "is_electrical_system"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["is_electrical_system", false] }
+        - { "==": ["has_grounding_conductor", true] }
+
+  - id: csa_c22.1_12.100
+    title: "Conduit fill requirements"
+    standard: "CSA"
+    clause: "C22.1-12.100"
+    factsNeeded: ["conduit_fill_percent", "number_of_conductors"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "==": ["number_of_conductors", 1] },
+            { "<=": ["conduit_fill_percent", 53] }
+          ]}
+        - { "and": [
+            { "==": ["number_of_conductors", 2] },
+            { "<=": ["conduit_fill_percent", 31] }
+          ]}
+        - { "and": [
+            { ">=": ["number_of_conductors", 3] },
+            { "<=": ["conduit_fill_percent", 40] }
+          ]}
+
+  - id: csa_c22.1_26.402
+    title: "Receptacle spacing requirements"
+    standard: "CSA"
+    clause: "C22.1-26.402"
+    factsNeeded: ["max_receptacle_spacing_m", "room_type"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "in": ["room_type", ["living", "bedroom", "dining"]] },
+            { "<=": ["max_receptacle_spacing_m", 3.6] }
+          ]}
+        - { "and": [
+            { "==": ["room_type", "kitchen"] },
+            { "<=": ["max_receptacle_spacing_m", 1.8] }
+          ]}
+
+  - id: csa_c22.1_26.700
+    title: "Bathroom electrical safety"
+    standard: "CSA"
+    clause: "C22.1-26.700"
+    factsNeeded: ["bathroom_gfci_protected", "is_bathroom", "has_electrical_outlets"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["is_bathroom", false] }
+        - { "==": ["has_electrical_outlets", false] }
+        - { "==": ["bathroom_gfci_protected", true] }
+
+  # CSA B44 - ELEVATOR SAFETY CODE
+  
+  - id: csa_b44_2.1
+    title: "Elevator shaft fire rating"
+    standard: "CSA"
+    clause: "B44-2.1"
+    factsNeeded: ["elevator_shaft_fire_rating_hours", "has_elevator", "building_height_m"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["has_elevator", false] }
+        - { "and": [
+            { "<=": ["building_height_m", 18] },
+            { ">=": ["elevator_shaft_fire_rating_hours", 1] }
+          ]}
+        - { "and": [
+            { ">": ["building_height_m", 18] },
+            { ">=": ["elevator_shaft_fire_rating_hours", 2] }
+          ]}
+
+  - id: csa_b44_2.5
+    title: "Elevator machine room requirements"
+    standard: "CSA"
+    clause: "B44-2.5"
+    factsNeeded: ["has_elevator_machine_room", "has_elevator", "elevator_type"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["has_elevator", false] }
+        - { "==": ["elevator_type", "MRL"] }
+        - { "==": ["has_elevator_machine_room", true] }
+
+  # CSA B52 - MECHANICAL REFRIGERATION CODE
+  
+  - id: csa_b52_5.2
+    title: "Mechanical room ventilation"
+    standard: "CSA"
+    clause: "B52-5.2"
+    factsNeeded: ["mechanical_room_ventilation_ach", "has_refrigeration_equipment"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["has_refrigeration_equipment", false] }
+        - { ">=": ["mechanical_room_ventilation_ach", 4] }
+
+  # CSA B139 - INSTALLATION CODE FOR OIL-BURNING EQUIPMENT
+  
+  - id: csa_b139_6.2
+    title: "Oil tank clearances"
+    standard: "CSA"
+    clause: "B139-6.2"
+    factsNeeded: ["oil_tank_clearance_mm", "has_oil_tank", "tank_location"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["has_oil_tank", false] }
+        - { "and": [
+            { "==": ["tank_location", "indoor"] },
+            { ">=": ["oil_tank_clearance_mm", 450] }
+          ]}
+        - { "and": [
+            { "==": ["tank_location", "outdoor"] },
+            { ">=": ["oil_tank_clearance_mm", 1500] }
+          ]}
+
+  # CSA B149.1 - NATURAL GAS INSTALLATION CODE
+  
+  - id: csa_b149.1_5.3
+    title: "Gas meter clearances"
+    standard: "CSA"
+    clause: "B149.1-5.3"
+    factsNeeded: ["gas_meter_clearance_mm", "has_gas_meter"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["has_gas_meter", false] }
+        - { ">=": ["gas_meter_clearance_mm", 900] }
+
+  - id: csa_b149.1_7.1
+    title: "Gas appliance venting"
+    standard: "CSA"
+    clause: "B149.1-7.1"
+    factsNeeded: ["has_proper_venting", "has_gas_appliances"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["has_gas_appliances", false] }
+        - { "==": ["has_proper_venting", true] }

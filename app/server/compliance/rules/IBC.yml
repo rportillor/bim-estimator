@@ -1,0 +1,440 @@
+# International Building Code 2021 Compliance Rules
+# These rules are based on actual IBC requirements for US construction compliance
+
+rules:
+  # CHAPTER 3 - OCCUPANCY CLASSIFICATION AND USE
+  
+  - id: ibc_302.1
+    title: "Occupancy classification requirements"
+    standard: "IBC"
+    clause: "302.1"
+    factsNeeded: ["occupancy_classification", "building_use"]
+    severity: "fail"
+    logic:
+      "!=": ["occupancy_classification", null]
+
+  # CHAPTER 5 - GENERAL BUILDING HEIGHTS AND AREAS
+  
+  - id: ibc_503.1
+    title: "Building height limitations"
+    standard: "IBC"
+    clause: "503.1"
+    factsNeeded: ["building_height_ft", "occupancy_classification", "construction_type", "sprinklered"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "==": ["construction_type", "I-A"] },
+            { "==": ["sprinklered", true] }
+          ]}
+        - { "and": [
+            { "==": ["construction_type", "II-A"] },
+            { "<=": ["building_height_ft", 85] }
+          ]}
+        - { "and": [
+            { "==": ["construction_type", "II-B"] },
+            { "<=": ["building_height_ft", 75] }
+          ]}
+        - { "and": [
+            { "==": ["construction_type", "III-A"] },
+            { "<=": ["building_height_ft", 85] }
+          ]}
+        - { "and": [
+            { "==": ["construction_type", "V-A"] },
+            { "<=": ["building_height_ft", 60] }
+          ]}
+
+  - id: ibc_506.2
+    title: "Allowable area increases for sprinklers"
+    standard: "IBC"
+    clause: "506.2"
+    factsNeeded: ["building_area_sqft", "base_allowable_area_sqft", "sprinklered"]
+    severity: "info"
+    logic:
+      "or":
+        - { "<=": ["building_area_sqft", "base_allowable_area_sqft"] }
+        - { "and": [
+            { "==": ["sprinklered", true] },
+            { "<=": ["building_area_sqft", { "*": ["base_allowable_area_sqft", 3] }] }
+          ]}
+
+  # CHAPTER 7 - FIRE AND SMOKE PROTECTION FEATURES
+  
+  - id: ibc_704.3
+    title: "Fire-resistance rating of exterior walls"
+    standard: "IBC"
+    clause: "704.3"
+    factsNeeded: ["fire_separation_distance_ft", "exterior_wall_rating_hours"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { ">=": ["fire_separation_distance_ft", 30] },
+            { ">=": ["exterior_wall_rating_hours", 0] }
+          ]}
+        - { "and": [
+            { ">=": ["fire_separation_distance_ft", 10] },
+            { "<": ["fire_separation_distance_ft", 30] },
+            { ">=": ["exterior_wall_rating_hours", 1] }
+          ]}
+        - { "and": [
+            { ">=": ["fire_separation_distance_ft", 5] },
+            { "<": ["fire_separation_distance_ft", 10] },
+            { ">=": ["exterior_wall_rating_hours", 1] }
+          ]}
+        - { "and": [
+            { "<": ["fire_separation_distance_ft", 5] },
+            { ">=": ["exterior_wall_rating_hours", 2] }
+          ]}
+
+  - id: ibc_707.3
+    title: "Fire barrier requirements"
+    standard: "IBC"
+    clause: "707.3"
+    factsNeeded: ["fire_barrier_rating_hours", "occupancy_separation_required"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["occupancy_separation_required", false] }
+        - { ">=": ["fire_barrier_rating_hours", 1] }
+
+  - id: ibc_711.2
+    title: "Horizontal assembly fire-resistance"
+    standard: "IBC"
+    clause: "711.2"
+    factsNeeded: ["floor_ceiling_assembly_rating_hours", "construction_type"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "in": ["construction_type", ["I-A", "I-B"]] },
+            { ">=": ["floor_ceiling_assembly_rating_hours", 2] }
+          ]}
+        - { "and": [
+            { "in": ["construction_type", ["II-A", "III-A"]] },
+            { ">=": ["floor_ceiling_assembly_rating_hours", 1] }
+          ]}
+        - { "in": ["construction_type", ["II-B", "III-B", "IV", "V-A", "V-B"]] }
+
+  # CHAPTER 8 - INTERIOR FINISHES
+  
+  - id: ibc_803.1
+    title: "Interior wall and ceiling finish classification"
+    standard: "IBC"
+    clause: "803.1"
+    factsNeeded: ["interior_finish_class", "occupancy_group", "sprinklered"]
+    severity: "warn"
+    logic:
+      "or":
+        - { "and": [
+            { "in": ["occupancy_group", ["A", "E", "I"]] },
+            { "in": ["interior_finish_class", ["A", "B"]] }
+          ]}
+        - { "and": [
+            { "==": ["sprinklered", true] },
+            { "in": ["interior_finish_class", ["A", "B", "C"]] }
+          ]}
+
+  # CHAPTER 9 - FIRE PROTECTION AND LIFE SAFETY SYSTEMS
+  
+  - id: ibc_903.2
+    title: "Automatic sprinkler systems required"
+    standard: "IBC"
+    clause: "903.2"
+    factsNeeded: ["occupancy_group", "fire_area_sqft", "sprinklered", "building_height_ft"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "==": ["occupancy_group", "A-1"] },
+            { "or": [
+                { ">=": ["fire_area_sqft", 12000] },
+                { "==": ["sprinklered", true] }
+              ]}
+          ]}
+        - { "and": [
+            { "==": ["occupancy_group", "A-2"] },
+            { "or": [
+                { ">=": ["fire_area_sqft", 5000] },
+                { "==": ["sprinklered", true] }
+              ]}
+          ]}
+        - { "and": [
+            { "in": ["occupancy_group", ["E", "I", "R-1", "R-2", "R-4"]] },
+            { "==": ["sprinklered", true] }
+          ]}
+        - { "and": [
+            { ">=": ["building_height_ft", 55] },
+            { "==": ["sprinklered", true] }
+          ]}
+
+  - id: ibc_907.2
+    title: "Fire alarm and detection systems"
+    standard: "IBC"
+    clause: "907.2"
+    factsNeeded: ["occupancy_group", "occupant_load", "has_fire_alarm"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "in": ["occupancy_group", ["A", "E", "I", "R-1", "R-2"]] },
+            { "==": ["has_fire_alarm", true] }
+          ]}
+        - { "and": [
+            { "==": ["occupancy_group", "B"] },
+            { "or": [
+                { "<=": ["occupant_load", 500] },
+                { "==": ["has_fire_alarm", true] }
+              ]}
+          ]}
+
+  # CHAPTER 10 - MEANS OF EGRESS
+  
+  - id: ibc_1004.5
+    title: "Occupant load calculation"
+    standard: "IBC"
+    clause: "1004.5"
+    factsNeeded: ["floor_area_sqft", "occupant_load_factor", "calculated_occupant_load"]
+    severity: "fail"
+    logic:
+      ">=": ["calculated_occupant_load", { "/": ["floor_area_sqft", "occupant_load_factor"] }]
+
+  - id: ibc_1005.3
+    title: "Required egress width"
+    standard: "IBC"
+    clause: "1005.3"
+    factsNeeded: ["occupant_load", "stair_width_inches", "door_width_inches"]
+    severity: "fail"
+    logic:
+      "and": [
+        { ">=": ["stair_width_inches", { "*": ["occupant_load", 0.3] }] },
+        { ">=": ["door_width_inches", { "*": ["occupant_load", 0.2] }] }
+      ]
+
+  - id: ibc_1006.2
+    title: "Number of exits required"
+    standard: "IBC"
+    clause: "1006.2"
+    factsNeeded: ["occupant_load", "number_of_exits"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "<=": ["occupant_load", 49] },
+            { ">=": ["number_of_exits", 1] }
+          ]}
+        - { "and": [
+            { "<=": ["occupant_load", 500] },
+            { ">=": ["number_of_exits", 2] }
+          ]}
+        - { "and": [
+            { "<=": ["occupant_load", 1000] },
+            { ">=": ["number_of_exits", 3] }
+          ]}
+        - { "and": [
+            { ">": ["occupant_load", 1000] },
+            { ">=": ["number_of_exits", 4] }
+          ]}
+
+  - id: ibc_1008.1
+    title: "Door width and height requirements"
+    standard: "IBC"
+    clause: "1008.1"
+    factsNeeded: ["door_width_inches", "door_height_inches", "is_egress_door"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["is_egress_door", false] }
+        - { "and": [
+            { ">=": ["door_width_inches", 32] },
+            { ">=": ["door_height_inches", 80] }
+          ]}
+
+  - id: ibc_1009.1
+    title: "Stairway width requirements"
+    standard: "IBC"
+    clause: "1009.1"
+    factsNeeded: ["stair_width_inches", "occupant_load"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "<=": ["occupant_load", 50] },
+            { ">=": ["stair_width_inches", 36] }
+          ]}
+        - { ">=": ["stair_width_inches", 44] }
+
+  - id: ibc_1011.2
+    title: "Exit sign requirements"
+    standard: "IBC"
+    clause: "1011.2"
+    factsNeeded: ["has_exit_signs", "occupant_load", "occupancy_group"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "in": ["occupancy_group", ["A", "E", "I", "M", "R-1", "R-2"]] },
+            { "==": ["has_exit_signs", true] }
+          ]}
+        - { "and": [
+            { ">=": ["occupant_load", 50] },
+            { "==": ["has_exit_signs", true] }
+          ]}
+
+  - id: ibc_1017.2
+    title: "Exit access travel distance"
+    standard: "IBC"
+    clause: "1017.2"
+    factsNeeded: ["max_travel_distance_ft", "occupancy_group", "sprinklered"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "==": ["occupancy_group", "A"] },
+            { "==": ["sprinklered", false] },
+            { "<=": ["max_travel_distance_ft", 200] }
+          ]}
+        - { "and": [
+            { "==": ["occupancy_group", "A"] },
+            { "==": ["sprinklered", true] },
+            { "<=": ["max_travel_distance_ft", 250] }
+          ]}
+        - { "and": [
+            { "in": ["occupancy_group", ["B", "F", "M", "S"]] },
+            { "==": ["sprinklered", false] },
+            { "<=": ["max_travel_distance_ft", 200] }
+          ]}
+        - { "and": [
+            { "in": ["occupancy_group", ["B", "F", "M", "S"]] },
+            { "==": ["sprinklered", true] },
+            { "<=": ["max_travel_distance_ft", 300] }
+          ]}
+
+  # CHAPTER 11 - ACCESSIBILITY
+  
+  - id: ibc_1103.2
+    title: "Accessible route requirements"
+    standard: "IBC"
+    clause: "1103.2"
+    factsNeeded: ["has_accessible_route", "building_stories"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "<=": ["building_stories", 1] }
+        - { "==": ["has_accessible_route", true] }
+
+  - id: ibc_1104.4
+    title: "Accessible parking spaces"
+    standard: "IBC"
+    clause: "1104.4"
+    factsNeeded: ["total_parking_spaces", "accessible_parking_spaces"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["total_parking_spaces", 0] }
+        - { "and": [
+            { "<=": ["total_parking_spaces", 25] },
+            { ">=": ["accessible_parking_spaces", 1] }
+          ]}
+        - { "and": [
+            { "<=": ["total_parking_spaces", 50] },
+            { ">=": ["accessible_parking_spaces", 2] }
+          ]}
+        - { "and": [
+            { "<=": ["total_parking_spaces", 75] },
+            { ">=": ["accessible_parking_spaces", 3] }
+          ]}
+        - { ">=": ["accessible_parking_spaces", { "*": ["total_parking_spaces", 0.02] }] }
+
+  - id: ibc_1109.2
+    title: "Accessible dwelling units"
+    standard: "IBC"
+    clause: "1109.2"
+    factsNeeded: ["occupancy_group", "total_dwelling_units", "accessible_units"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "!=": ["occupancy_group", "R-2"] }
+        - { ">=": ["accessible_units", { "*": ["total_dwelling_units", 0.02] }] }
+
+  # CHAPTER 16 - STRUCTURAL DESIGN
+  
+  - id: ibc_1603.1
+    title: "Design loads requirements"
+    standard: "IBC"
+    clause: "1603.1"
+    factsNeeded: ["has_structural_calculations", "design_loads_documented"]
+    severity: "fail"
+    logic:
+      "and": [
+        { "==": ["has_structural_calculations", true] },
+        { "==": ["design_loads_documented", true] }
+      ]
+
+  - id: ibc_1604.3
+    title: "Live loads"
+    standard: "IBC"
+    clause: "1604.3"
+    factsNeeded: ["floor_live_load_psf", "occupancy_use"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "==": ["occupancy_use", "residential"] },
+            { ">=": ["floor_live_load_psf", 40] }
+          ]}
+        - { "and": [
+            { "==": ["occupancy_use", "office"] },
+            { ">=": ["floor_live_load_psf", 50] }
+          ]}
+        - { "and": [
+            { "==": ["occupancy_use", "retail"] },
+            { ">=": ["floor_live_load_psf", 100] }
+          ]}
+        - { "and": [
+            { "==": ["occupancy_use", "assembly"] },
+            { ">=": ["floor_live_load_psf", 100] }
+          ]}
+
+  - id: ibc_1605.2
+    title: "Load combinations"
+    standard: "IBC"
+    clause: "1605.2"
+    factsNeeded: ["uses_asce7_load_combinations"]
+    severity: "warn"
+    logic:
+      "==": ["uses_asce7_load_combinations", true]
+
+  - id: ibc_1607.1
+    title: "Live load reduction"
+    standard: "IBC"
+    clause: "1607.1"
+    factsNeeded: ["tributary_area_sqft", "live_load_reduction_factor"]
+    severity: "info"
+    logic:
+      "or":
+        - { "<=": ["tributary_area_sqft", 150] }
+        - { ">": ["live_load_reduction_factor", 0] }
+
+  - id: ibc_1609.1
+    title: "Wind loads"
+    standard: "IBC"
+    clause: "1609.1"
+    factsNeeded: ["basic_wind_speed_mph", "wind_exposure_category"]
+    severity: "fail"
+    logic:
+      "and": [
+        { ">": ["basic_wind_speed_mph", 0] },
+        { "in": ["wind_exposure_category", ["B", "C", "D"]] }
+      ]
+
+  - id: ibc_1613.1
+    title: "Seismic design requirements"
+    standard: "IBC"
+    clause: "1613.1"
+    factsNeeded: ["seismic_design_category", "has_seismic_analysis"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["seismic_design_category", "A"] }
+        - { "==": ["has_seismic_analysis", true] }
