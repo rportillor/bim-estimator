@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -11,7 +11,7 @@ import {
   Search, Filter, FileText, Calendar, FolderOpen, Download, Eye,
   AlertTriangle, History, Grid, List, SortAsc, SortDesc,
   Cpu, UserCheck, Users, X, MessageSquare, ChevronDown, ChevronUp,
-  CheckCheck, HelpCircle, AlertCircle, Send, ArrowUpCircle,
+  CheckCheck, HelpCircle, AlertCircle, Send, ArrowUpCircle, FileSearch,
 } from 'lucide-react';
 
 import { UserAccessPanel } from '@/components/documents/UserAccessPanel';
@@ -286,6 +286,42 @@ function DocumentCommentThread({ documentId, currentUserName }: { documentId: st
   );
 }
 
+// ─── Extracted text renderer with search highlighting ────────────────────────
+
+function ExtractedTextBody({ text, search }: { text: string; search: string }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Memoize the highlighted HTML so we're not re-computing on every render
+  const html = useMemo(() => {
+    if (!search.trim()) {
+      // No search — just preserve whitespace safely
+      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/\n/g, '<br/>');
+    }
+    const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`(${escaped})`, 'gi');
+    return text
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/\n/g, '<br/>')
+      .replace(re, '<mark class="bg-yellow-200 text-yellow-900 rounded-sm px-0.5">$1</mark>');
+  }, [text, search]);
+
+  // Scroll to first highlight whenever search changes
+  useEffect(() => {
+    if (!search || !containerRef.current) return;
+    const first = containerRef.current.querySelector('mark');
+    if (first) first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [html, search]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="font-mono text-xs leading-relaxed text-gray-800 whitespace-pre-wrap break-words"
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}
+
 // ─── Shared auth header helper ────────────────────────────────────────────────
 
 function authHeaders() {
@@ -322,6 +358,8 @@ export default function Documents() {
   const [assignDialog, setAssignDialog] = useState<{ open: boolean; documentId: string; documentName: string } | null>(null);
   const [selectedReviewerId, setSelectedReviewerId] = useState<string>('');
   const [reviewerNote, setReviewerNote] = useState<string>('');
+  const [textViewerDocId, setTextViewerDocId] = useState<string | null>(null);
+  const [textSearch, setTextSearch] = useState<string>('');
 
   const toggleComments = (id: string) =>
     setExpandedComments(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -331,6 +369,24 @@ export default function Documents() {
   const { data: rawDocuments = [], isLoading } = useQuery({ queryKey: ['/api/documents'], gcTime: 0, staleTime: 0 });
   const { data: users = [] } = useQuery({ queryKey: ['/api/users'] });
   const { data: _projects = [] } = useQuery({ queryKey: ['/api/projects'] });
+
+  // ── Extracted text viewer query (fires only when a doc is selected) ───────────
+  const { data: extractedTextData, isLoading: textLoading } = useQuery<{
+    documentId: string; fileName: string; analysisStatus: string;
+    pageCount: number | null; characterCount: number; wordCount: number; textContent: string;
+  }>({
+    queryKey: [`/api/documents/${textViewerDocId}/extracted-text`],
+    queryFn: async () => {
+      const token = localStorage.getItem('auth_token');
+      const res = await fetch(`/api/documents/${textViewerDocId}/extracted-text`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error('Failed to load extracted text');
+      return res.json();
+    },
+    enabled: !!textViewerDocId,
+    staleTime: 60000,
+  });
 
   // ── Auto-supersede computation ────────────────────────────────────────────────
 
@@ -633,6 +689,11 @@ export default function Documents() {
                         <Button variant="ghost" size="sm" onClick={() => handleDownloadDocument(doc.projectId, doc.id, doc.name)} data-testid={`download-${doc.id}`} className="flex-1 h-9">
                           <Download className="w-4 h-4 mr-2" />Download
                         </Button>
+                        {(doc.analysisStatus === 'Ready' || doc.status === 'completed') && (
+                          <Button variant="ghost" size="sm" onClick={() => { setTextViewerDocId(doc.id); setTextSearch(''); }} data-testid={`extracted-text-${doc.id}`} className="h-9 text-teal-700 hover:text-teal-800 hover:bg-teal-50 shrink-0">
+                            <FileSearch className="w-4 h-4 mr-1.5" />Extracted Text
+                          </Button>
+                        )}
                       </div>
 
                       {/* Metadata row */}
@@ -716,6 +777,69 @@ export default function Documents() {
           </div>
         )}
       </div>
+
+      {/* ── Extracted Text Viewer Dialog ────────────────────────────────────── */}
+      <Dialog open={!!textViewerDocId} onOpenChange={open => { if (!open) { setTextViewerDocId(null); setTextSearch(''); } }}>
+        <DialogContent className="max-w-4xl w-full h-[85vh] flex flex-col p-0 gap-0">
+          <DialogHeader className="px-6 pt-5 pb-3 border-b shrink-0">
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <FileSearch className="w-5 h-5 text-teal-600" />
+              Extracted Text — {extractedTextData?.fileName ?? '…'}
+            </DialogTitle>
+            {extractedTextData && (
+              <div className="flex flex-wrap gap-3 mt-1.5">
+                <span className="text-xs text-gray-500 bg-gray-100 rounded px-2 py-0.5">{extractedTextData.pageCount ? `${extractedTextData.pageCount} pages` : 'Unknown pages'}</span>
+                <span className="text-xs text-gray-500 bg-gray-100 rounded px-2 py-0.5">{extractedTextData.wordCount.toLocaleString()} words</span>
+                <span className="text-xs text-gray-500 bg-gray-100 rounded px-2 py-0.5">{extractedTextData.characterCount.toLocaleString()} characters</span>
+                <span className={`text-xs rounded px-2 py-0.5 ${extractedTextData.analysisStatus === 'Ready' ? 'bg-teal-100 text-teal-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                  {extractedTextData.analysisStatus}
+                </span>
+              </div>
+            )}
+          </DialogHeader>
+
+          {/* Search bar */}
+          <div className="px-6 py-3 border-b shrink-0 bg-gray-50">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 h-4 w-4" />
+              <Input
+                placeholder="Search within extracted text…"
+                value={textSearch}
+                onChange={e => setTextSearch(e.target.value)}
+                className="pl-9 bg-white"
+              />
+              {textSearch && extractedTextData && (
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">
+                  {(() => {
+                    const count = (extractedTextData.textContent.match(new RegExp(textSearch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')) || []).length;
+                    return count > 0 ? `${count} match${count !== 1 ? 'es' : ''}` : 'No matches';
+                  })()}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Text content */}
+          <div className="flex-1 overflow-y-auto px-6 py-4">
+            {textLoading ? (
+              <div className="flex items-center justify-center h-full text-gray-400">
+                <Cpu className="w-5 h-5 animate-pulse mr-2" />Loading extracted text…
+              </div>
+            ) : !extractedTextData?.textContent ? (
+              <div className="flex items-center justify-center h-full text-gray-400">
+                No extracted text available for this document.
+              </div>
+            ) : (
+              <ExtractedTextBody text={extractedTextData.textContent} search={textSearch} />
+            )}
+          </div>
+
+          <DialogFooter className="px-6 py-3 border-t shrink-0 bg-gray-50">
+            <p className="text-xs text-gray-400 mr-auto">This is the raw text the AI reads before generating BIM elements. Use it to verify the PDF was scanned correctly.</p>
+            <Button variant="outline" size="sm" onClick={() => { setTextViewerDocId(null); setTextSearch(''); }}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Assign for Review Dialog */}
       <Dialog open={!!assignDialog?.open} onOpenChange={open => { if (!open) { setAssignDialog(null); setSelectedReviewerId(''); setReviewerNote(''); } }}>

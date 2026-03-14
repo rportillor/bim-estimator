@@ -3566,6 +3566,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Return extracted text content for a document so users can verify what was read
+  app.get('/api/documents/:documentId/extracted-text', authenticateToken, async (req, res) => {
+    try {
+      const { documentId } = req.params;
+      const doc = await storage.getDocument(documentId);
+      if (!doc) return res.status(404).json({ error: 'Document not found' });
+      const text = (doc as any).textContent ?? (doc as any).text_content ?? null;
+      const words = text ? text.trim().split(/\s+/).filter(Boolean).length : 0;
+      res.json({
+        documentId: doc.id,
+        fileName: (doc as any).originalName ?? (doc as any).original_name ?? (doc as any).filename ?? 'Unknown',
+        analysisStatus: (doc as any).analysisStatus ?? (doc as any).analysis_status ?? 'Unknown',
+        pageCount: (doc as any).pageCount ?? (doc as any).page_count ?? null,
+        characterCount: text ? text.length : 0,
+        wordCount: words,
+        textContent: text ?? '',
+      });
+    } catch (err) {
+      console.error('GET /api/documents/:documentId/extracted-text error:', err);
+      res.status(500).json({ error: 'Failed to fetch extracted text' });
+    }
+  });
+
   app.get('/api/documents/:documentId/analysis', authenticateToken, async (req, res) => {
     try {
       const { documentId: _documentId2 } = req.params;
