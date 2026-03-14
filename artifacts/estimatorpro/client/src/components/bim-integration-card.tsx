@@ -189,9 +189,15 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
   };
 
   // ── Derived display state ──────────────────────────────────────────────────
-  const isGenerating = generatingLocal || dbStatus === 'generating';
-  const isFailed     = !isGenerating && (dbStatus === 'failed' || dbStatus === 'error');
-  const isReady      = !isGenerating && dbStatus === 'completed';
+  // "generating" from DB is only real if the user kicked it off in this session
+  // or if it's very recent (< 2 min). Otherwise treat it as stuck → failed.
+  const dbSaysRunning = dbStatus === 'generating' || dbStatus === 'processing';
+  const modelAge = latestModel ? Date.now() - new Date(latestModel.updatedAt || latestModel.createdAt || 0).getTime() : Infinity;
+  const isStuck = !generatingLocal && dbSaysRunning && modelAge > 2 * 60 * 1000;
+
+  const isGenerating = generatingLocal || (dbSaysRunning && !isStuck);
+  const isFailed     = isStuck || (!isGenerating && (dbStatus === 'failed' || dbStatus === 'error'));
+  const isReady      = !isGenerating && !isFailed && dbStatus === 'completed';
   const isPending    = !isGenerating && !isFailed && !isReady && !!latestModel;
 
   if (isLoading) {
