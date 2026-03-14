@@ -3472,8 +3472,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put('/api/documents/:documentId', authenticateToken, async (req, res) => {
     try {
       const { documentId } = req.params;
-      const updates = req.body;
-      res.json({ message: `Document ${documentId} updated`, updates });
+      const { reviewStatus, revisionNumber, tags, visibilityLevel } = req.body;
+      const doc = await storage.getDocument(documentId);
+      if (!doc) return res.status(404).json({ error: 'Document not found' });
+      const updated = await storage.updateDocument(documentId, {
+        ...(reviewStatus !== undefined ? { reviewStatus } : {}),
+        ...(revisionNumber !== undefined ? { revisionNumber } : {}),
+        ...(tags !== undefined ? { tags } : {}),
+        ...(visibilityLevel !== undefined ? { visibilityLevel } : {}),
+      });
+      res.json(updated);
     } catch (_error) {
       res.status(500).json({ error: "Failed to update document" });
     }

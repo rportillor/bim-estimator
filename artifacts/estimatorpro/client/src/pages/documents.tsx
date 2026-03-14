@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -20,7 +20,11 @@ import {
   Grid,
   List,
   SortAsc,
-  SortDesc
+  SortDesc,
+  ThumbsUp,
+  ThumbsDown,
+  Cpu,
+  BookOpen
 } from 'lucide-react';
 
 import { UserAccessPanel } from '@/components/documents/UserAccessPanel';
@@ -40,6 +44,8 @@ interface Document {
   uploadedAt: string;
   status: 'pending' | 'processing' | 'completed' | 'error';
   reviewStatus: 'draft' | 'under_review' | 'approved' | 'rejected';
+  analysisStatus?: string;
+  pageCount?: number;
   isSuperseded: boolean;
   revisionNumber: string;
   tags: string[];
@@ -47,8 +53,43 @@ interface Document {
   visibilityLevel?: string;
 }
 
+/** Parse revision number from filename. Returns e.g. "R1", "R2.1", or null. */
+function parseRevisionFromFilename(filename: string): string | null {
+  const patterns = [
+    /[_\-\s]R(\d+[\._]\d+)[_\-\s\.]/i,
+    /[_\-\s]R(\d+)[_\-\s\.]/i,
+    /[_\-\s]Rev[\._\-]?(\d+[\._]?\d*)[_\-\s\.]/i,
+    /[_\-\s]Revision[\._\-]?(\d+)[_\-\s\.]/i,
+  ];
+  for (const pat of patterns) {
+    const m = filename.match(pat);
+    if (m) return `R${m[1].replace('_', '.')}`;
+  }
+  return null;
+}
+
 export default function Documents() {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const updateReviewStatus = useMutation({
+    mutationFn: async ({ documentId, reviewStatus }: { documentId: string; reviewStatus: string }) => {
+      const token = localStorage.getItem('auth_token');
+      const res = await fetch(`/api/documents/${documentId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ reviewStatus }),
+      });
+      if (!res.ok) throw new Error('Failed to update status');
+      return res.json();
+    },
+    onSuccess: (_data, { reviewStatus }) => {
+      queryClient.invalidateQueries({ queryKey: ['/api/documents'] });
+      const labels: Record<string, string> = { approved: 'Approved', under_review: 'Marked for Review', draft: 'Reset to Not Reviewed', rejected: 'Rejected' };
+      toast({ title: labels[reviewStatus] || 'Status updated', description: 'Document status has been saved.' });
+    },
+    onError: () => toast({ title: 'Update failed', description: 'Could not update document status.', variant: 'destructive' }),
+  });
   
   const [searchTerm, setSearchTerm] = useState('');
   const [filterProject, _setFilterProject] = useState<string>('all');
@@ -319,36 +360,26 @@ export default function Documents() {
     });
 
   const getStatusIcon = (status: string, isSuperseded: boolean) => {
-    if (isSuperseded) {
-      return <History className="w-4 h-4 text-gray-500" />;
-    }
-    
+    if (isSuperseded) return <History className="w-4 h-4 text-gray-500" />;
     switch (status) {
-      case 'approved':
-        return <CheckCircle className="w-4 h-4 text-green-600" />;
-      case 'under_review':
-        return <Clock className="w-4 h-4 text-yellow-600" />;
-      case 'rejected':
-        return <AlertTriangle className="w-4 h-4 text-red-600" />;
-      default:
-        return <FileText className="w-4 h-4 text-gray-600" />;
+      case 'approved':    return <CheckCircle className="w-4 h-4 text-green-600" />;
+      case 'under_review': return <Clock className="w-4 h-4 text-yellow-600" />;
+      case 'rejected':   return <AlertTriangle className="w-4 h-4 text-red-600" />;
+      default:           return <FileText className="w-4 h-4 text-gray-400" />;
     }
   };
 
   const getStatusBadge = (status: string, isSuperseded: boolean) => {
-    if (isSuperseded) {
-      return <Badge variant="secondary">Superseded</Badge>;
-    }
-    
+    if (isSuperseded) return <Badge variant="secondary">Superseded</Badge>;
     switch (status) {
       case 'approved':
-        return <Badge className="bg-green-100 text-green-800">Approved</Badge>;
+        return <Badge className="bg-green-100 text-green-800 border-green-300">✓ Approved by you</Badge>;
       case 'under_review':
-        return <Badge className="bg-yellow-100 text-yellow-800">Under Review</Badge>;
+        return <Badge className="bg-yellow-100 text-yellow-800 border-yellow-300">⏳ Awaiting your review</Badge>;
       case 'rejected':
-        return <Badge variant="destructive">Rejected</Badge>;
+        return <Badge className="bg-red-100 text-red-800 border-red-300">✕ Rejected by you</Badge>;
       default:
-        return <Badge variant="outline">Draft</Badge>;
+        return <Badge variant="outline" className="text-gray-500">Not reviewed yet</Badge>;
     }
   };
 
@@ -441,7 +472,7 @@ export default function Documents() {
                   <p className="text-2xl font-bold" data-testid="stat-pending">
                     {stats.pending}
                   </p>
-                  <p className="text-sm text-gray-600">Pending Review</p>
+                  <p className="text-sm text-gray-600">Awaiting Your Review</p>
                 </div>
               </div>
             </CardContent>
@@ -695,17 +726,92 @@ export default function Documents() {
                       </div>
                     </div>
 
-                    {/* Status and revision row */}
-                    <div className="flex items-center justify-between pt-2">
-                      <div className="flex items-center space-x-3">
-                        {getStatusBadge(doc.reviewStatus, doc.isSuperseded)}
-                        <Badge variant="outline" className="text-sm px-2 py-1">
-                          Rev {doc.revisionNumber}
+                    {/* AI analysis + revision info row */}
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      {/* AI extraction status */}
+                      {doc.analysisStatus === 'Ready' || doc.status === 'completed' ? (
+                        <Badge className="bg-blue-50 text-blue-700 border-blue-200 text-xs gap-1">
+                          <Cpu className="w-3 h-3" />
+                          AI Extracted{doc.pageCount ? ` · ${doc.pageCount} pages` : ''}
                         </Badge>
-                      </div>
-                      <div className="text-xs text-gray-500">
-                        {getDrawingType(doc.name)}
-                      </div>
+                      ) : doc.analysisStatus === 'Processing' ? (
+                        <Badge className="bg-yellow-50 text-yellow-700 border-yellow-200 text-xs gap-1">
+                          <Cpu className="w-3 h-3 animate-pulse" />
+                          Extracting text…
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-gray-400 text-xs gap-1">
+                          <Cpu className="w-3 h-3" />
+                          Not yet extracted
+                        </Badge>
+                      )}
+
+                      {/* Revision number — parsed from filename if DB value is blank */}
+                      {(() => {
+                        const rev = (doc.revisionNumber && doc.revisionNumber !== 'undefined') ? doc.revisionNumber : parseRevisionFromFilename(doc.name);
+                        return rev ? (
+                          <Badge variant="outline" className="text-xs font-mono">{rev}</Badge>
+                        ) : null;
+                      })()}
+
+                      {/* Drawing type */}
+                      <span className="text-xs text-gray-400">{getDrawingType(doc.name)}</span>
+                    </div>
+
+                    {/* Review status + action buttons */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-gray-100">
+                      <div>{getStatusBadge(doc.reviewStatus, doc.isSuperseded)}</div>
+                      {!doc.isSuperseded && (
+                        <div className="flex items-center gap-1">
+                          {doc.reviewStatus !== 'approved' && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs bg-green-50 border-green-300 text-green-700 hover:bg-green-100"
+                              onClick={() => updateReviewStatus.mutate({ documentId: doc.id, reviewStatus: 'approved' })}
+                              disabled={updateReviewStatus.isPending}
+                            >
+                              <ThumbsUp className="w-3 h-3 mr-1" />
+                              Approve
+                            </Button>
+                          )}
+                          {doc.reviewStatus !== 'under_review' && doc.reviewStatus !== 'approved' && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs bg-yellow-50 border-yellow-300 text-yellow-700 hover:bg-yellow-100"
+                              onClick={() => updateReviewStatus.mutate({ documentId: doc.id, reviewStatus: 'under_review' })}
+                              disabled={updateReviewStatus.isPending}
+                            >
+                              <BookOpen className="w-3 h-3 mr-1" />
+                              Mark for Review
+                            </Button>
+                          )}
+                          {doc.reviewStatus !== 'rejected' && doc.reviewStatus === 'approved' && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs bg-red-50 border-red-300 text-red-700 hover:bg-red-100"
+                              onClick={() => updateReviewStatus.mutate({ documentId: doc.id, reviewStatus: 'rejected' })}
+                              disabled={updateReviewStatus.isPending}
+                            >
+                              <ThumbsDown className="w-3 h-3 mr-1" />
+                              Reject
+                            </Button>
+                          )}
+                          {doc.reviewStatus !== 'draft' && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 text-xs text-gray-500 hover:text-gray-700"
+                              onClick={() => updateReviewStatus.mutate({ documentId: doc.id, reviewStatus: 'draft' })}
+                              disabled={updateReviewStatus.isPending}
+                            >
+                              Reset
+                            </Button>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
