@@ -37,7 +37,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       try {
         // Verify token with backend
-        const response = await fetch("/api/auth/profile", {
+        const response = await fetch("/api/auth/user", {
           headers: {
             Authorization: `Bearer ${storedToken}`,
           },
@@ -48,7 +48,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         if (response.ok) {
           const data = await response.json();
-          setUser(data.user);
+          // /api/auth/user returns the user object directly (not wrapped)
+          setUser(data.user ?? data);
           setToken(storedToken);
         } else {
           // Token is invalid, remove it

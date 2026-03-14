@@ -75,6 +75,7 @@ router.post('/login', validate({ body: loginSchema }), async (req, res, next) =>
 
     res.json({
       success: true,
+      token: accessToken,
       user: {
         id: user.id,
         username: user.username,
