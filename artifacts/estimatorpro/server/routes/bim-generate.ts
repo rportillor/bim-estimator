@@ -318,6 +318,14 @@ bimGenerateRouter.post("/bim/models/:modelId/extract-elements", async (req: Requ
     // Use filename as the path hint — processRealBIMData uses loadFileBuffer internally via storageKey
     const primaryPath = primaryStorageKey;
 
+    // Collect ALL PDF storageKeys so analyzePDFForBuildingGeometry can send every drawing
+    // to Claude in a single call (Claude API allows up to 20 documents per message).
+    const allPdfStorageKeys: string[] = docs
+      .filter(d => /\.pdf$/i.test((d as any).filename || (d as any).originalName || ''))
+      .map(d => (d as any).storageKey || (d as any).filename || '')
+      .filter(Boolean);
+    logger.info(`Collected ${allPdfStorageKeys.length} PDF documents for multi-document analysis`);
+
     // Run only the RealQTO element-extraction step (no batch product/assembly phase)
     const { RealQTOProcessor } = await import('../real-qto-processor');
     const qto = new RealQTOProcessor();
@@ -339,6 +347,7 @@ bimGenerateRouter.post("/bim/models/:modelId/extract-elements", async (req: Requ
         projectId: pid,
         useAllDocuments: true,
         documentCount: docs.length,
+        allDocumentStorageKeys: allPdfStorageKeys,
       } as any,
     );
 

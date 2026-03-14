@@ -506,16 +506,30 @@ ${textContent.substring(0, 500000)}`;
         return await this.generateElementsFromAIAnalysis(aiAnalysis, options);
       }
       
-      // Fallback: Read PDF content for new AI analysis
-      // Bug-C fix (v15.4): use loadFileBuffer which tries all storage path candidates.
-      // readFileSync(filePath) used a constructed path that never matched FileStorageService's
-      // actual storage layout (./uploads/projects/PID/documents/DID/revisions/...).
+      // Load PDF buffers — when allDocumentStorageKeys is provided we send ALL PDFs to Claude
+      // in a single call (Claude API allows up to 20 documents per message).
+      // Otherwise fall back to the single primary PDF.
       const { loadFileBuffer } = await import('./services/storage-file-resolver');
-      const storageKey = (claudeAnalysis as any)?.storageKey
-                      || path.basename(filePath);
-      const pdfBufferOrNull = await loadFileBuffer(storageKey);
-      if (!pdfBufferOrNull) {
-        logger.warn(`⚠️ Could not load PDF for ${path.basename(filePath)} via any candidate path — skipping new AI analysis`);
+
+      const allStorageKeys: string[] = (options?.allDocumentStorageKeys?.length > 0)
+        ? options.allDocumentStorageKeys
+        : [(claudeAnalysis as any)?.storageKey || path.basename(filePath)].filter(Boolean);
+
+      // Load buffers (cap at 20 — Claude's per-message document limit)
+      const MAX_DOCS = 20;
+      const keysToLoad = allStorageKeys.slice(0, MAX_DOCS);
+      const pdfBuffers: { key: string; buf: Buffer }[] = [];
+      for (const key of keysToLoad) {
+        const buf = await loadFileBuffer(key);
+        if (buf) {
+          pdfBuffers.push({ key, buf });
+        } else {
+          logger.warn(`⚠️ Could not load PDF for key '${key}' — skipping this document`);
+        }
+      }
+
+      if (pdfBuffers.length === 0) {
+        logger.warn(`⚠️ Could not load any PDF buffers — skipping new AI analysis`);
         const storeys = this.extractStoreysFromElements([]);
         return {
           elements: [],
@@ -523,8 +537,8 @@ ${textContent.substring(0, 500000)}`;
           summary: { totalElements: 0, processingMethod: 'pdf_load_failed', rfiCount: 1 }
         };
       }
-      const pdfBuffer = pdfBufferOrNull;
-      
+      logger.info(`Sending ${pdfBuffers.length} PDF documents to Claude for multi-drawing analysis`);
+
       // Use Claude to analyze construction documents
       const { default: Anthropic } = await import('@anthropic-ai/sdk');
       const anthropic = new Anthropic({
@@ -599,24 +613,21 @@ MANDATORY EXTRACTION REQUIREMENTS:
 - Extract ALL floors/levels including underground, ground, typical, and roof
 - There should be HUNDREDS of elements across all floors — be thorough
 
-Document: ${path.basename(filePath)}`;
+Documents being analyzed (${pdfBuffers.length} drawings):
+${pdfBuffers.map(({ key }, i) => `  ${i + 1}. ${path.basename(key)}`).join('\n')}`;
 
 
-      // ── v15.3 FIX: Send actual PDF bytes to Claude so it can see the drawings ──
-      // pdfBuffer was previously loaded but discarded; the API call sent only the
-      // analysisPrompt text string. Claude was asked to extract coordinates from a
-      // filename with no visual content. Now the PDF is attached as a native document
-      // source so Claude can read the actual floor plans, sections, and elevations.
-      const pdfBase64 = pdfBuffer.toString('base64');
+      // Build multi-document content — one block per PDF, then the analysis prompt.
+      // Claude API supports up to 20 document blocks per message.
       const userContent: any[] = [
-        {
+        ...pdfBuffers.map(({ buf }) => ({
           type: "document",
           source: {
             type: "base64",
             media_type: "application/pdf",
-            data: pdfBase64,
+            data: buf.toString('base64'),
           },
-        },
+        })),
         {
           type: "text",
           text: analysisPrompt,
@@ -625,7 +636,7 @@ Document: ${path.basename(filePath)}`;
 
       const response = await anthropic.messages.create({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 8000,
+        max_tokens: 16000,
         messages: [
           {
             role: "user",
@@ -635,7 +646,7 @@ Document: ${path.basename(filePath)}`;
       });
 
       let aiAnalysis = response.content[0].type === 'text' ? response.content[0].text : '';
-      logger.debug('Raw AI response:', { preview: aiAnalysis.substring(0, 500) });
+      logger.info(`Claude raw response length: ${aiAnalysis.length} chars, preview: ${aiAnalysis.substring(0, 300)}`);
       
       // 🎯 PARSE JSON RESPONSE from Claude
       let parsedAnalysis;
@@ -644,11 +655,11 @@ Document: ${path.basename(filePath)}`;
         const jsonMatch = aiAnalysis.match(/```json\n([\s\S]*?)\n```/);
         if (jsonMatch) {
           parsedAnalysis = JSON.parse(jsonMatch[1]);
-          logger.debug('Successfully parsed Claude JSON response', { analysis: parsedAnalysis });
+          logger.info(`Parsed Claude JSON (markdown-wrapped) — top-level keys: ${Object.keys(parsedAnalysis).join(', ')}, floors: ${Array.isArray(parsedAnalysis.floors) ? parsedAnalysis.floors.length : 'none'}`);
         } else {
           parsedAnalysis = parseFirstJsonObject(aiAnalysis);
           if (parsedAnalysis && !parsedAnalysis.error) {
-            logger.debug('Successfully parsed Claude JSON response via parseFirstJsonObject');
+            logger.info(`Parsed Claude JSON (raw) — top-level keys: ${Object.keys(parsedAnalysis).join(', ')}, floors: ${Array.isArray(parsedAnalysis.floors) ? parsedAnalysis.floors.length : 'none'}`);
           } else {
             logger.warn('No JSON found in Claude response, using text analysis');
             parsedAnalysis = aiAnalysis;
@@ -701,6 +712,7 @@ Document: ${path.basename(filePath)}`;
     }
     
     // Process floors and elements from structured response
+    logger.info(`generateElementsFromAIAnalysis: parsedData type=${typeof parsedData}, keys=${typeof parsedData === 'object' && parsedData ? Object.keys(parsedData).join(', ') : 'n/a'}, floors=${Array.isArray(parsedData?.floors) ? parsedData.floors.length : 'none'}`);
     if (parsedData.floors && Array.isArray(parsedData.floors)) {
       for (const floor of parsedData.floors) {
         // ── Storey elevation ─────────────────────────────────────────────────
