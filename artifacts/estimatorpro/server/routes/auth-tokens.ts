@@ -63,12 +63,12 @@ router.post('/login', validate({ body: loginSchema }), async (req, res, next) =>
 
     res.cookie('accessToken', accessToken, {
       ...cookieOptions,
-      maxAge: 15 * 60 * 1000 // 15 minutes
+      maxAge: 8 * 60 * 60 * 1000 // 8 hours
     });
 
     res.cookie('refreshToken', refreshToken, {
       ...cookieOptions,
-      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+      maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
     });
 
     console.log(`✅ User ${user.username} logged in with token family ${tokenFamily.slice(0, 8)}...`);
@@ -86,7 +86,7 @@ router.post('/login', validate({ body: loginSchema }), async (req, res, next) =>
         plan: user.plan
       },
       tokenFamily: tokenFamily.slice(0, 8) + '...', // Partial for debugging
-      expiresIn: 15 * 60 // 15 minutes in seconds
+      expiresIn: 8 * 60 * 60 // 8 hours in seconds
     });
 
   } catch (error) {
@@ -96,10 +96,15 @@ router.post('/login', validate({ body: loginSchema }), async (req, res, next) =>
 
 /**
  * 🔄 Refresh token endpoint - exchanges refresh token for new access token
+ * Accepts refreshToken from request body OR from the HTTP-only cookie
  */
-router.post('/refresh', validate({ body: refreshSchema }), async (req, res, next) => {
+router.post('/refresh', async (req, res, next) => {
   try {
-    const { refreshToken } = req.body;
+    // Accept token from body (explicit) or from cookie (silent refresh)
+    const refreshToken = req.body?.refreshToken || req.cookies?.refreshToken;
+    if (!refreshToken) {
+      return res.status(400).json({ error: 'Refresh token required' });
+    }
 
     // Extract device info
     const deviceInfo = {
@@ -120,22 +125,23 @@ router.post('/refresh', validate({ body: refreshSchema }), async (req, res, next
 
     res.cookie('accessToken', result.accessToken, {
       ...cookieOptions,
-      maxAge: 15 * 60 * 1000 // 15 minutes
+      maxAge: 8 * 60 * 60 * 1000 // 8 hours
     });
 
     // If refresh token was rotated, update refresh cookie
     if (result.rotated && result.refreshToken) {
       res.cookie('refreshToken', result.refreshToken, {
         ...cookieOptions,
-        maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+        maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
       });
     }
 
     res.json({
       success: true,
+      token: result.accessToken,
       accessToken: result.accessToken,
       rotated: result.rotated,
-      expiresIn: 15 * 60 // 15 minutes in seconds
+      expiresIn: 8 * 60 * 60 // 8 hours in seconds
     });
 
   } catch (error) {

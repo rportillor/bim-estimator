@@ -10,8 +10,8 @@ import type { User } from "@shared/schema";
 import { JWT_SECRET } from "../config/jwt-secret";
 
 // Security configuration
-const ACCESS_TOKEN_LIFETIME = '15m';  // Short-lived access tokens
-const REFRESH_TOKEN_LIFETIME = '7d';  // Longer-lived refresh tokens
+const ACCESS_TOKEN_LIFETIME = '8h';   // Access tokens valid for a full work session
+const REFRESH_TOKEN_LIFETIME = '30d'; // Longer-lived refresh tokens
 const REFRESH_TOKEN_ROTATION_THRESHOLD = 24 * 60 * 60 * 1000; // 24 hours
 
 const REFRESH_SECRET = process.env.REFRESH_SECRET || JWT_SECRET + '_refresh';
