@@ -198,11 +198,13 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
   };
 
   // ── Derived display state ──────────────────────────────────────────────────
-  // "generating" from DB is only real if the user kicked it off in this session
-  // or if it's very recent (< 2 min). Otherwise treat it as stuck → failed.
+  // A generation is only "stuck" if the DB record hasn't been touched in 15 min
+  // (some phases — assembly building, coordinate extraction — run for several
+  // minutes without writing a chunk-level DB update, so 2 min was far too tight
+  // and caused false "generation failed" on every page refresh mid-run).
   const dbSaysRunning = dbStatus === 'generating' || dbStatus === 'processing';
   const modelAge = latestModel ? Date.now() - new Date(latestModel.updatedAt || latestModel.createdAt || 0).getTime() : Infinity;
-  const isStuck = !generatingLocal && dbSaysRunning && modelAge > 2 * 60 * 1000;
+  const isStuck = !generatingLocal && dbSaysRunning && modelAge > 15 * 60 * 1000;
 
   const isGenerating = generatingLocal || (dbSaysRunning && !isStuck);
   const isFailed     = isStuck || (!isGenerating && (dbStatus === 'failed' || dbStatus === 'error'));
