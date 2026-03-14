@@ -18,6 +18,7 @@ import { placeFromDrawingFacts } from "./helpers/symbol-placer";
 import { inferStoreysIfMissing } from "./helpers/storey-inference";
 import { GeometryValidator, validateExtractedGeometry, GridSystem } from './helpers/geometry-validator';
 import { normaliseElevation, toMetres } from './helpers/unit-normaliser';
+import { registerMissingData } from './estimator/rfi-generator';
 
 // 📏 Unit Conversion Constants
 const _UNIT_CONVERSIONS = {
@@ -193,7 +194,7 @@ export class RealQTOProcessor {
 
     // Register an informational RFI about the text-only IFC limitation
     try {
-      const { registerMissingData } = require('./estimator/rfi-generator');
+
       registerMissingData({
         category: 'specification',
         description:
@@ -217,7 +218,7 @@ export class RealQTOProcessor {
 
     // No Claude analysis provided — return empty model with critical RFI
     try {
-      const { registerMissingData } = require('./estimator/rfi-generator');
+
       registerMissingData({
         category: 'drawing',
         description:
@@ -470,19 +471,28 @@ OUTPUT JSON FORMAT ONLY:
       "level": "Ground Floor",
       "elevation": null, // EXTRACT actual elevation mark (e.g., 219.85)
       "ceiling_height": null, // EXTRACT using legend's conventions from section dimensions
-      "walls": [{"id": "W1", "start": {"x": 0, "y": 0}, "end": {"x": 5, "y": 0}, "thickness": 200, "ceiling_height": null, "type": "exterior|interior|fire-rated|curtain", "material": "concrete|masonry|stud", "fire_rating": null}], // EXTRACT from architectural drawings
-      "columns": [{"id": "C1", "x": 5, "y": 5, "size": "400x400", "height": null, "type": "concrete|steel|timber", "reinforcement": null}], // USE LEGEND to read height
-      "beams": [{"id": "B1", "start": {"x": 0, "y": 5}, "end": {"x": 6, "y": 5}, "size": "300x600", "depth": 600, "material": "concrete|steel", "top_elevation": null}], // EXTRACT from structural drawings
-      "slabs": [{"id": "SL1", "boundary": [{"x": 0, "y": 0}, {"x": 22, "y": 0}, {"x": 22, "y": 15}, {"x": 0, "y": 15}], "thickness": 200, "type": "floor|roof|transfer", "material": "concrete", "top_elevation": null}], // EXTRACT slab boundary = floor plate extents; thickness from sections
+      "walls": [{"id": "W1", "start": {"x": 0, "y": 0}, "end": {"x": 5, "y": 0}, "thickness": 200, "ceiling_height": 3000, "type": "exterior", "material": "concrete", "fire_rating": "2hr"}], // EXTRACT from architectural drawings — thickness in mm, ceiling_height in mm. If ceiling_height not found, estimate from section drawings
+      "columns": [{"id": "C1", "x": 5, "y": 5, "size": "400x400", "height": 3000, "type": "concrete", "reinforcement": "4-25M"}], // USE LEGEND to read height — if height not found, use floor-to-floor height
+      "beams": [{"id": "B1", "start": {"x": 0, "y": 5}, "end": {"x": 6, "y": 5}, "size": "300x600", "depth": 600, "material": "concrete", "top_elevation": 3000}], // EXTRACT from structural drawings
+      "slabs": [{"id": "SL1", "boundary": [{"x": 0, "y": 0}, {"x": 22, "y": 0}, {"x": 22, "y": 15}, {"x": 0, "y": 15}], "thickness": 200, "type": "floor", "material": "concrete", "top_elevation": 0}], // EXTRACT slab boundary = floor plate extents; thickness from sections
       "stairs": [{"id": "ST1", "x": 10, "y": 5, "width": 1200, "length": 4000, "rises": 16, "rise_mm": 175, "run_mm": 275, "type": "straight|L-shaped|U-shaped", "material": "concrete|steel|timber"}], // EXTRACT from floor plans and sections
       "foundations": [{"id": "F1", "x": 5, "y": 5, "width": 600, "depth_mm": 400, "bearing_depth_m": 1.5, "type": "spread|strip|pile|raft", "material": "concrete"}], // GROUND FLOOR ONLY — from foundation plan/sections
       "mep": [{"id": "L1", "category": "electrical", "type": "light", "x": 3, "y": 3, "mounting_height": 2.7}, {"id": "SP1", "category": "mechanical", "type": "sprinkler", "x": 3, "y": 3, "mounting_height": 2.9}, {"id": "REC1", "category": "electrical", "type": "receptacle", "x": 1, "y": 2, "mounting_height": 0.4}], // EXTRACT MEP symbols from plans per legend
-      "doors": [{"id": "D1", "x": 2.5, "y": 0, "width": 900, "height": null, "thickness": null, "wall_thickness": null, "type": "single|double|sliding", "fire_rating": null, "hardware_set": null}], // thickness from door schedule "THK" column; wall_thickness from hosting wall assembly detail — BOTH required for BOQ
-      "windows": [{"id": "WIN1", "x": 7, "y": 0, "width": 1800, "height": null, "sill_height": null, "type": "fixed|casement|curtain-wall", "glazing": null}], // USE LEGEND
+      "doors": [{"id": "D1", "x": 2.5, "y": 0, "width": 900, "height": 2100, "thickness": 44, "wall_thickness": 200, "type": "single|double|sliding", "fire_rating": "1hr", "hardware_set": "HS-1"}], // EXTRACT width AND height from door schedule — if height not shown, use 2100mm standard. thickness from "THK" column; wall_thickness from hosting wall assembly detail
+      "windows": [{"id": "WIN1", "x": 7, "y": 0, "width": 1800, "height": 1500, "sill_height": 900, "type": "fixed|casement|curtain-wall", "glazing": "double"}], // EXTRACT width AND height from window schedule — if height not shown, use 1500mm standard. sill_height from elevations or schedule
       "rooms": [{"id": "R1", "name": "Living Room", "boundary": [{"x": 0, "y": 0}, {"x": 5, "y": 0}, {"x": 5, "y": 4}, {"x": 0, "y": 4}], "ceiling_height": null, "area_m2": null}] // USE LEGEND
     }
   ]
 }
+
+CRITICAL — NEVER RETURN null FOR THESE FIELDS:
+- walls: thickness (mm), start.x, start.y, end.x, end.y — REQUIRED. If ceiling_height not found, estimate from building sections
+- columns: x, y, size (e.g. "400x400"), height — if height not in schedule, use floor-to-floor height
+- doors: x, y, width, height — if height not in door schedule, use 2100mm (standard)
+- windows: x, y, width, height — if height not in window schedule, use 1500mm (standard)
+- slabs: boundary (min 3 points), thickness — REQUIRED
+- beams: start, end, size — REQUIRED
+If a dimension cannot be extracted from drawings, provide your best professional estimate based on the building type and note it.
 
 MANDATORY EXTRACTION REQUIREMENTS:
 - Extract EVERY wall, column, beam, slab, stair, foundation, door, window visible in drawings
@@ -496,13 +506,15 @@ MANDATORY EXTRACTION REQUIREMENTS:
 EXTRACT FROM DOCUMENTS:
 ${textContent.substring(0, 500000)}`;
         
-        const response = await anthropic.messages.create({
+        // Use streaming to avoid SDK "Streaming is strongly recommended" error at high token counts
+        const stream = anthropic.messages.stream({
           model: "claude-sonnet-4-20250514",
-          max_tokens: 64000,
+          max_tokens: 8000,
           messages: [{ role: "user", content: analysisPrompt }]
         });
-        
-        const aiAnalysis = response.content[0].type === 'text' ? response.content[0].text : '';
+        const streamResponse = await stream.finalMessage();
+
+        const aiAnalysis = streamResponse.content[0].type === 'text' ? streamResponse.content[0].text : '';
         return await this.generateElementsFromAIAnalysis(aiAnalysis, options);
       }
       
@@ -1684,7 +1696,7 @@ MANDATORY EXTRACTION REQUIREMENTS:
    */
   private createDoorElement(doorData: any, storey: StoreyData): RealBIMElement | null {
     if (doorData.x == null || doorData.y == null) {
-      try { const { registerMissingData } = require('./estimator/rfi-generator');
+      try {
         registerMissingData({ category: 'drawing', csiDivision: '08 00 00', impact: 'high',
           description: `Door '${doorData.id || 'UNKNOWN'}' on storey '${storey.name}' has no x/y coordinates. Door excluded.`,
           drawingRef: `Floor plan — Door ${doorData.id || 'UNKNOWN'}`, costImpactLow: 0, costImpactHigh: 0,
@@ -1694,11 +1706,24 @@ MANDATORY EXTRACTION REQUIREMENTS:
     const x = doorData.x;
     const y = doorData.y ?? 0;  // Bug-D: x/y null already checked above, doorY fallback
 
-    // Width and height must exist — minimum needed to show an opening
-    if (!doorData.width || !doorData.height) return null;
-    // Normalise door dimensions — Claude returns mm by convention but handles any unit
+    // Width is required — height defaults to 2100mm (standard door) with RFI
+    if (!doorData.width) return null;
     const width  = toMetres(doorData.width,  'dimension') ?? (doorData.width  / 1000);
-    const height = toMetres(doorData.height, 'dimension') ?? (doorData.height / 1000);
+    let height: number;
+    let heightRfi = false;
+    if (doorData.height) {
+      height = toMetres(doorData.height, 'dimension') ?? (doorData.height / 1000);
+    } else {
+      height = 2.1; // Standard door height 2100mm
+      heightRfi = true;
+      try {
+        registerMissingData({
+          category: 'dimension', csiDivision: '08 14 00', impact: 'low',
+          description: `Door '${doorData.id || 'UNKNOWN'}' on storey '${storey.name}' has no height. Using standard 2100mm. Verify in door schedule.`,
+          drawingRef: `Door schedule — Door ${doorData.id || 'UNKNOWN'}`,
+          costImpactLow: 0, costImpactHigh: 0, assumptionUsed: 'standard_door_height_2100mm',
+          discoveredBy: 'createDoorElement' }); } catch { /* non-fatal */ }
+    }
 
     // ─── Door thickness ───────────────────────────────────────────────────────
     const rawThickness = doorData.thickness ?? doorData.wall_thickness ?? null;
@@ -1791,7 +1816,7 @@ MANDATORY EXTRACTION REQUIREMENTS:
    */
   private createWindowElement(winData: any, storey: StoreyData): RealBIMElement | null {
     if (winData.x == null || winData.y == null) {
-      try { const { registerMissingData } = require('./estimator/rfi-generator');
+      try {
         registerMissingData({ category: 'drawing', csiDivision: '08 00 00', impact: 'medium',
           description: `Window '${winData.id || 'UNKNOWN'}' on storey '${storey.name}' has no x/y coordinates. Window excluded.`,
           drawingRef: `Floor plan — Window ${winData.id || 'UNKNOWN'}`, costImpactLow: 0, costImpactHigh: 0,
@@ -1801,10 +1826,22 @@ MANDATORY EXTRACTION REQUIREMENTS:
     const x = winData.x;
     const y = winData.y ?? 0;  // Bug-D: x/y null already checked above, winY fallback
 
-    if (!winData.width || !winData.height) return null;
-    // Normalise window dimensions
+    // Width is required — height defaults to 1500mm (standard window) with RFI
+    if (!winData.width) return null;
     const width  = toMetres(winData.width,  'dimension') ?? (winData.width  / 1000);
-    const height = toMetres(winData.height, 'dimension') ?? (winData.height / 1000);
+    let height: number;
+    if (winData.height) {
+      height = toMetres(winData.height, 'dimension') ?? (winData.height / 1000);
+    } else {
+      height = 1.5; // Standard window height 1500mm
+      try {
+        registerMissingData({
+          category: 'dimension', csiDivision: '08 50 00', impact: 'low',
+          description: `Window '${winData.id || 'UNKNOWN'}' on storey '${storey.name}' has no height. Using standard 1500mm. Verify in window schedule.`,
+          drawingRef: `Window schedule — Window ${winData.id || 'UNKNOWN'}`,
+          costImpactLow: 0, costImpactHigh: 0, assumptionUsed: 'standard_window_height_1500mm',
+          discoveredBy: 'createWindowElement' }); } catch { /* non-fatal */ }
+    }
 
     // ─── Sill height ─────────────────────────────────────────────────────────
     let sillHeight: number;
