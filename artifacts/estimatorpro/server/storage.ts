@@ -1628,16 +1628,37 @@ export class DBStorage implements Partial<IStorage> {
           location: typeof element.location === 'string' ? element.location : JSON.stringify(element.location || {}),
           // ✅ FIX: Use 'material' field, not 'materials' (schema mismatch)
           material: element.material || element.materials || null,
-          // ✅ FIX: Use 'quantity' field, not 'quantities' (schema mismatch)
-          quantity: element.quantity || element.quantities || null,
+          // ✅ FIX: quantity must be a plain number for the decimal column — never pass an object
+          quantity: (() => {
+            const q = element.quantity;
+            if (typeof q === 'number' && Number.isFinite(q)) return q;
+            if (typeof q === 'string' && Number.isFinite(Number(q))) return Number(q);
+            return null;
+          })(),
           storeyGuid: element.storey?.guid || element.storeyGuid,
           // ── storeyName: written to enable direct relational queries ──────────
           // Source priority: element.storey.name → element.storeyName → element.properties.storey.name
           storeyName: element.storey?.name || element.storeyName || element.properties?.storey?.name || null,
-          elevation: element.storey?.elevation ?? element.elevation ?? null,
-          quantityMetric: element.quantities?.metric?.find((q: any) => q.type === 'volume')?.value || 0,
-          unit: element.quantities?.metric?.find((q: any) => q.type === 'area')?.value?.toString() || '0',
-          quantityImperial: element.quantities?.imperial?.find((q: any) => q.type === 'volume')?.value || 0,
+          elevation: (() => {
+            const e = element.storey?.elevation ?? element.elevation ?? null;
+            if (e === null || e === undefined) return null;
+            const n = Number(e);
+            return Number.isFinite(n) ? n : null;
+          })(),
+          quantityMetric: (() => {
+            const v = element.quantities?.metric?.find((q: any) => q.type === 'volume')?.value;
+            const n = Number(v);
+            return Number.isFinite(n) ? n : 0;
+          })(),
+          unit: (() => {
+            const v = element.quantities?.metric?.find((q: any) => q.type === 'area')?.value;
+            return v != null ? String(v) : '0';
+          })(),
+          quantityImperial: (() => {
+            const v = element.quantities?.imperial?.find((q: any) => q.type === 'volume')?.value;
+            const n = Number(v);
+            return Number.isFinite(n) ? n : 0;
+          })(),
           // ── RFI / Attention flags (v15) ──────────────────────────────────────
           // Read from element.properties (set by createDoorElement / createWallElement / etc.)
           // or directly from element root for forward-compat
