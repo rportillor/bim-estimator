@@ -45,8 +45,8 @@ async function _enrichWithDrawingFacts(projectId:string, modelId:string, baseEle
       if (p.x<minX)minX=p.x; if (p.x>maxX)maxX=p.x; if (p.y<minY)minY=p.y; if (p.y>maxY)maxY=p.y;
     }
     if (!Number.isFinite(minX)) { 
-      logger.warn('No element geometry found for footprint bbox — using default 50x50m bounds');
-      minX=0; minY=0; maxX=50; maxY=50;
+      logger.warn('No element geometry found for footprint bbox — skipping MEP enrichment from drawing facts');
+      return baseElements;
     }
 
     const placed = placeFromDrawingFacts({
@@ -1498,16 +1498,16 @@ Document: ${path.basename(filePath)}`;
     const y = colData.y;
     const size = colData.size;
     if (!size) {
-      // Bug-D fix: no size → register RFI, continue with RFI-placeholder dimensions
       try { const { registerMissingData } = require('./estimator/rfi-generator');
         registerMissingData({ category: 'drawing', csiDivision: '03 00 00', impact: 'medium',
           description: `Column '${colData.id || 'UNKNOWN'}' on storey '${storey.name}' has no size data. Required: structural schedule or plan with column dimensions.`,
           drawingRef: `Structural plan/schedule — Column ${colData.id || 'UNKNOWN'}`,
-          costImpactLow: 0, costImpactHigh: 0, assumptionUsed: 'column_size_rfi_placeholder',
+          costImpactLow: 0, costImpactHigh: 0, assumptionUsed: 'column_excluded_no_size',
           discoveredBy: 'createColumnElement' }); } catch { /* non-fatal */ }
+      return null;
     }
 
-    // ─── Parse column size defensively ───────────────────────────────────────
+    // ─── Parse column size — no hardcoded fallbacks allowed ──────────────────
     // Handles: "400x400" (concrete), "W12x26" (steel wide-flange), "400" (square)
     // ─────────────────────────────────────────────────────────────────────────
     let width: number;
@@ -1515,35 +1515,39 @@ Document: ${path.basename(filePath)}`;
     const sizeStr = String(size).trim();
 
     if (/^W\d+x\d+/i.test(sizeStr)) {
-      // Steel wide-flange: W12x26 → depth=12in≈305mm, flange width lookup not needed for volume
+      // Steel wide-flange: W12x26 → depth≈305mm from nominal inch designation
       const parts = sizeStr.replace(/^W/i, '').split('x');
       const nomDepthIn = parseFloat(parts[0]);
       const nomWidthIn = parseFloat(parts[1] || parts[0]);
-      // Convert nominal inch designation to approximate mm (standard steel tables)
+      if (isNaN(nomDepthIn) || isNaN(nomWidthIn)) {
+        logger.warn(`Unparseable steel column size '${size}' — column excluded, RFI registered`);
+        return null;
+      }
       width = (nomWidthIn * 25.4) / 1000;
       depth = (nomDepthIn * 25.4) / 1000;
     } else if (sizeStr.toLowerCase().includes('x')) {
       // Standard rectangular: "400x600" or "300x300"
       const parts = sizeStr.toLowerCase().split('x').map((s: string) => parseFloat(s));
-      width = (isNaN(parts[0]) ? 400 : parts[0]) / 1000;
-      depth = (isNaN(parts[1]) ? parts[0] : parts[1]) / 1000;
+      if (isNaN(parts[0]) || isNaN(parts[1])) {
+        logger.warn(`Unparseable rectangular column size '${size}' — column excluded, RFI registered`);
+        return null;
+      }
+      width = parts[0] / 1000;
+      depth = parts[1] / 1000;
     } else {
-      // Single value — assume square: "400" → 400x400
+      // Single value — square column: "400" → 400x400
       const dim = parseFloat(sizeStr);
       if (isNaN(dim)) {
-        logger.warn(`Unparseable column size '${size}' — defaulting to 400x400mm RFI placeholder`);
-        width = 0.4;
-        depth = 0.4;
-      } else {
-        width = dim / 1000;
-        depth = dim / 1000;
+        logger.warn(`Unparseable column size '${size}' — column excluded, RFI registered`);
+        return null;
       }
+      width = dim / 1000;
+      depth = dim / 1000;
     }
 
     if (width <= 0 || depth <= 0) {
-      logger.warn(`Invalid column size '${size}' produced zero/negative dimensions — defaulting to 400x400mm`);
-      width = 0.4;
-      depth = 0.4;
+      logger.warn(`Column size '${size}' produced zero/negative dimensions — column excluded, RFI registered`);
+      return null;
     }
     
     // Column height: prefer structural schedule, fall back to storey height with RFI
@@ -2396,11 +2400,16 @@ Document: ${path.basename(filePath)}`;
     const storeyMap = new Map<string, StoreyData>();
     
     elements.forEach(el => {
-      const storeyName = el.storey?.name || 'Ground';
+      const storeyName = el.storey?.name;
+      const storeyElevation = el.storey?.elevation;
+      if (!storeyName || storeyElevation === undefined || storeyElevation === null) {
+        logger.warn(`Element '${el.id || 'UNKNOWN'}' has no storey name or elevation — excluded from storey map`);
+        return;
+      }
       if (!storeyMap.has(storeyName)) {
         storeyMap.set(storeyName, {
           name: storeyName,
-          elevation: el.storey?.elevation ?? 0,
+          elevation: storeyElevation,
           guid: randomUUID(),
           elementCount: 0
         });
