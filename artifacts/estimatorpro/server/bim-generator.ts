@@ -575,6 +575,29 @@ export class BIMGenerator {
           console.log(`🔍 TRACE: Claude analysis completed successfully`);
           console.log(`🔍 TRACE: Analysis strategy keys:`, Object.keys(analysisStrategy));
           console.log(`🔍 TRACE: Building analysis present:`, !!analysisStrategy.building_analysis);
+
+          // 💾 CACHE SAVE: Persist Claude analysis so future BIM generations reuse it for free
+          // Stored on the first document with text content — getExistingDocumentAnalysis() reads it back
+          try {
+            const docToCache = documents.find((d: any) => d.textContent && d.textContent.length > 100) || documents[0];
+            if (docToCache && analysisStrategy) {
+              const cachePayload = {
+                building_analysis: analysisStrategy.building_analysis,
+                ai_understanding: analysisStrategy.ai_understanding || analysisStrategy.strategy,
+                confidence: analysisStrategy.confidence,
+                overallConfidence: analysisStrategy.overallConfidence,
+                buildingHierarchy: analysisStrategy.buildingHierarchy,
+                componentTypes: analysisStrategy.componentTypes,
+                standardsRequired: analysisStrategy.standardsRequired,
+                cachedAt: new Date().toISOString(),
+                documentCount: documents.length,
+              };
+              await storage.updateDocument(docToCache.id, { analysisResult: cachePayload });
+              console.log(`💾 SAVED: Claude analysis cached on document ${docToCache.id} — future runs will skip Claude for this project`);
+            }
+          } catch (saveErr: any) {
+            console.warn(`⚠️ Non-fatal: could not save analysis cache — ${saveErr.message}`);
+          }
         } catch (error: any) {
           console.error(`🚨 CRITICAL: Claude analysis FAILED:`, error.message);
           console.error(`🚨 ERROR TYPE:`, error.name);

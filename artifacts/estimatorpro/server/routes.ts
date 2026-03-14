@@ -1754,7 +1754,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
             
             console.log(`[*] REAL CONTENT EXTRACTED: ${extracted.pageCount} pages, ${extracted.textContent.length} characters`);
             console.log(`🎯 Claude will now receive REAL content instead of fallback strings!`);
-            
+
+            // 🔄 CACHE INVALIDATION: New document uploaded — clear any previously cached BIM analysis
+            // so the next BIM generation re-runs Claude with the updated document set
+            try {
+              const existingDocs = await storage.getDocumentsByProject(req.params.projectId);
+              for (const existingDoc of existingDocs) {
+                const ar = (existingDoc as any).analysisResult;
+                if (ar && (typeof ar === 'object' ? ar.building_analysis : (ar as string).includes('building_analysis'))) {
+                  await storage.updateDocument(existingDoc.id, { analysisResult: null });
+                  console.log(`🔄 CACHE CLEARED: Removed stale BIM analysis from doc ${existingDoc.id} — new doc triggers re-analysis`);
+                  break; // only one doc holds the cache
+                }
+              }
+            } catch (clearErr: any) {
+              console.warn(`⚠️ Non-fatal: could not clear analysis cache — ${clearErr.message}`);
+            }
+
+            // 🔄 SIMILARITY CACHE INVALIDATION: New document means new pairs need analysis
+            try {
+              const { deleteSimilarityCache } = await import('./services/similarity-cache');
+              await deleteSimilarityCache(req.params.projectId);
+              console.log(`🔄 SIMILARITY CACHE CLEARED: New document triggers fresh similarity analysis`);
+            } catch (simErr: any) {
+              console.warn(`⚠️ Non-fatal: could not clear similarity cache — ${simErr.message}`);
+            }
+
           } catch (error) {
             const errMsg = error instanceof Error ? error.message : String(error);
             console.error(`[*] PDF content extraction failed for ${file.originalname}: ${errMsg}`);

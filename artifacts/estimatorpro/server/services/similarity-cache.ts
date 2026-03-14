@@ -38,3 +38,11 @@ export async function writeSimilarityCache(projectId: string, payload: Similarit
   const data = JSON.stringify(payload, null, 2);
   await fs.writeFile(f, data, "utf8");
 }
+
+export async function deleteSimilarityCache(projectId: string): Promise<void> {
+  try {
+    await fs.unlink(fileFor(projectId));
+  } catch {
+    // file may not exist — that's fine
+  }
+}
