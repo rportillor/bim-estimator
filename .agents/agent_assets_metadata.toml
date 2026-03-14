@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "HVkkaIpgbCmqK0AW0Fatb"
+uri = "file://bim-estimator-changes.tar.gz"
+type = "unspecified"
+title = "bim-estimator-changes.tar.gz"
