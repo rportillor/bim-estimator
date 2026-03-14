@@ -25,6 +25,7 @@ import { reportRouter } from "./routes/report-routes";
 import verificationRouter from "./routes/verification";
 import { processingStatusRouter } from "./routes/processing-status";
 import { progressRouter } from "./routes/progress";
+import { progressSseRouter } from "./routes/progress-sse";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // IMPORTANT: All other routers (bimGenerateRouter, estimatorRouter,
@@ -219,6 +220,10 @@ app.use("/api/security", authenticateToken, securityStatusRouter);
 
 // ── CSP violation reporting ───────────────────────────────────────────────────
 app.post("/api/csp-violation", express.json({ type: "application/csp-report" }), handleCSPViolation);
+
+// BIM model SSE progress stream — NO auth so EventSource can connect without headers
+// MUST be mounted before any app.use("/api", authenticateToken, ...) blocks
+app.use("/api", progressSseRouter);
 
 // ── Idx-only routers (with authentication) ───────────────────────────────────
 // These endpoints are NOT in routes.ts.
