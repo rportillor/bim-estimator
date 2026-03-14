@@ -498,7 +498,7 @@ ${textContent.substring(0, 500000)}`;
         
         const response = await anthropic.messages.create({
           model: "claude-sonnet-4-20250514",
-          max_tokens: 8000,
+          max_tokens: 64000,
           messages: [{ role: "user", content: analysisPrompt }]
         });
         
@@ -515,17 +515,14 @@ ${textContent.substring(0, 500000)}`;
         ? options.allDocumentStorageKeys
         : [(claudeAnalysis as any)?.storageKey || path.basename(filePath)].filter(Boolean);
 
-      // Load buffers (cap at 20 — Claude's per-message document limit)
-      const MAX_DOCS = 20;
-      const keysToLoad = allStorageKeys.slice(0, MAX_DOCS);
+      // Load ALL PDFs — we process them in sequential mini-batches of 4.
+      // This avoids Anthropic's 413 (request too large) while still covering
+      // every drawing across the full set.
       const pdfBuffers: { key: string; buf: Buffer }[] = [];
-      for (const key of keysToLoad) {
+      for (const key of allStorageKeys) {
         const buf = await loadFileBuffer(key);
-        if (buf) {
-          pdfBuffers.push({ key, buf });
-        } else {
-          logger.warn(`⚠️ Could not load PDF for key '${key}' — skipping this document`);
-        }
+        if (buf) pdfBuffers.push({ key, buf });
+        else logger.warn(`⚠️ Could not load PDF for key '${key}' — skipping`);
       }
 
       if (pdfBuffers.length === 0) {
@@ -537,7 +534,7 @@ ${textContent.substring(0, 500000)}`;
           summary: { totalElements: 0, processingMethod: 'pdf_load_failed', rfiCount: 1 }
         };
       }
-      logger.info(`Sending ${pdfBuffers.length} PDF documents to Claude for multi-drawing analysis`);
+      logger.info(`Loaded ${pdfBuffers.length} PDFs total — will process in sequential batches of 4 (streaming, 64k tokens each)`);
 
       // Use Claude to analyze construction documents
       const { default: Anthropic } = await import('@anthropic-ai/sdk');
@@ -613,65 +610,97 @@ MANDATORY EXTRACTION REQUIREMENTS:
 - Extract ALL floors/levels including underground, ground, typical, and roof
 - There should be HUNDREDS of elements across all floors — be thorough
 
-Documents being analyzed (${pdfBuffers.length} drawings):
-${pdfBuffers.map(({ key }, i) => `  ${i + 1}. ${path.basename(key)}`).join('\n')}`;
+`;
 
+      // ── Helper: call Claude with streaming for one small batch of PDFs ────────
+      // 4 PDFs per batch keeps requests small enough to avoid 413 errors while
+      // allowing 64k output tokens (streaming required at this token count).
+      const BATCH_SIZE = 4;
 
-      // Build multi-document content — one block per PDF, then the analysis prompt.
-      // Claude API supports up to 20 document blocks per message.
-      const userContent: any[] = [
-        ...pdfBuffers.map(({ buf }) => ({
-          type: "document",
-          source: {
-            type: "base64",
-            media_type: "application/pdf",
-            data: buf.toString('base64'),
-          },
-        })),
-        {
-          type: "text",
-          text: analysisPrompt,
-        },
-      ];
-
-      const response = await anthropic.messages.create({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 16000,
-        messages: [
+      const callClaude = async (bufs: { key: string; buf: Buffer }[], batchLabel: string): Promise<any> => {
+        const docList = bufs.map(({ key }, i) => `  ${i + 1}. ${path.basename(key)}`).join('\n');
+        const content: any[] = [
+          ...bufs.map(({ buf }) => ({
+            type: "document",
+            source: { type: "base64", media_type: "application/pdf", data: buf.toString('base64') },
+          })),
           {
-            role: "user",
-            content: userContent,
-          }
-        ],
-      });
+            type: "text",
+            text: analysisPrompt + `\n\nDocuments being analyzed (${bufs.length} drawings, ${batchLabel}):\n${docList}`,
+          },
+        ];
+        const stream = anthropic.messages.stream({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 64000,
+          messages: [{ role: "user", content }],
+        });
+        const finalMsg = await stream.finalMessage();
+        const raw = finalMsg.content[0].type === 'text' ? finalMsg.content[0].text : '';
+        logger.info(`[${batchLabel}] response: ${raw.length} chars`);
+        try {
+          const m = raw.match(/```json\n([\s\S]*?)\n```/);
+          if (m) return JSON.parse(m[1]);
+          const p = parseFirstJsonObject(raw);
+          return (p && !p.error) ? p : null;
+        } catch { return null; }
+      };
 
-      let aiAnalysis = response.content[0].type === 'text' ? response.content[0].text : '';
-      logger.info(`Claude raw response length: ${aiAnalysis.length} chars, preview: ${aiAnalysis.substring(0, 300)}`);
-      
-      // 🎯 PARSE JSON RESPONSE from Claude
-      let parsedAnalysis;
-      try {
-        // Extract JSON from Claude's response (remove markdown if present)
-        const jsonMatch = aiAnalysis.match(/```json\n([\s\S]*?)\n```/);
-        if (jsonMatch) {
-          parsedAnalysis = JSON.parse(jsonMatch[1]);
-          logger.info(`Parsed Claude JSON (markdown-wrapped) — top-level keys: ${Object.keys(parsedAnalysis).join(', ')}, floors: ${Array.isArray(parsedAnalysis.floors) ? parsedAnalysis.floors.length : 'none'}`);
-        } else {
-          parsedAnalysis = parseFirstJsonObject(aiAnalysis);
-          if (parsedAnalysis && !parsedAnalysis.error) {
-            logger.info(`Parsed Claude JSON (raw) — top-level keys: ${Object.keys(parsedAnalysis).join(', ')}, floors: ${Array.isArray(parsedAnalysis.floors) ? parsedAnalysis.floors.length : 'none'}`);
+      // ── Merge helper: fold floors from a new batch result into the accumulator ─
+      const mergeFloors = (acc: any, incoming: any) => {
+        if (!incoming?.floors || !Array.isArray(incoming.floors)) return;
+        if (!acc.floors) { acc.floors = incoming.floors; return; }
+        const CATS = ['walls','columns','beams','slabs','stairs','foundations','mep','doors','windows','rooms'];
+        for (const f of incoming.floors) {
+          const key = String(f.level).toLowerCase().trim();
+          const existing = acc.floors.find((e: any) => String(e.level).toLowerCase().trim() === key);
+          if (existing) {
+            for (const cat of CATS) {
+              if (Array.isArray(f[cat]) && f[cat].length > 0) {
+                existing[cat] = [...(existing[cat] || []), ...f[cat]];
+              }
+            }
           } else {
-            logger.warn('No JSON found in Claude response, using text analysis');
-            parsedAnalysis = aiAnalysis;
+            acc.floors.push(f);
           }
         }
-      } catch (parseError) {
-        logger.warn('JSON parsing failed, using text analysis', { error: parseError });
-        parsedAnalysis = aiAnalysis;
+        // Keep building_perimeter and floor heights from the first batch that has them
+        if (!acc.building_perimeter && incoming.building_perimeter) acc.building_perimeter = incoming.building_perimeter;
+        if (!acc.floor_to_floor_heights && incoming.floor_to_floor_heights) acc.floor_to_floor_heights = incoming.floor_to_floor_heights;
+        if (!acc.drawing_legend && incoming.drawing_legend) acc.drawing_legend = incoming.drawing_legend;
+      };
+
+      // ── Process all PDFs sequentially in batches of BATCH_SIZE ───────────────
+      const totalBatches = Math.ceil(pdfBuffers.length / BATCH_SIZE);
+      logger.info(`Processing ${pdfBuffers.length} PDFs in ${totalBatches} batches of ${BATCH_SIZE}`);
+
+      const mergedAnalysis: any = { floors: [] };
+      for (let i = 0; i < pdfBuffers.length; i += BATCH_SIZE) {
+        const batchBufs = pdfBuffers.slice(i, i + BATCH_SIZE);
+        const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+        const batchLabel = `batch-${batchNum}/${totalBatches}`;
+        logger.info(`[${batchLabel}] Sending ${batchBufs.length} PDFs to Claude...`);
+        try {
+          const result = await callClaude(batchBufs, batchLabel);
+          if (result) {
+            mergeFloors(mergedAnalysis, result);
+            const floorCount = mergedAnalysis.floors?.length ?? 0;
+            const elemCount = (mergedAnalysis.floors ?? []).reduce((sum: number, f: any) => {
+              const CATS = ['walls','columns','beams','slabs','stairs','foundations','mep','doors','windows','rooms'];
+              return sum + CATS.reduce((s: number, c: string) => s + (Array.isArray(f[c]) ? f[c].length : 0), 0);
+            }, 0);
+            logger.info(`[${batchLabel}] merged: ${floorCount} floors, ${elemCount} total elements so far`);
+          } else {
+            logger.warn(`[${batchLabel}] No usable JSON returned — skipping`);
+          }
+        } catch (batchErr: any) {
+          logger.warn(`[${batchLabel}] failed: ${batchErr?.message} — skipping batch`);
+        }
       }
-      
+
+      logger.info(`All batches complete — ${mergedAnalysis.floors?.length ?? 0} floors merged`);
+
       // Parse AI response and generate elements with extracted coordinates
-      return await this.generateElementsFromAIAnalysis(parsedAnalysis, options);
+      return await this.generateElementsFromAIAnalysis(mergedAnalysis, options);
       
     } catch (error: any) {
       console.error(`❌ AI PDF analysis failed:`, error);
