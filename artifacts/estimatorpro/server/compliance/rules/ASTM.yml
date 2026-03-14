@@ -1,0 +1,172 @@
+# ASTM International Standards Compliance Rules
+# Material testing and specification standards for construction
+
+rules:
+  # ASTM A36 - Structural Steel
+  - id: astm_a36_1
+    title: "Structural steel minimum yield strength"
+    standard: "ASTM"
+    clause: "A36/A36M"
+    factsNeeded: ["structural_steel_grade", "steel_yield_strength_MPa"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "!=": ["structural_steel_grade", "A36"] }
+        - { ">=": ["steel_yield_strength_MPa", 250] }
+
+  # ASTM A615 - Reinforcing Steel
+  - id: astm_a615_1
+    title: "Reinforcing bar grade requirements"
+    standard: "ASTM"
+    clause: "A615/A615M"
+    factsNeeded: ["rebar_grade", "rebar_yield_strength_MPa"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "==": ["rebar_grade", "60"] },
+            { ">=": ["rebar_yield_strength_MPa", 420] }
+          ]}
+        - { "and": [
+            { "==": ["rebar_grade", "40"] },
+            { ">=": ["rebar_yield_strength_MPa", 280] }
+          ]}
+        - { "==": ["rebar_grade", null] }
+
+  # ASTM C150 - Portland Cement
+  - id: astm_c150_1
+    title: "Portland cement type specification"
+    standard: "ASTM"
+    clause: "C150/C150M"
+    factsNeeded: ["cement_type", "cement_type_specified"]
+    severity: "warn"
+    logic:
+      "!=": ["cement_type_specified", null]
+
+  # ASTM C33 - Concrete Aggregates
+  - id: astm_c33_1
+    title: "Concrete aggregate gradation requirements"
+    standard: "ASTM"
+    clause: "C33/C33M"
+    factsNeeded: ["aggregate_tested", "aggregate_gradation_compliant"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["aggregate_tested", false] }
+        - { "==": ["aggregate_gradation_compliant", true] }
+
+  # ASTM E119 - Fire Test
+  - id: astm_e119_1
+    title: "Fire-resistance test requirements for building construction"
+    standard: "ASTM"
+    clause: "E119"
+    factsNeeded: ["fire_rating_required_hours", "fire_test_rating_hours"]
+    severity: "fail"
+    logic:
+      ">=" : ["fire_test_rating_hours", "fire_rating_required_hours"]
+
+  # ASTM C90 - Concrete Masonry Units
+  - id: astm_c90_1
+    title: "Loadbearing concrete masonry unit compressive strength"
+    standard: "ASTM"
+    clause: "C90"
+    factsNeeded: ["cmu_compressive_strength_MPa", "cmu_grade"]
+    severity: "fail"
+    logic:
+      "or":
+        - { ">=": ["cmu_compressive_strength_MPa", 13.1] }
+        - { "==": ["cmu_grade", null] }
+
+  # ASTM A992 - Structural Steel Shapes
+  - id: astm_a992_1
+    title: "W-shape structural steel grade"
+    standard: "ASTM"
+    clause: "A992/A992M"
+    factsNeeded: ["w_shape_steel_grade", "w_shape_yield_MPa"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "!=": ["w_shape_steel_grade", "A992"] }
+        - { ">=": ["w_shape_yield_MPa", 345] }
+
+  # ASTM A500 - Cold-Formed Structural Tubing
+  - id: astm_a500_1
+    title: "HSS structural tubing grade"
+    standard: "ASTM"
+    clause: "A500/A500M"
+    factsNeeded: ["hss_grade", "hss_yield_MPa"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "==": ["hss_grade", "B"] },
+            { ">=": ["hss_yield_MPa", 290] }
+          ]}
+        - { "and": [
+            { "==": ["hss_grade", "C"] },
+            { ">=": ["hss_yield_MPa", 317] }
+          ]}
+        - { "==": ["hss_grade", null] }
+
+  # ASTM E84 - Surface Burning Characteristics
+  - id: astm_e84_1
+    title: "Interior finish flame spread index"
+    standard: "ASTM"
+    clause: "E84"
+    factsNeeded: ["flame_spread_index", "smoke_developed_index", "interior_finish_class"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "==": ["interior_finish_class", "A"] },
+            { "<=": ["flame_spread_index", 25] },
+            { "<=": ["smoke_developed_index", 450] }
+          ]}
+        - { "and": [
+            { "==": ["interior_finish_class", "B"] },
+            { "<=": ["flame_spread_index", 75] },
+            { "<=": ["smoke_developed_index", 450] }
+          ]}
+        - { "and": [
+            { "==": ["interior_finish_class", "C"] },
+            { "<=": ["flame_spread_index", 200] },
+            { "<=": ["smoke_developed_index", 450] }
+          ]}
+        - { "==": ["interior_finish_class", null] }
+
+  # ASTM D698 / D1557 - Soil Compaction
+  - id: astm_d698_1
+    title: "Standard Proctor compaction test"
+    standard: "ASTM"
+    clause: "D698"
+    factsNeeded: ["compaction_test_performed", "compaction_percent"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["compaction_test_performed", false] }
+        - { ">=": ["compaction_percent", 95] }
+
+  # ASTM C920 - Sealants
+  - id: astm_c920_1
+    title: "Elastomeric sealant specification"
+    standard: "ASTM"
+    clause: "C920"
+    factsNeeded: ["sealant_specified", "sealant_type_class"]
+    severity: "warn"
+    logic:
+      "or":
+        - { "==": ["sealant_specified", false] }
+        - { "!=": ["sealant_type_class", null] }
+
+  # ASTM E1820 - Fracture Toughness
+  - id: astm_e1820_1
+    title: "Steel fracture toughness for seismic applications"
+    standard: "ASTM"
+    clause: "E1820"
+    factsNeeded: ["seismic_design_category", "cvn_test_required", "cvn_test_performed"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "<=": ["seismic_design_category", "B"] }
+        - { "==": ["cvn_test_required", false] }
+        - { "==": ["cvn_test_performed", true] }

@@ -1,0 +1,365 @@
+# American Society of Civil Engineers (ASCE) Standards Compliance Rules
+# These rules primarily cover ASCE 7 - Minimum Design Loads and Associated Criteria for Buildings
+
+rules:
+  # ASCE 7 - CHAPTER 2: COMBINATIONS OF LOADS
+  
+  - id: asce7_2.3
+    title: "Load combinations using strength design"
+    standard: "ASCE"
+    clause: "7-2.3"
+    factsNeeded: ["uses_strength_design", "load_combinations_verified"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["uses_strength_design", false] }
+        - { "==": ["load_combinations_verified", true] }
+
+  - id: asce7_2.4
+    title: "Load combinations using allowable stress design"
+    standard: "ASCE"
+    clause: "7-2.4"
+    factsNeeded: ["uses_asd", "asd_load_combinations_verified"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["uses_asd", false] }
+        - { "==": ["asd_load_combinations_verified", true] }
+
+  # ASCE 7 - CHAPTER 3: DEAD LOADS
+  
+  - id: asce7_3.1
+    title: "Dead load determination"
+    standard: "ASCE"
+    clause: "7-3.1"
+    factsNeeded: ["dead_loads_calculated", "includes_permanent_equipment"]
+    severity: "fail"
+    logic:
+      "and": [
+        { "==": ["dead_loads_calculated", true] },
+        { "==": ["includes_permanent_equipment", true] }
+      ]
+
+  # ASCE 7 - CHAPTER 4: LIVE LOADS
+  
+  - id: asce7_4.3
+    title: "Uniformly distributed live loads"
+    standard: "ASCE"
+    clause: "7-4.3"
+    factsNeeded: ["floor_live_load_psf", "occupancy_category"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "==": ["occupancy_category", "residential"] },
+            { ">=": ["floor_live_load_psf", 40] }
+          ]}
+        - { "and": [
+            { "==": ["occupancy_category", "office"] },
+            { ">=": ["floor_live_load_psf", 50] }
+          ]}
+        - { "and": [
+            { "==": ["occupancy_category", "assembly_fixed"] },
+            { ">=": ["floor_live_load_psf", 60] }
+          ]}
+        - { "and": [
+            { "==": ["occupancy_category", "assembly_movable"] },
+            { ">=": ["floor_live_load_psf", 100] }
+          ]}
+        - { "and": [
+            { "==": ["occupancy_category", "retail"] },
+            { ">=": ["floor_live_load_psf", 100] }
+          ]}
+        - { "and": [
+            { "==": ["occupancy_category", "storage_light"] },
+            { ">=": ["floor_live_load_psf", 125] }
+          ]}
+        - { "and": [
+            { "==": ["occupancy_category", "storage_heavy"] },
+            { ">=": ["floor_live_load_psf", 250] }
+          ]}
+
+  - id: asce7_4.7
+    title: "Live load reduction"
+    standard: "ASCE"
+    clause: "7-4.7"
+    factsNeeded: ["tributary_area_sqft", "live_load_reduction_applied", "kll_factor"]
+    severity: "info"
+    logic:
+      "or":
+        - { "<=": ["tributary_area_sqft", 400] }
+        - { "and": [
+            { ">": ["tributary_area_sqft", 400] },
+            { "==": ["live_load_reduction_applied", true] },
+            { ">=": ["kll_factor", 1] }
+          ]}
+
+  # ASCE 7 - CHAPTER 7: SNOW LOADS
+  
+  - id: asce7_7.2
+    title: "Ground snow loads"
+    standard: "ASCE"
+    clause: "7-7.2"
+    factsNeeded: ["ground_snow_load_psf", "location_50yr_snow_load_psf"]
+    severity: "fail"
+    logic:
+      ">=": ["ground_snow_load_psf", "location_50yr_snow_load_psf"]
+
+  - id: asce7_7.3
+    title: "Flat roof snow loads"
+    standard: "ASCE"
+    clause: "7-7.3"
+    factsNeeded: ["flat_roof_snow_load_psf", "ground_snow_load_psf", "ce_factor", "ct_factor", "is_factor"]
+    severity: "fail"
+    logic:
+      ">=": ["flat_roof_snow_load_psf", { "*": [0.7, "ce_factor", "ct_factor", "is_factor", "ground_snow_load_psf"] }]
+
+  - id: asce7_7.4
+    title: "Sloped roof snow loads"
+    standard: "ASCE"
+    clause: "7-7.4"
+    factsNeeded: ["roof_slope_degrees", "cs_factor", "flat_roof_snow_load_psf", "sloped_roof_snow_load_psf"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["roof_slope_degrees", 0] }
+        - { ">=": ["sloped_roof_snow_load_psf", { "*": ["cs_factor", "flat_roof_snow_load_psf"] }] }
+
+  # ASCE 7 - CHAPTER 26: WIND LOADS - GENERAL REQUIREMENTS
+  
+  - id: asce7_26.5
+    title: "Basic wind speed determination"
+    standard: "ASCE"
+    clause: "7-26.5"
+    factsNeeded: ["basic_wind_speed_mph", "risk_category", "location_wind_speed_mph"]
+    severity: "fail"
+    logic:
+      ">=": ["basic_wind_speed_mph", "location_wind_speed_mph"]
+
+  - id: asce7_26.7
+    title: "Wind exposure categories"
+    standard: "ASCE"
+    clause: "7-26.7"
+    factsNeeded: ["exposure_category", "site_conditions_verified"]
+    severity: "fail"
+    logic:
+      "and": [
+        { "in": ["exposure_category", ["B", "C", "D"]] },
+        { "==": ["site_conditions_verified", true] }
+      ]
+
+  - id: asce7_26.8
+    title: "Topographic effects"
+    standard: "ASCE"
+    clause: "7-26.8"
+    factsNeeded: ["kzt_factor", "on_hill_or_escarpment", "hill_height_ft"]
+    severity: "warn"
+    logic:
+      "or":
+        - { "==": ["on_hill_or_escarpment", false] }
+        - { "and": [
+            { "==": ["on_hill_or_escarpment", true] },
+            { ">=": ["kzt_factor", 1.0] }
+          ]}
+
+  - id: asce7_26.9
+    title: "Ground elevation factor"
+    standard: "ASCE"
+    clause: "7-26.9"
+    factsNeeded: ["ground_elevation_ft", "ke_factor"]
+    severity: "info"
+    logic:
+      "or":
+        - { "<=": ["ground_elevation_ft", 0] }
+        - { ">": ["ke_factor", 1.0] }
+
+  - id: asce7_26.10
+    title: "Velocity pressure coefficient"
+    standard: "ASCE"
+    clause: "7-26.10"
+    factsNeeded: ["kz_factor", "height_above_ground_ft", "exposure_category"]
+    severity: "fail"
+    logic:
+      ">": ["kz_factor", 0]
+
+  # ASCE 7 - CHAPTER 27: WIND LOADS ON BUILDINGS - MWFRS
+  
+  - id: asce7_27.3
+    title: "Wind pressure on MWFRS"
+    standard: "ASCE"
+    clause: "7-27.3"
+    factsNeeded: ["design_wind_pressure_psf", "velocity_pressure_psf", "gust_factor", "pressure_coefficient"]
+    severity: "fail"
+    logic:
+      ">=": ["design_wind_pressure_psf", { "*": ["velocity_pressure_psf", "gust_factor", "pressure_coefficient"] }]
+
+  # ASCE 7 - CHAPTER 11: SEISMIC DESIGN CRITERIA
+  
+  - id: asce7_11.4
+    title: "Seismic design category"
+    standard: "ASCE"
+    clause: "7-11.4"
+    factsNeeded: ["seismic_design_category", "sds_value", "sd1_value", "risk_category"]
+    severity: "fail"
+    logic:
+      "!=": ["seismic_design_category", null]
+
+  - id: asce7_11.5
+    title: "Importance factor"
+    standard: "ASCE"
+    clause: "7-11.5"
+    factsNeeded: ["importance_factor", "risk_category"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "in": ["risk_category", ["I", "II"]] },
+            { "==": ["importance_factor", 1.0] }
+          ]}
+        - { "and": [
+            { "==": ["risk_category", "III"] },
+            { "==": ["importance_factor", 1.25] }
+          ]}
+        - { "and": [
+            { "==": ["risk_category", "IV"] },
+            { "==": ["importance_factor", 1.5] }
+          ]}
+
+  # ASCE 7 - CHAPTER 12: SEISMIC DESIGN REQUIREMENTS
+  
+  - id: asce7_12.2
+    title: "Structural system selection"
+    standard: "ASCE"
+    clause: "7-12.2"
+    factsNeeded: ["structural_system", "seismic_design_category", "r_factor"]
+    severity: "fail"
+    logic:
+      "and": [
+        { "!=": ["structural_system", null] },
+        { ">": ["r_factor", 0] }
+      ]
+
+  - id: asce7_12.3
+    title: "Diaphragm flexibility"
+    standard: "ASCE"
+    clause: "7-12.3"
+    factsNeeded: ["diaphragm_type", "diaphragm_classification"]
+    severity: "warn"
+    logic:
+      "or":
+        - { "and": [
+            { "==": ["diaphragm_type", "concrete"] },
+            { "==": ["diaphragm_classification", "rigid"] }
+          ]}
+        - { "and": [
+            { "==": ["diaphragm_type", "metal_deck"] },
+            { "in": ["diaphragm_classification", ["rigid", "semi-rigid"]] }
+          ]}
+        - { "and": [
+            { "==": ["diaphragm_type", "wood"] },
+            { "in": ["diaphragm_classification", ["flexible", "semi-rigid"]] }
+          ]}
+
+  - id: asce7_12.4
+    title: "Permitted analytical procedures"
+    standard: "ASCE"
+    clause: "7-12.4"
+    factsNeeded: ["analysis_procedure", "seismic_design_category", "building_height_ft"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "in": ["seismic_design_category", ["A", "B", "C"]] },
+            { "in": ["analysis_procedure", ["equivalent_lateral", "modal", "linear_dynamic"]] }
+          ]}
+        - { "and": [
+            { "in": ["seismic_design_category", ["D", "E", "F"]] },
+            { "<=": ["building_height_ft", 160] },
+            { "in": ["analysis_procedure", ["equivalent_lateral", "modal", "linear_dynamic"]] }
+          ]}
+        - { "in": ["analysis_procedure", ["nonlinear_static", "nonlinear_dynamic"]] }
+
+  - id: asce7_12.8
+    title: "Equivalent lateral force procedure"
+    standard: "ASCE"
+    clause: "7-12.8"
+    factsNeeded: ["base_shear_calculated", "seismic_weight", "cs_coefficient"]
+    severity: "fail"
+    logic:
+      "==": ["base_shear_calculated", true]
+
+  - id: asce7_12.9
+    title: "Modal response spectrum analysis"
+    standard: "ASCE"
+    clause: "7-12.9"
+    factsNeeded: ["modal_analysis_performed", "number_of_modes", "mass_participation"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["modal_analysis_performed", false] }
+        - { "and": [
+            { "==": ["modal_analysis_performed", true] },
+            { ">=": ["mass_participation", 0.9] }
+          ]}
+
+  # ASCE 7 - CHAPTER 13: SEISMIC DESIGN FOR NONSTRUCTURAL COMPONENTS
+  
+  - id: asce7_13.1
+    title: "Nonstructural component anchorage"
+    standard: "ASCE"
+    clause: "7-13.1"
+    factsNeeded: ["nonstructural_anchorage_designed", "component_importance_factor"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["component_importance_factor", 0] }
+        - { "==": ["nonstructural_anchorage_designed", true] }
+
+  - id: asce7_13.3
+    title: "Component force calculation"
+    standard: "ASCE"
+    clause: "7-13.3"
+    factsNeeds: ["fp_calculated", "component_weight", "ap_factor", "rp_factor"]
+    severity: "fail"
+    logic:
+      "==": ["fp_calculated", true]
+
+  # ASCE 7 - CHAPTER 15: SEISMIC DESIGN OF NONBUILDING STRUCTURES
+  
+  - id: asce7_15.4
+    title: "Nonbuilding structure design"
+    standard: "ASCE"
+    clause: "7-15.4"
+    factsNeeded: ["is_nonbuilding_structure", "nonbuilding_design_verified"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["is_nonbuilding_structure", false] }
+        - { "==": ["nonbuilding_design_verified", true] }
+
+  # ASCE 7 - CHAPTER 29: RAIN LOADS
+  
+  - id: asce7_29.3
+    title: "Design rain loads"
+    standard: "ASCE"
+    clause: "7-29.3"
+    factsNeeded: ["rain_load_psf", "primary_drainage_rate", "secondary_drainage_provided"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["secondary_drainage_provided", true] }
+        - { "and": [
+            { ">": ["primary_drainage_rate", 0] },
+            { ">": ["rain_load_psf", 0] }
+          ]}
+
+  - id: asce7_29.4
+    title: "Ponding instability"
+    standard: "ASCE"
+    clause: "7-29.4"
+    factsNeeded: ["ponding_analysis_performed", "roof_slope_percent"]
+    severity: "warn"
+    logic:
+      "or":
+        - { ">=": ["roof_slope_percent", 0.25] }
+        - { "==": ["ponding_analysis_performed", true] }

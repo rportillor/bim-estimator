@@ -1,0 +1,386 @@
+# National Building Code of Canada 2020 Compliance Rules
+# These rules are based on actual NBC requirements and are used for automated compliance checking
+
+rules:
+  # PART 3 - FIRE PROTECTION, OCCUPANT SAFETY AND ACCESSIBILITY
+  
+  # Section 3.2 - Building Fire Safety
+  - id: nbc_3.2.2.10
+    title: "Fire-resistance rating of floor assemblies"
+    standard: "NBC"
+    clause: "3.2.2.10.(1)"
+    factsNeeded: ["building_height_m", "floor_fire_rating_hours", "occupancy_group"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "<=": ["building_height_m", 18] }
+        - { ">=": ["floor_fire_rating_hours", 2] }
+        
+  - id: nbc_3.2.2.20
+    title: "Fire-resistance rating for structural members"
+    standard: "NBC"
+    clause: "3.2.2.20.(1)"
+    factsNeeded: ["structural_fire_rating_hours", "building_height_m", "occupancy_group"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "<=": ["building_height_m", 18] }
+        - { ">=": ["structural_fire_rating_hours", 2] }
+
+  - id: nbc_3.2.2.48
+    title: "Fire separations between major occupancies"
+    standard: "NBC"
+    clause: "3.2.2.48.(1)"
+    factsNeeded: ["fire_separation_rating_hours", "has_mixed_occupancy"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["has_mixed_occupancy", false] }
+        - { ">=": ["fire_separation_rating_hours", 2] }
+
+  - id: nbc_3.2.4.1
+    title: "Required fire alarm system"
+    standard: "NBC"
+    clause: "3.2.4.1.(1)"
+    factsNeeded: ["building_area_m2", "occupancy_group", "has_fire_alarm"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "==": ["occupancy_group", "C"] },
+            { "<=": ["building_area_m2", 300] }
+          ]}
+        - { "==": ["has_fire_alarm", true] }
+        
+  - id: nbc_3.2.5.12
+    title: "Automatic sprinkler system requirements"
+    standard: "NBC"
+    clause: "3.2.5.12.(1)"
+    factsNeeded: ["fire_area_m2", "sprinklered", "occupancy_group", "building_height_m"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "<=": ["fire_area_m2", 2000] },
+            { "<=": ["building_height_m", 18] }
+          ]}
+        - { "==": ["sprinklered", true] }
+
+  - id: nbc_3.2.5.13
+    title: "NFPA 13 sprinkler design standards"
+    standard: "NBC"
+    clause: "3.2.5.13.(1)"
+    factsNeeded: ["sprinklered", "sprinkler_standard"]
+    severity: "warn"
+    logic:
+      "or":
+        - { "==": ["sprinklered", false] }
+        - { "==": ["sprinkler_standard", "NFPA 13"] }
+
+  # Section 3.3 - Safety Within Floor Areas
+  - id: nbc_3.3.1.5
+    title: "Door width requirements"
+    standard: "NBC"
+    clause: "3.3.1.5.(1)"
+    factsNeeded: ["min_door_width_mm", "is_exit_door"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["is_exit_door", false] }
+        - { ">=": ["min_door_width_mm", 800] }
+
+  - id: nbc_3.3.1.9
+    title: "Corridor width requirements"
+    standard: "NBC"
+    clause: "3.3.1.9.(1)"
+    factsNeeded: ["corridor_width_mm", "occupant_load"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "<=": ["occupant_load", 60] },
+            { ">=": ["corridor_width_mm", 1100] }
+          ]}
+        - { "and": [
+            { ">": ["occupant_load", 60] },
+            { ">=": ["corridor_width_mm", 1650] }
+          ]}
+
+  # Section 3.4 - Exits
+  - id: nbc_3.4.2.1
+    title: "Minimum number of exits"
+    standard: "NBC"
+    clause: "3.4.2.1.(1)"
+    factsNeeded: ["occupant_load", "number_of_exits"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "<=": ["occupant_load", 60] },
+            { ">=": ["number_of_exits", 1] }
+          ]}
+        - { "and": [
+            { ">": ["occupant_load", 60] },
+            { ">=": ["number_of_exits", 2] }
+          ]}
+          
+  - id: nbc_3.4.2.4
+    title: "Travel distance to exits"
+    standard: "NBC"
+    clause: "3.4.2.4.(1)"
+    factsNeeded: ["max_travel_distance_m", "sprinklered", "occupancy_group"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "==": ["sprinklered", false] },
+            { "<=": ["max_travel_distance_m", 40] }
+          ]}
+        - { "and": [
+            { "==": ["sprinklered", true] },
+            { "<=": ["max_travel_distance_m", 60] }
+          ]}
+
+  - id: nbc_3.4.3.2
+    title: "Exit stair width requirements"
+    standard: "NBC"
+    clause: "3.4.3.2.(1)"
+    factsNeeded: ["stair_width_mm", "occupant_load_per_floor"]
+    severity: "fail"
+    logic:
+      ">=": ["stair_width_mm", { "*": ["occupant_load_per_floor", 8] }]
+
+  - id: nbc_3.4.4.2
+    title: "Fire separation for exits"
+    standard: "NBC"
+    clause: "3.4.4.2.(1)"
+    factsNeeded: ["exit_fire_rating_hours", "building_height_m"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "<=": ["building_height_m", 18] },
+            { ">=": ["exit_fire_rating_hours", 0.75] }
+          ]}
+        - { "and": [
+            { ">": ["building_height_m", 18] },
+            { ">=": ["exit_fire_rating_hours", 2] }
+          ]}
+
+  # Section 3.8 - Barrier-Free Design
+  - id: nbc_3.8.2.3
+    title: "Barrier-free entrance requirements"
+    standard: "NBC"
+    clause: "3.8.2.3.(1)"
+    factsNeeded: ["has_barrier_free_entrance", "number_of_entrances"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["number_of_entrances", 0] }
+        - { "==": ["has_barrier_free_entrance", true] }
+
+  - id: nbc_3.8.3.3
+    title: "Barrier-free path width"
+    standard: "NBC"
+    clause: "3.8.3.3.(1)"
+    factsNeeded: ["barrier_free_path_width_mm"]
+    severity: "fail"
+    logic:
+      ">=": ["barrier_free_path_width_mm", 920]
+
+  - id: nbc_3.8.3.4
+    title: "Ramp slope requirements"
+    standard: "NBC"
+    clause: "3.8.3.4.(1)"
+    factsNeeded: ["ramp_slope_ratio", "has_ramp"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["has_ramp", false] }
+        - { "<=": ["ramp_slope_ratio", 0.083] }  # 1:12 slope
+
+  - id: nbc_3.8.3.5
+    title: "Handrail requirements for ramps"
+    standard: "NBC"
+    clause: "3.8.3.5.(1)"
+    factsNeeded: ["ramp_has_handrails", "ramp_height_mm", "has_ramp"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["has_ramp", false] }
+        - { "and": [
+            { ">": ["ramp_height_mm", 75] },
+            { "==": ["ramp_has_handrails", true] }
+          ]}
+        - { "<=": ["ramp_height_mm", 75] }
+
+  - id: nbc_3.8.3.12
+    title: "Elevator requirements"
+    standard: "NBC"
+    clause: "3.8.3.12.(1)"
+    factsNeeded: ["building_storeys", "has_elevator", "building_area_m2"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "<=": ["building_storeys", 1] }
+        - { "and": [
+            { "<=": ["building_storeys", 3] },
+            { "<=": ["building_area_m2", 600] }
+          ]}
+        - { "==": ["has_elevator", true] }
+
+  # PART 4 - STRUCTURAL DESIGN
+  
+  - id: nbc_4.1.3.2
+    title: "Specified snow load"
+    standard: "NBC"
+    clause: "4.1.3.2.(1)"
+    factsNeeded: ["roof_snow_load_kPa", "location_snow_load_kPa"]
+    severity: "fail"
+    logic:
+      ">=": ["roof_snow_load_kPa", "location_snow_load_kPa"]
+
+  - id: nbc_4.1.4.1
+    title: "Specified wind load"
+    standard: "NBC"
+    clause: "4.1.4.1.(1)"
+    factsNeeded: ["design_wind_pressure_kPa", "location_wind_pressure_kPa"]
+    severity: "fail"
+    logic:
+      ">=": ["design_wind_pressure_kPa", "location_wind_pressure_kPa"]
+
+  - id: nbc_4.1.5.5
+    title: "Live load on floors"
+    standard: "NBC"
+    clause: "4.1.5.5.(1)"
+    factsNeeded: ["floor_live_load_kPa", "occupancy_group"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "==": ["occupancy_group", "C"] },
+            { ">=": ["floor_live_load_kPa", 1.9] }
+          ]}
+        - { "and": [
+            { "==": ["occupancy_group", "D"] },
+            { ">=": ["floor_live_load_kPa", 4.8] }
+          ]}
+        - { "and": [
+            { "==": ["occupancy_group", "E"] },
+            { ">=": ["floor_live_load_kPa", 6.0] }
+          ]}
+
+  - id: nbc_4.1.8.1
+    title: "Seismic design requirements"
+    standard: "NBC"
+    clause: "4.1.8.1.(1)"
+    factsNeeded: ["seismic_category", "has_seismic_design"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["seismic_category", "low"] }
+        - { "==": ["has_seismic_design", true] }
+
+  - id: nbc_4.2.4.1
+    title: "Foundation depth below frost line"
+    standard: "NBC"
+    clause: "4.2.4.1.(1)"
+    factsNeeded: ["foundation_depth_mm", "frost_depth_mm"]
+    severity: "fail"
+    logic:
+      ">=": ["foundation_depth_mm", "frost_depth_mm"]
+
+  - id: nbc_4.3.1.1
+    title: "Concrete strength requirements"
+    standard: "NBC"
+    clause: "4.3.1.1.(1)"
+    factsNeeded: ["concrete_strength_MPa", "structural_concrete_min_MPa"]
+    severity: "fail"
+    logic:
+      ">=": ["concrete_strength_MPa", { "if": [
+        { "var": "structural_concrete_min_MPa" },
+        { "var": "structural_concrete_min_MPa" },
+        20
+      ]}]
+
+  # PART 5 - ENVIRONMENTAL SEPARATION
+  
+  - id: nbc_5.3.1.2
+    title: "Air barrier system continuity"
+    standard: "NBC"
+    clause: "5.3.1.2.(1)"
+    factsNeeded: ["has_continuous_air_barrier"]
+    severity: "warn"
+    logic:
+      "==": ["has_continuous_air_barrier", true]
+
+  - id: nbc_5.4.1.1
+    title: "Vapour barrier requirements"
+    standard: "NBC"
+    clause: "5.4.1.1.(1)"
+    factsNeeded: ["has_vapour_barrier", "climate_zone"]
+    severity: "warn"
+    logic:
+      "or":
+        - { "<=": ["climate_zone", 4] }
+        - { "==": ["has_vapour_barrier", true] }
+
+  # PART 6 - HEATING, VENTILATING AND AIR-CONDITIONING
+  
+  - id: nbc_6.2.1.1
+    title: "Ventilation system requirements"
+    standard: "NBC"
+    clause: "6.2.1.1.(1)"
+    factsNeeded: ["has_mechanical_ventilation", "occupancy_group"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["occupancy_group", "F3"] }
+        - { "==": ["has_mechanical_ventilation", true] }
+
+  # PART 9 - HOUSING AND SMALL BUILDINGS
+  
+  - id: nbc_9.5.2.1
+    title: "Foundation wall thickness"
+    standard: "NBC"
+    clause: "9.5.2.1.(1)"
+    factsNeeded: ["foundation_wall_thickness_mm", "building_storeys"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "<=": ["building_storeys", 1] },
+            { ">=": ["foundation_wall_thickness_mm", 150] }
+          ]}
+        - { "and": [
+            { ">": ["building_storeys", 1] },
+            { ">=": ["foundation_wall_thickness_mm", 200] }
+          ]}
+
+  - id: nbc_9.10.9.6
+    title: "Smoke alarm requirements"
+    standard: "NBC"
+    clause: "9.10.9.6.(1)"
+    factsNeeded: ["has_smoke_alarms", "is_residential"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "==": ["is_residential", false] }
+        - { "==": ["has_smoke_alarms", true] }
+
+  - id: nbc_9.23.4.2
+    title: "Stud spacing requirements"
+    standard: "NBC"
+    clause: "9.23.4.2.(1)"
+    factsNeeded: ["stud_spacing_mm", "wall_height_m"]
+    severity: "fail"
+    logic:
+      "or":
+        - { "and": [
+            { "<=": ["wall_height_m", 2.4] },
+            { "<=": ["stud_spacing_mm", 600] }
+          ]}
+        - { "and": [
+            { ">": ["wall_height_m", 2.4] },
+            { "<=": ["stud_spacing_mm", 400] }
+          ]}
