@@ -802,6 +802,10 @@ export class BIMGenerator {
           for (let i = 0; i < batches.length; i++) {
             const batch = batches[i];
             console.log(`\n📦 Processing batch ${i+1}/${batches.length}: ${batch.name} (${batch.docs.length} documents)`);
+
+            // Emit live SSE progress so the client advances from 60% → 92% across all batches
+            const batchOverallProgress = 0.60 + (i / batches.length) * 0.32;
+            await _status({ progress: batchOverallProgress, message: `Batch ${i+1}/${batches.length}: ${batch.name}` });
             
             try {
               const batchResult = await this.constructionWorkflow.processConstructionDocuments(
