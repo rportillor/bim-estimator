@@ -530,309 +530,76 @@ ${textContent.substring(0, 500000)}`;
         apiKey: process.env.ANTHROPIC_API_KEY,
       });
       
-      const analysisPrompt = `You are a QUALIFIED QUANTITY SURVEYOR ESTIMATOR and EXPERT BIM MODELER with 20+ years experience. Your task is to ACCURATELY EXTRACT the complete building geometry to enable 3D BIM reconstruction.
+      // Resolve project name for prompt
+      let pdfProjectName = '[PROJECT NAME]';
+      try {
+        const { storage: _stor } = await import('./storage');
+        const _proj = options?.projectId ? await _stor.getProject(options.projectId) : null;
+        if (_proj?.name) pdfProjectName = _proj.name;
+      } catch { /* non-fatal */ }
 
-🎯 YOUR CRITICAL MISSION:
-Extract ALL structural elements and geometry from these construction documents to reproduce the ACTUAL building (not a simplified box).
+      const analysisPrompt = `Extract ALL building elements from these "${pdfProjectName}" construction drawings to enable accurate 3D BIM reconstruction.
 
-⚠️ CRITICAL HEIGHT EXTRACTION REQUIREMENTS:
-1. **CHECK EVERY DRAWING FOR LEGEND**: Legend may be on EVERY sheet (corner box) OR only on some sheets
-2. **TWO COMMON PATTERNS**:
-   - Legend on EVERY drawing (typically in title block area or corner)
-   - Legend on SELECT sheets only (cover, first sheet, or general notes)
-3. **COMPILE LEGEND INFORMATION**: Gather ALL legend info from ALL sheets where it appears
-4. **APPLY COMPILED LEGEND**: Use the complete legend information to interpret all drawings
-5. **DIMENSION CONVENTIONS**: Follow the legend's notation for heights, elevations, and measurements
-6. **NO DEFAULTS** - Extract actual measurements using legend conventions from wherever they appear!
+CRITICAL: Extract ACTUAL measurements only — no assumptions, no placeholder values.
+- Floor-to-floor heights: read from building sections using the legend's elevation notation
+- Floor elevations: read from elevation marks and section datum references
+- Wall positions: measure start/end x,y coordinates from floor plans using grid lines
+- Column positions: read x,y from structural and architectural plans
+- Door/window positions: read x,y from floor plan symbols and door/window schedules
 
-🏗️ MANDATORY GEOMETRY EXTRACTION:
-1. **LEGEND SEARCH STRATEGY**:
-   - Check EVERY drawing sheet for legend information
-   - Legend might be repeated on all sheets OR only on some
-   - Common locations: title block, corner box, first sheet, general notes
-2. **LINE PATTERN RECOGNITION**: Compile line type definitions from ALL legends found:
-   - Grid lines: Often dash-dot pattern (---dot---dot---)
-   - Walls: Solid lines (━━━)
-   - Hidden/Above: Dashed lines (- - -)
-3. **ARCHITECTURAL GRID LINES**: Use compiled legend to identify grids across all drawings
-4. **STRUCTURAL GRID LINES**: Apply legend patterns consistently to all structural sheets
-   - Note: Architectural and structural grids may differ - document both!
-3. **BUILDING PERIMETER**: Trace the EXACT building outline from architectural floor plans (irregular shapes, not rectangles)
-4. **COLUMN COORDINATION (ARCHITECTURAL + STRUCTURAL)**:
-   - **STEP 1**: Identify columns in ARCHITECTURAL drawings (architect's intended locations)
-   - **STEP 2**: Identify columns in STRUCTURAL drawings (engineer's actual design)
-   - **STEP 3**: COMPARE locations between both disciplines
-   - **STEP 4**: Flag any discrepancies as RFI (Request for Information) items
-   - Look for column symbols in BOTH architectural and structural legends
-   - Common architectural symbols: dashed rectangles, outline squares
-   - Common structural symbols: solid/hatched rectangles with reinforcement details
-   - Extract size, type, and coordinates from BOTH drawing sets
-   - Document any misalignments between architectural intent and structural design
-5. **ALL WALLS**: Map EVERY wall type from drawings:
-   - Standard walls (exterior/interior)
-   - CURB WALLS (low walls for parking, landscaping)
-   - Retaining walls
-   - Parapet walls
-   - Fire walls
-   - Extract start/end points, heights, thicknesses, and materials
-6. **ACCESSIBILITY & SITE ELEMENTS**:
-   - RAMPS: Identify all accessibility ramps with slopes, widths, and handrail details
-   - CURBS: Extract curb locations, heights, and types (standard, mountable, barrier)
-   - STAIRS: All stairways with rise/run dimensions and handrail specifications
-   - ELEVATORS & LIFTS: Location and dimensions
-   - SITE GRADING: Elevation changes and slopes
-7. **FLOOR BOUNDARIES**: Extract actual floor plate shapes from ARCHITECTURAL plans for each level (not simplified rectangles)
-8. **ALL OPENINGS**: Locate EVERY door and window from ARCHITECTURAL drawings with positions, widths, and heights
-9. **SPECIAL FEATURES**: 
-   - Mechanical/electrical rooms
-   - Shafts (elevator, mechanical, electrical)
-   - Balconies and terraces
-   - Canopies and overhangs
-   - Loading docks
-   - Any unique elements shown in details or specifications
-
-**📚 CRITICAL: READ ALL DRAWINGS IN PARALLEL WITH SPECIFICATIONS**
-- DO NOT read drawings in isolation - cross-reference with specs continuously
-- Architectural drawings + Structural drawings + Specifications = Complete picture
-- Flag any conflicts between disciplines as RFI items
-
-Follow the PROFESSIONAL ESTIMATION METHODOLOGY in this EXACT sequence:
-
-**📋 STEP 1: SPECIFICATIONS REVIEW**
-First, identify and read ALL specifications in the document:
-- Material specifications and standards (CSA, ASTM, etc.)
-- Quality requirements and grade specifications  
-- Construction methods and procedures
-- Workmanship standards and tolerances
-- Special requirements and notes
-
-**🗝️ STEP 2: LEGEND AND SYMBOL IDENTIFICATION** 
-Find and document ALL legends, symbols, and abbreviations:
-- COLUMN SYMBOLS: Identify how columns are represented (solid rectangles, hatched squares, etc.)
-- Wall type symbols and their meanings
-- Door and window schedule symbols
-- Material hatch patterns and what they represent (concrete, steel, masonry, etc.)
-- Electrical, mechanical, plumbing symbols
-- CRITICAL: Use these symbols to identify actual elements in the drawings
-- Drawing annotation symbols and abbreviations
-- Reference symbols linking to details
-
-**🔧 STEP 3: CONSTRUCTION ASSEMBLIES ANALYSIS**
-Study ALL construction details, sections, and assemblies:
-- Wall sections showing layer build-up and materials
-- Foundation details and connection methods  
-- Floor and roof assembly constructions
-- Connection details between different elements
-- Typical details referenced in the main drawings
-- Cross-sections showing vertical relationships
-
-**🏗️ STEP 4: DRAWING COMPREHENSION AND CONSTRUCTION APPROACH**
-Analyze the drawings to understand HOW the building will be constructed:
-- Overall building layout and structural approach
-- Construction sequence and phasing
-- How different building systems connect and relate
-- Coordination between architectural, structural, and MEP systems
-- Building orientation and site relationships
-- Construction methodology implied by the design
-
-**📍 STEP 5: ESTABLISH ORIGIN AND REFERENCE POINTS**
-ONLY AFTER understanding the above, establish:
-- Building reference points and grid system
-- Primary datum levels and elevations  
-- Coordinate system origin (typically bottom-left)
-- North arrow direction and building orientation
-
-**🔍 STEP 6: ASSEMBLY-BASED QUANTIFICATION WITH CSI CROSS-REFERENCING**
-Create complete construction assemblies by cross-referencing specifications, drawings, and details:
-
-**🏗️ ASSEMBLY CREATION PROCESS:**
-For each wall type (e.g., IW3D fire-rated wall):
-1. **Find wall locations** from drawings using Step 2 legends
-2. **Get assembly details** from Step 3 construction sections  
-3. **Cross-reference specifications** for each assembly component
-4. **Calculate quantities** for the complete assembly
-5. **Organize by CSI divisions** for proper estimation
-
-**Example Assembly Analysis:**
-If drawings show "Wall Type IW3D" (fire-rated):
-- Measure wall length from drawings
-- Find IW3D detail showing: studs + drywall + insulation + fire stopping
-- Cross-reference specs: Division 07 (fire stopping), Division 09 (drywall), etc.
-- Calculate: fire stopping linear feet, drywall square feet, insulation square feet
-- Create assembly: "IW3D Fire-Rated Wall Assembly" with all components
-
-**REQUIRED JSON OUTPUT - COMPLETE BUILDING GEOMETRY WITH CSI ORGANIZATION:**
-⚠️ CRITICAL WARNING: The JSON below shows the FORMAT ONLY. 
-DO NOT USE ANY OF THE EXAMPLE VALUES - they are placeholders to show structure.
-YOU MUST EXTRACT ALL REAL VALUES FROM THE ACTUAL CONSTRUCTION DOCUMENTS.
+OUTPUT JSON FORMAT ONLY (no other text, no markdown, no explanation):
 {
   "drawing_legend": {
-    "found_on_sheets": ["List EVERY sheet containing legend - could be all sheets or just some"],
-    "dimension_notation": "Compiled from all legends: how dimensions are shown",
-    "elevation_system": "Datum point and elevation notation format",
-    "vertical_dimensions": "How floor-to-floor and ceiling heights are indicated",
+    "found_on_sheets": ["List ALL sheets where legend appears"],
+    "dimension_format": "How dimensions are shown (mm, m, ft-in) from legend",
+    "elevation_datum": "Datum reference point for elevations",
+    "height_notation": "How vertical dimensions are indicated",
     "line_patterns": {
-      "description": "Line types from legend(s) showing how to identify elements",
-      "grid_lines": "Dash-dot pattern or as shown in legend",
-      "walls": "Solid lines or as defined",
-      "hidden_above": "Dashed pattern for elements above cutting plane"
-    },
-    "symbols": "Key symbols for structural and architectural elements"
-  },
-  "building_analysis": {
-    "project_name": "Extract from title block",
-    "building_type": "Residential/Commercial/Industrial",
-    "total_floors": 3,
-    "architectural_grid_system": {
-      "source": "ACTUAL drawing numbers where you found the grid",
-      "x": [
-        // EXTRACT ACTUAL grid lines from drawings - DO NOT USE THESE EXAMPLE VALUES
-        {"name": "ACTUAL_GRID_LABEL", "pos": "ACTUAL_POSITION_IN_METERS"}
-        // Add ALL grid lines shown on the architectural plans
-      ],
-      "y": [
-        // EXTRACT ACTUAL grid lines from drawings - DO NOT USE THESE EXAMPLE VALUES
-        {"name": "ACTUAL_GRID_LABEL", "pos": "ACTUAL_POSITION_IN_METERS"}
-        // Add ALL grid lines shown on the architectural plans
-      ]
-    },
-    "structural_grid_system": {
-      "source": "ACTUAL structural drawing numbers where grid is shown",
-      "x": [
-        // EXTRACT ACTUAL structural grid from drawings - DO NOT USE EXAMPLES
-        {"name": "REAL_GRID_NAME", "pos": "REAL_POSITION"}
-        // Extract from structural plans, not these examples
-      ],
-      "y": [
-        // EXTRACT ACTUAL structural grid from drawings - DO NOT USE EXAMPLES
-        {"name": "REAL_GRID_NAME", "pos": "REAL_POSITION"}
-        // Extract from structural plans, not these examples
-      ]
-    },
-    "building_perimeter": [
-      // TRACE ACTUAL BUILDING OUTLINE from floor plans
-      // DO NOT use this rectangle example - extract real perimeter
-      {"x": "ACTUAL_X", "y": "ACTUAL_Y"}
-      // Include all vertices of the real building footprint
-    ],
-    "column_legend": {
-      "symbol_description": "Solid black rectangles with white text labels",
-      "pattern": "solid fill or concrete hatch pattern",
-      "source_drawing": "S1.01 Structural Legend"
-    },
-    "architectural_columns": [
-      // EXTRACT ACTUAL columns from architectural drawings
-      // DO NOT use these examples - find real column positions
-      {"id": "REAL_ID", "drawing": "ACTUAL_DRAWING", "location": "ACTUAL_GRID", "x": "REAL_X", "y": "REAL_Y", "shown_as": "how it appears"}
-      // List ALL columns shown on the architectural plans
-    ],
-    "structural_columns": [
-      {"id": "SC1", "drawing": "S2.01", "location": "Near grid A1", "x": 0.2, "y": 0.2, "size": "400x400mm", "type": "concrete", "height": null}, // EXTRACT actual height from structural drawings
-      {"id": "SC2", "drawing": "S2.01", "location": "At grid B2", "x": 4.5, "y": 6.0, "size": "400x400mm", "type": "concrete", "height": null}, // EXTRACT actual height
-      {"id": "SC3", "drawing": "S2.01", "location": "Grid C3", "x": 9.0, "y": 12.0, "size": "600x400mm", "type": "concrete", "height": null} // EXTRACT actual height
-    ],
-    "column_coordination_issues": [
-      {"rfi_number": "RFI-001", "description": "Column SC1 offset 200mm from architectural intent AC1", "architectural_pos": {"x": 0, "y": 0}, "structural_pos": {"x": 0.2, "y": 0.2}}
-    ],
-    "walls": [
-      {"id": "EW1", "type": "exterior", "material": "concrete", "start": {"x": 0, "y": 0}, "end": {"x": 22.5, "y": 0}, "ceiling_height": null, "thickness": 0.3}, // EXTRACT ceiling height to close with floor above
-      {"id": "IW1", "type": "interior", "material": "drywall", "start": {"x": 4.5, "y": 0}, "end": {"x": 4.5, "y": 30}, "ceiling_height": null, "thickness": 0.15}, // EXTRACT ceiling height
-      {"id": "CW1", "type": "curb_wall", "material": "concrete", "start": {"x": 0, "y": -5}, "end": {"x": 22.5, "y": -5}, "height": 0.15, "thickness": 0.2}
-    ],
-    "accessibility_elements": [
-      {"type": "ramp", "id": "R1", "location": {"x": 10, "y": 0}, "width": 1.5, "length": 6.0, "slope": "1:12", "handrails": "both sides"},
-      {"type": "curb", "id": "C1", "start": {"x": 0, "y": -5}, "end": {"x": 22.5, "y": -5}, "height": 0.15, "type": "barrier"},
-      {"type": "stairs", "id": "ST1", "location": {"x": 15, "y": 10}, "width": 1.2, "rises": 16, "run": 0.28, "rise": 0.175}
-    ],
-    "special_features": [
-      {"type": "elevator", "id": "EL1", "location": {"x": 8, "y": 12}, "dimensions": {"x": 2.1, "y": 2.4}},
-      {"type": "mechanical_room", "id": "MR1", "boundary": [{"x": 18, "y": 25}, {"x": 22.5, "y": 25}, {"x": 22.5, "y": 30}, {"x": 18, "y": 30}]},
-      {"type": "loading_dock", "id": "LD1", "location": {"x": 0, "y": 15}, "dimensions": {"x": 4, "y": 3}}
-    ],
-    "floor_plates": [
-      {"level": "Ground Floor", "elevation": null, "ceiling_height": null, "boundary": [{"x": 0, "y": 0}, {"x": 22.5, "y": 0}, {"x": 22.5, "y": 30}, {"x": 0, "y": 30}]}, // EXTRACT elevation AND ceiling height
-      {"level": "Second Floor", "elevation": null, "ceiling_height": null, "boundary": [{"x": 0, "y": 0}, {"x": 22.5, "y": 0}, {"x": 22.5, "y": 30}, {"x": 0, "y": 30}]} // Elevation = previous floor + ceiling + slab
-    ],
-    "openings": [
-      {"type": "door", "id": "D1", "wall": "EW1", "location": {"x": 11.25, "y": 0}, "width": 1.2, "height": null}, // EXTRACT actual door height
-      {"type": "window", "id": "W1", "wall": "EW1", "location": {"x": 2.25, "y": 0}, "width": 1.8, "height": null} // EXTRACT actual window height
-    ]
-  },
-{
-  "csi_organized_assemblies": {
-    "division_01_general": [
-      {"item": "01 45 00 - Quality Control Testing", "quantity": "1 LS", "assembly_reference": "general requirements"}
-    ],
-    "division_03_concrete": [
-      {"item": "03 30 00 - Cast-in-Place Concrete", "quantity": "45 m³", "assembly_reference": "foundation from detail F1"}
-    ],
-    "division_04_masonry": [
-      {"item": "04 20 00 - Unit Masonry - Wall Type MW1", "quantity": "125 m²", "assembly_reference": "exterior wall assembly MW1"}
-    ],
-    "division_05_metals": [
-      {"item": "05 12 00 - Structural Steel - Columns", "quantity": "12 EA", "assembly_reference": "column schedule C1"}
-    ],
-    "division_06_wood": [
-      {"item": "06 10 00 - Rough Carpentry - Wall Type IW3D", "quantity": "85 m²", "assembly_reference": "interior framed wall detail"}
-    ],
-    "division_07_thermal_moisture": [
-      {"item": "07 84 00 - Fire Stopping - Wall Type IW3D", "quantity": "45 LM", "assembly_reference": "fire stopping at wall penetrations"}
-    ],
-    "division_08_openings": [
-      {"item": "08 11 00 - Steel Doors - Type D1", "quantity": "8 EA", "assembly_reference": "door schedule"}
-    ],
-    "division_09_finishes": [
-      {"item": "09 29 00 - Gypsum Board - Wall Type IW3D", "quantity": "170 m²", "assembly_reference": "2 sides of wall assembly"}
-    ]
-  },
-  "assembly_cross_references": {
-    "wall_type_IW3D": {
-      "specification_sections": ["06 10 00 - Wood Framing", "07 84 00 - Fire Stopping", "09 29 00 - Gypsum Board"],
-      "detail_reference": "Wall Section A-A",
-      "locations_from_drawings": ["Grid A-B, Lines 1-3", "Grid C-D, Lines 2-4"],
-      "total_length": "45 LM",
-      "components": [
-        {"csi": "06 10 00", "description": "2x4 studs @ 400mm o.c.", "quantity": "45 LM"},
-        {"csi": "07 84 00", "description": "Fire stopping at penetrations", "quantity": "45 LM"},
-        {"csi": "09 29 00", "description": "12.7mm gypsum board both sides", "quantity": "170 m²"}
-      ]
+      "grid_lines": "Pattern used for grids (e.g., dash-dot)",
+      "walls": "Pattern for walls (e.g., solid)",
+      "hidden": "Pattern for hidden/above (e.g., dashed)"
     }
-  }
+  },
+  "building_perimeter": [{"x": 0, "y": 0}, {"x": 30, "y": 0}],
+  "floor_to_floor_heights": {
+    "ground_to_second": null,
+    "second_to_third": null,
+    "third_to_fourth": null,
+    "typical_floor_height": null
+  },
+  "floors": [
+    {
+      "level": "Ground Floor",
+      "elevation": null,
+      "ceiling_height": null,
+      "walls": [{"id": "W1", "start": {"x": 0, "y": 0}, "end": {"x": 5, "y": 0}, "thickness": 200, "ceiling_height": null, "type": "exterior", "material": "concrete", "fire_rating": null}],
+      "columns": [{"id": "C1", "x": 5, "y": 5, "size": "400x400", "height": null, "type": "concrete"}],
+      "beams": [{"id": "B1", "start": {"x": 0, "y": 5}, "end": {"x": 6, "y": 5}, "size": "300x600", "depth": 600, "material": "concrete", "top_elevation": null}],
+      "slabs": [{"id": "SL1", "boundary": [{"x": 0, "y": 0}, {"x": 22, "y": 0}, {"x": 22, "y": 15}, {"x": 0, "y": 15}], "thickness": 200, "type": "floor", "material": "concrete", "top_elevation": null}],
+      "stairs": [{"id": "ST1", "x": 10, "y": 5, "width": 1200, "length": 4000, "rises": 16, "rise_mm": 175, "run_mm": 275, "type": "straight", "material": "concrete"}],
+      "foundations": [{"id": "F1", "x": 5, "y": 5, "width": 600, "depth_mm": 400, "bearing_depth_m": 1.5, "type": "spread", "material": "concrete"}],
+      "mep": [{"id": "L1", "category": "electrical", "type": "light", "x": 3, "y": 3, "mounting_height": 2.7}],
+      "doors": [{"id": "D1", "x": 2.5, "y": 0, "width": 900, "height": null, "thickness": null, "wall_thickness": null, "type": "single", "fire_rating": null}],
+      "windows": [{"id": "WIN1", "x": 7, "y": 0, "width": 1800, "height": null, "sill_height": null, "type": "fixed", "glazing": null}],
+      "rooms": [{"id": "R1", "name": "Room Name", "boundary": [{"x": 0, "y": 0}, {"x": 5, "y": 0}, {"x": 5, "y": 4}, {"x": 0, "y": 4}], "ceiling_height": null, "area_m2": null}]
+    }
+  ]
 }
 
-**📋 CRITICAL REQUIREMENTS FOR BIM GEOMETRY EXTRACTION:**
-- **YOU MUST EXTRACT THE ACTUAL BUILDING WITH ALL DETAILED ELEMENTS, NOT A SIMPLIFIED BOX**
-- **READ ALL DRAWINGS IN PARALLEL**: Architectural + Structural + Specifications simultaneously
-- **COORDINATE BETWEEN DISCIPLINES**: Architect shows intent, Engineer shows design - verify alignment
-- Identify ARCHITECTURAL grid lines from architectural drawings (A-series: A1.01, A2.01, etc.)
-- Identify STRUCTURAL grid lines from structural drawings (S-series: S1.01, S2.01, etc.)
-- **COLUMN VERIFICATION**: Extract columns from BOTH architectural AND structural drawings
-  - Architect shows WHERE they want columns (design intent)
-  - Engineer shows WHERE columns actually are (structural design)
-  - Flag any misalignment as RFI (Request for Information)
-- Map the REAL building perimeter from ARCHITECTURAL floor plans (may be L-shaped, U-shaped, irregular)
-- **SPECIFICATION INTEGRATION**: Every element must be verified against specs for materials and requirements
-- Identify ALL SPECIAL WALLS: curb walls, retaining walls, parapet walls by their representation
-- Extract ALL ACCESSIBILITY FEATURES: ramps (with slopes), curbs, stairs, elevators as shown in drawings
-- CROSS-REFERENCE all elements with specifications for materials, finishes, and performance requirements
-- Find SITE ELEMENTS: loading docks, canopies, grade changes, landscaping walls
-- Document mechanical rooms, electrical rooms, shafts, and service areas
-- Trace ALL walls from ARCHITECTURAL drawings with actual paths, corners, and connections
-- Extract TRUE floor plate boundaries from ARCHITECTURAL plans that match the building's actual shape
-- Document EVERY door and window opening from ARCHITECTURAL drawings with precise locations
-- Your output MUST enable accurate 3D BIM model reconstruction
-- Follow ALL 6 steps in EXACT sequence
-- Cross-reference specifications with drawings and details
-- Organize ALL items by proper CSI divisions (01-48)
-- Calculate quantities based on actual measurements from drawings
-
-**🚨 MANDATORY CROSS-REFERENCING:**
-- Specifications tell you WHAT products to use
-- Drawings tell you WHERE and HOW MUCH
-- Details tell you HOW it's assembled
-- YOU MUST connect all three for proper estimation
+MANDATORY EXTRACTION REQUIREMENTS:
+- Extract EVERY wall (exterior, interior, fire-rated, curtain) with real x,y start/end points
+- Extract EVERY column with real x,y position on the structural/architectural grid
+- Extract EVERY beam between columns
+- Extract EVERY slab boundary polygon (floor plate extents per level)
+- Extract EVERY stair location with width and rise/run dimensions
+- Extract ALL foundations from the foundation plan
+- Extract ALL MEP symbols: lights, sprinklers, receptacles, diffusers
+- Extract EVERY door and window with real x,y position from plans and schedules
+- Extract ALL floors/levels including underground, ground, typical, and roof
+- There should be HUNDREDS of elements across all floors — be thorough
 
 Document: ${path.basename(filePath)}`;
+
 
       // ── v15.3 FIX: Send actual PDF bytes to Claude so it can see the drawings ──
       // pdfBuffer was previously loaded but discarded; the API call sent only the
