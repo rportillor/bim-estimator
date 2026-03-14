@@ -3125,6 +3125,65 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // AI Insights: returns Claude's cached analysis for a project
+  app.get('/api/projects/:projectId/ai-insights', authenticateToken, async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const docs = await storage.getDocumentsByProject(projectId);
+
+      // Find any document that holds the cached BIM/Claude analysis
+      const docWithAnalysis = docs.find((d: any) => {
+        const ar = d.analysisResult;
+        if (!ar) return false;
+        if (typeof ar === 'object') return !!(ar as any).building_analysis;
+        try { return JSON.parse(ar as string)?.building_analysis; } catch { return false; }
+      });
+
+      const analysis = docWithAnalysis
+        ? (typeof docWithAnalysis.analysisResult === 'object'
+            ? docWithAnalysis.analysisResult
+            : JSON.parse(docWithAnalysis.analysisResult as string))
+        : null;
+
+      // Also pull Smart Analysis cache
+      let smartAnalysis: any = null;
+      try {
+        const { smartAnalysisService } = await import('./smart-analysis-service');
+        smartAnalysis = await (smartAnalysisService as any).getPreviousAnalysis?.(projectId, 'document_analysis');
+      } catch { /* optional */ }
+
+      // Build per-document summaries (text preview only — no Claude call)
+      const docSummaries = docs.map((d: any) => ({
+        id: d.id,
+        filename: d.originalName || d.filename,
+        analysisStatus: d.analysisStatus ?? d.analysis_status ?? 'Unknown',
+        pageCount: d.pageCount ?? null,
+        fileType: d.fileType ?? d.file_type ?? '',
+        hasText: !!(d.textContent && (d.textContent as string).length > 50),
+        textPreview: d.textContent
+          ? (d.textContent as string).replace(/\s+/g, ' ').trim().slice(0, 300)
+          : null,
+      }));
+
+      res.json({
+        hasAnalysis: !!analysis,
+        cachedAt: analysis?.cachedAt ?? null,
+        documentCount: docs.length,
+        docsWithText: docSummaries.filter(d => d.hasText).length,
+        buildingAnalysis: analysis?.building_analysis ?? null,
+        componentTypes: analysis?.componentTypes ?? null,
+        standardsRequired: analysis?.standardsRequired ?? null,
+        buildingHierarchy: analysis?.buildingHierarchy ?? null,
+        aiUnderstanding: analysis?.ai_understanding ?? null,
+        smartAnalysis: smartAnalysis?.analysisData ?? null,
+        documents: docSummaries,
+      });
+    } catch (err: any) {
+      console.error('AI insights error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // [*] FIX: Add missing dashboard stats endpoint
   app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
     try {

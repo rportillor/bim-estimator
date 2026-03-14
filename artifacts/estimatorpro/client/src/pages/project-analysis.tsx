@@ -12,7 +12,15 @@ import {
   TrendingUp,
   Clock,
   RefreshCw,
-  Box
+  Box,
+  Sparkles,
+  CheckCircle2,
+  XCircle,
+  Layers,
+  ShieldCheck,
+  Info,
+  ChevronDown,
+  ChevronRight
 } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
 import { DocumentSimilarityHeatmap } from '@/components/similarity/DocumentSimilarityHeatmap';
@@ -53,6 +61,14 @@ export default function ProjectAnalysis() {
     queryKey: ['/api/projects', projectId, 'documents'],
     enabled: !!projectId,
   });
+
+  const { data: aiInsights, isLoading: insightsLoading } = useQuery<any>({
+    queryKey: ['/api/projects', projectId, 'ai-insights'],
+    enabled: !!projectId,
+    staleTime: 60_000,
+  });
+
+  const [expandedDocs, setExpandedDocs] = useState<Set<string>>(new Set());
 
   // COMPLETELY DISABLED - No polling needed
   const realProgress = null;
@@ -320,6 +336,14 @@ export default function ProjectAnalysis() {
                 <Box className="h-4 w-4" />
                 <span className="hidden sm:inline">3D BIM</span><span className="sm:hidden">BIM</span>
               </TabsTrigger>
+              <TabsTrigger 
+                value="ai-insights" 
+                className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm font-medium px-2 sm:px-3 py-2 sm:py-3 rounded whitespace-nowrap"
+                data-testid="tab-ai-insights"
+              >
+                <Sparkles className="h-4 w-4" />
+                <span className="hidden sm:inline">AI Insights</span><span className="sm:hidden">AI</span>
+              </TabsTrigger>
             </TabsList>
             </div>
           </div>
@@ -367,6 +391,166 @@ export default function ProjectAnalysis() {
           <TabsContent value="bim" className="p-4 sm:p-6">
             <div className="w-full">
               <BIMIntegrationCard projectId={projectId!} />
+            </div>
+          </TabsContent>
+
+          <TabsContent value="ai-insights" className="p-4 sm:p-6">
+            <div className="w-full space-y-5">
+              {insightsLoading ? (
+                <Card><CardContent className="flex items-center gap-3 py-10 justify-center text-gray-500">
+                  <RefreshCw className="h-5 w-5 animate-spin" /> Loading AI insights…
+                </CardContent></Card>
+              ) : !aiInsights ? (
+                <Card><CardContent className="py-10 text-center text-gray-500">Could not load insights.</CardContent></Card>
+              ) : (
+                <>
+                  {/* ── Status banner ── */}
+                  <Card className={aiInsights.hasAnalysis ? 'border-green-200 bg-green-50' : 'border-amber-200 bg-amber-50'}>
+                    <CardContent className="flex items-start gap-4 py-5">
+                      {aiInsights.hasAnalysis
+                        ? <CheckCircle2 className="h-6 w-6 text-green-600 shrink-0 mt-0.5" />
+                        : <Info className="h-6 w-6 text-amber-600 shrink-0 mt-0.5" />}
+                      <div>
+                        <p className="font-semibold text-sm">
+                          {aiInsights.hasAnalysis ? 'Claude analysis available' : 'No Claude analysis yet'}
+                        </p>
+                        <p className="text-xs text-gray-600 mt-0.5">
+                          {aiInsights.hasAnalysis
+                            ? `Cached ${aiInsights.cachedAt ? new Date(aiInsights.cachedAt).toLocaleString() : 'recently'} · ${aiInsights.documentCount} documents · ${aiInsights.docsWithText} with extracted text`
+                            : `${aiInsights.documentCount} documents uploaded, ${aiInsights.docsWithText} with extracted text. Generate a BIM model first to run Claude analysis.`}
+                        </p>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* ── Building analysis ── */}
+                  {aiInsights.buildingAnalysis && (
+                    <Card>
+                      <CardContent className="py-5">
+                        <div className="flex items-center gap-2 mb-4">
+                          <Building className="h-5 w-5 text-blue-600" />
+                          <h3 className="font-semibold text-sm">Building Analysis</h3>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                          {aiInsights.buildingAnalysis.dimensions && (
+                            <>
+                              {aiInsights.buildingAnalysis.dimensions.width && (
+                                <div className="bg-gray-50 rounded p-3">
+                                  <p className="text-xs text-gray-500">Width</p>
+                                  <p className="font-medium text-sm">{aiInsights.buildingAnalysis.dimensions.width} m</p>
+                                </div>
+                              )}
+                              {aiInsights.buildingAnalysis.dimensions.length && (
+                                <div className="bg-gray-50 rounded p-3">
+                                  <p className="text-xs text-gray-500">Length</p>
+                                  <p className="font-medium text-sm">{aiInsights.buildingAnalysis.dimensions.length} m</p>
+                                </div>
+                              )}
+                            </>
+                          )}
+                          {aiInsights.buildingHierarchy && aiInsights.buildingHierarchy.length > 0 && (
+                            <div className="bg-gray-50 rounded p-3">
+                              <p className="text-xs text-gray-500">Storeys</p>
+                              <p className="font-medium text-sm">{aiInsights.buildingHierarchy.length}</p>
+                            </div>
+                          )}
+                        </div>
+                        {aiInsights.buildingHierarchy && aiInsights.buildingHierarchy.length > 0 && (
+                          <div className="mt-4">
+                            <p className="text-xs text-gray-500 mb-2">Floor levels</p>
+                            <div className="flex flex-wrap gap-2">
+                              {aiInsights.buildingHierarchy.map((s: any, i: number) => (
+                                <Badge key={i} variant="outline" className="text-xs">
+                                  {typeof s === 'string' ? s : (s.name || s.level || `Level ${i+1}`)}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {/* ── Component types & standards ── */}
+                  <div className="grid sm:grid-cols-2 gap-4">
+                    {aiInsights.componentTypes && aiInsights.componentTypes.length > 0 && (
+                      <Card>
+                        <CardContent className="py-5">
+                          <div className="flex items-center gap-2 mb-3">
+                            <Layers className="h-4 w-4 text-violet-600" />
+                            <h3 className="font-semibold text-sm">Component Types Identified</h3>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {aiInsights.componentTypes.map((c: string) => (
+                              <Badge key={c} className="bg-violet-50 text-violet-700 border-violet-200 text-xs capitalize">{c}</Badge>
+                            ))}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )}
+                    {aiInsights.standardsRequired && aiInsights.standardsRequired.length > 0 && (
+                      <Card>
+                        <CardContent className="py-5">
+                          <div className="flex items-center gap-2 mb-3">
+                            <ShieldCheck className="h-4 w-4 text-green-600" />
+                            <h3 className="font-semibold text-sm">Standards Referenced</h3>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {aiInsights.standardsRequired.map((s: string) => (
+                              <Badge key={s} variant="outline" className="text-xs">{s}</Badge>
+                            ))}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )}
+                  </div>
+
+                  {/* ── Per-document list ── */}
+                  <Card>
+                    <CardContent className="py-5">
+                      <div className="flex items-center gap-2 mb-4">
+                        <FileText className="h-4 w-4 text-gray-600" />
+                        <h3 className="font-semibold text-sm">Documents ({aiInsights.documents?.length ?? 0})</h3>
+                        <span className="text-xs text-gray-400 ml-auto">{aiInsights.docsWithText} with extracted text</span>
+                      </div>
+                      <div className="space-y-2">
+                        {(aiInsights.documents ?? []).map((doc: any) => {
+                          const isExpanded = expandedDocs.has(doc.id);
+                          const toggle = () => setExpandedDocs(prev => {
+                            const next = new Set(prev);
+                            isExpanded ? next.delete(doc.id) : next.add(doc.id);
+                            return next;
+                          });
+                          return (
+                            <div key={doc.id} className="border rounded-lg overflow-hidden">
+                              <button
+                                onClick={toggle}
+                                className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors"
+                              >
+                                {doc.hasText
+                                  ? <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
+                                  : <XCircle className="h-4 w-4 text-gray-300 shrink-0" />}
+                                <span className="text-sm flex-1 min-w-0 truncate">{doc.filename}</span>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <Badge variant="outline" className="text-xs hidden sm:inline-flex">{doc.analysisStatus}</Badge>
+                                  {doc.pageCount && <span className="text-xs text-gray-400">{doc.pageCount}p</span>}
+                                  {doc.hasText && (isExpanded ? <ChevronDown className="h-4 w-4 text-gray-400" /> : <ChevronRight className="h-4 w-4 text-gray-400" />)}
+                                </div>
+                              </button>
+                              {isExpanded && doc.textPreview && (
+                                <div className="px-4 pb-4 pt-1 bg-gray-50 border-t">
+                                  <p className="text-xs text-gray-500 mb-1">Extracted text preview</p>
+                                  <p className="text-xs text-gray-700 leading-relaxed font-mono whitespace-pre-wrap">{doc.textPreview}…</p>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </CardContent>
+                  </Card>
+                </>
+              )}
             </div>
           </TabsContent>
         </Tabs>
