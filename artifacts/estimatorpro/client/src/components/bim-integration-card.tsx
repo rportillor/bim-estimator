@@ -126,6 +126,52 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
     }
   }, [sseProgress]);
 
+  const [extractingElements, setExtractingElements] = useState(false);
+
+  const extractMutation = useMutation({
+    mutationFn: async () => {
+      const headers = getAuthHeaders();
+      const modelsRes = await fetch(`/api/projects/${projectId}/bim-models`, { headers, credentials: 'include' });
+      if (!modelsRes.ok) throw new Error('Could not load BIM model slot');
+      const models = await modelsRes.json();
+      const modelId = models[0]?.id;
+      if (!modelId) throw new Error('No BIM model slot found for this project.');
+
+      const timeout = new Promise<never>((_, rej) =>
+        setTimeout(() => rej(new Error('Request timed out — check the viewer, extraction may still be running.')), 720_000),
+      );
+      const req = fetch(`/api/bim/models/${modelId}/extract-elements`, {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+      });
+      const res = await Promise.race([req, timeout]) as Response;
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: `HTTP ${res.status}` }));
+        throw new Error(err.message || err.error || 'Extraction failed');
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setExtractingElements(false);
+      toast({
+        title: 'Elements extracted',
+        description: `${data.elementCount || 0} 3D elements are now ready in the viewer.`,
+      });
+      refetch();
+      queryClient.invalidateQueries({ queryKey: ['/api/projects', projectId, 'bim-models'] });
+    },
+    onError: (err: Error) => {
+      setExtractingElements(false);
+      toast({ title: 'Extraction failed', description: err.message, variant: 'destructive' });
+    },
+  });
+
+  const handleExtractElements = () => {
+    setExtractingElements(true);
+    extractMutation.mutate();
+  };
+
   const generateMutation = useMutation({
     mutationFn: async () => {
       const headers = getAuthHeaders();
@@ -322,6 +368,29 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
                 Export IFC
               </Button>
             </div>
+
+            {/* Re-extract elements if viewer shows 0 elements */}
+            {(!latestModel?.elementCount || latestModel.elementCount === 0) && (
+              <div className="flex items-center gap-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+                <div className="flex-1 text-xs text-amber-800">
+                  <p className="font-medium">3D viewer shows 0 elements.</p>
+                  <p>Re-extract to pull building geometry from your drawings (~5–10 min).</p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleExtractElements}
+                  disabled={extractingElements}
+                  className="shrink-0 border-amber-300 text-amber-800 hover:bg-amber-100"
+                >
+                  {extractingElements
+                    ? <><Loader2 className="h-3 w-3 animate-spin mr-1" />Extracting…</>
+                    : <><RefreshCw className="h-3 w-3 mr-1" />Re-extract Elements</>
+                  }
+                </Button>
+              </div>
+            )}
 
             {/* Regenerate — tucked away as secondary option */}
             <div className="pt-1 border-t border-gray-100">

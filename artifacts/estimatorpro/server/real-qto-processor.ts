@@ -864,8 +864,7 @@ Document: ${path.basename(filePath)}`;
             content: userContent,
           }
         ],
-        betas: ["pdfs-2024-09-25"],
-      } as any);
+      });
 
       let aiAnalysis = response.content[0].type === 'text' ? response.content[0].text : '';
       logger.debug('Raw AI response:', { preview: aiAnalysis.substring(0, 500) });

@@ -258,3 +258,123 @@ bimGenerateRouter.post("/bim/models/:modelId/generate", async (req: Request, res
     await ExtractionLockManager.releaseLock(processId);
   }
 });
+
+// ─── Re-extract elements only (skip batch product/assembly phase) ─────────────
+//
+// POST /api/bim/models/:modelId/extract-elements
+//
+// Use when the model has 0 elements but products/assemblies already exist
+// (e.g. after fixing the beta-header bug in analyzePDFForBuildingGeometry).
+// Skips the 30+ min batch phase — only runs the PDF coordinate extraction
+// and postprocessing steps.  Takes ~5-10 min.
+//
+bimGenerateRouter.post("/bim/models/:modelId/extract-elements", async (req: Request, res: Response) => {
+  const { modelId } = req.params;
+
+  // Resolve model and project
+  const model = await storage.getBimModel(modelId).catch(() => null);
+  if (!model) {
+    return res.status(404).json({ ok: false, message: `BIM model ${modelId} not found.` });
+  }
+  const pid = (model as any).projectId;
+  const project = await storage.getProject(pid).catch(() => null);
+  if (!project) {
+    return res.status(422).json({ ok: false, message: `Project ${pid} not found.` });
+  }
+
+  const docs = await storage.getDocumentsByProject(pid);
+  if (!docs.length) {
+    return res.status(422).json({ ok: false, message: 'No documents found for this project.' });
+  }
+
+  // Check lock
+  const { ExtractionLockManager } = await import("../extraction-lock-manager");
+  if (await ExtractionLockManager.isLocked()) {
+    return res.status(409).json({ ok: false, message: 'Another extraction is in progress. Try again shortly.' });
+  }
+  const processId = `api-extract-${Date.now()}`;
+  if (!await ExtractionLockManager.acquireLock(processId)) {
+    return res.status(409).json({ ok: false, message: 'Could not acquire lock. Retry shortly.' });
+  }
+
+  try {
+    logger.info(`Starting element re-extraction`, { modelId, pid, docs: docs.length });
+
+    // Mark model as processing
+    await storage.updateBimModel(modelId, { status: 'processing' as any });
+
+    // Recover stored Claude analysis from the model's geometry/metadata
+    const geoData = (() => {
+      try {
+        const raw = (model as any).geometryData;
+        return raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : {};
+      } catch { return {}; }
+    })();
+    const storedAnalysis = geoData.aiAnalysis || geoData.analysisStrategy || null;
+
+    // Pick the primary document (first PDF/DWG/DXF/IFC)
+    const primaryDoc = docs.find(d => /\.(pdf|dwg|dxf|ifc)$/i.test((d as any).filename || (d as any).originalName || '')) || docs[0];
+    const primaryStorageKey = (primaryDoc as any).storageKey || (primaryDoc as any).filename || '';
+    // Use filename as the path hint — processRealBIMData uses loadFileBuffer internally via storageKey
+    const primaryPath = primaryStorageKey;
+
+    // Run only the RealQTO element-extraction step (no batch product/assembly phase)
+    const { RealQTOProcessor } = await import('../real-qto-processor');
+    const qto = new RealQTOProcessor();
+
+    const qtoResult = await qto.processRealBIMData(
+      pid,
+      primaryPath,
+      {
+        unitSystem: 'metric',
+        includeStoreys: true,
+        computeGeometry: true,
+        // Pass storageKey so analyzePDFForBuildingGeometry can call loadFileBuffer
+        claudeAnalysis: {
+          ...(storedAnalysis || {}),
+          storageKey: primaryStorageKey,
+        },
+        buildingAnalysis: storedAnalysis?.building_analysis,
+        modelId,
+        projectId: pid,
+        useAllDocuments: true,
+        documentCount: docs.length,
+      } as any,
+    );
+
+    const elements: any[] = Array.isArray((qtoResult as any)?.elements)
+      ? (qtoResult as any).elements
+      : [];
+
+    logger.info(`QTO extracted ${elements.length} elements — running postprocess`, { modelId });
+
+    // Run postprocessing (calibration + relationship analysis + upsert)
+    const { postprocessAndSaveBIM } = await import('../services/bim-postprocess');
+    await postprocessAndSaveBIM({
+      modelId,
+      projectId: pid,
+      elements,
+      forceCalibrate: true,
+    });
+
+    // Final element count from DB
+    const saved = await storage.getBimElements(modelId);
+    await storage.updateBimModel(modelId, { status: 'completed' as any });
+
+    logger.info(`Re-extraction complete`, { modelId, elementCount: saved.length });
+
+    return res.json({
+      ok: true,
+      modelId,
+      elementCount: saved.length,
+      message: `Element re-extraction complete: ${saved.length} elements saved.`,
+    });
+
+  } catch (err: any) {
+    logger.error('Element re-extraction failed', { message: err?.message });
+    await storage.updateBimModel(modelId, { status: 'completed' as any }).catch(() => {});
+    return res.status(500).json({ ok: false, message: err?.message || 'Re-extraction failed unexpectedly' });
+  } finally {
+    await ExtractionLockManager.releaseLock(processId);
+  }
+});
