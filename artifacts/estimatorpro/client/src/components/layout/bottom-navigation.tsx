@@ -4,10 +4,13 @@ import { useAuth } from "@/contexts/auth-context";
 import {
   LayoutDashboard,
   FolderOpen,
+  Box,
+  Table,
   Upload,
   FileText,
-  Table,
-  Box,
+  DraftingCompass,
+  Calculator,
+  BarChart3,
   Shield,
   FolderOutput,
   User,
@@ -17,6 +20,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -24,47 +28,58 @@ import { Button } from "@/components/ui/button";
 
 const mainNavigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, shortName: "Home" },
-  { name: "Projects", href: "/projects", icon: FolderOpen, shortName: "Projects" },
-  { name: "Upload", href: "/upload", icon: Upload, shortName: "Upload" },
-  { name: "BIM", href: "/bim", icon: Box, shortName: "BIM" },
+  { name: "Projects",  href: "/projects",  icon: FolderOpen,      shortName: "Projects" },
+  { name: "3D BIM",    href: "/bim",        icon: Box,             shortName: "BIM" },
+  { name: "Estimate",  href: "/boq",        icon: Table,           shortName: "Estimate" },
 ];
 
-const moreNavigation = [
-  { name: "All Documents", href: "/documents", icon: FileText },
-  { name: "Bill of Quantities", href: "/boq", icon: Table },
-  { name: "Compliance Check", href: "/compliance", icon: Shield },
-  { name: "Reports & Export", href: "/reports", icon: FolderOutput },
+const moreGroups = [
+  {
+    label: "Documents",
+    items: [
+      { name: "Upload Documents", href: "/upload",     icon: Upload },
+      { name: "All Documents",    href: "/documents",  icon: FileText },
+    ],
+  },
+  {
+    label: "BIM",
+    items: [
+      { name: "BIM Coordination", href: "/coordination", icon: DraftingCompass },
+    ],
+  },
+  {
+    label: "Estimate",
+    items: [
+      { name: "Estimator (QS L5)", href: "/estimator", icon: Calculator },
+      { name: "Benchmark",          href: "/benchmark",  icon: BarChart3 },
+      { name: "Compliance Check",   href: "/compliance", icon: Shield },
+      { name: "Reports & Export",   href: "/reports",    icon: FolderOutput },
+    ],
+  },
 ];
 
 export default function BottomNavigation() {
   const [location] = useLocation();
   const { user, logout } = useAuth();
 
-  const handleLogout = () => {
-    logout();
-  };
-
-  const getUserInitials = (name: string) => {
-    return name.split(' ').map(n => n[0]).join('').toUpperCase();
-  };
+  const getUserInitials = (name: string) =>
+    name.split(' ').map(n => n[0]).join('').toUpperCase();
 
   return (
-    <div 
-      className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-2 py-2 z-50 shadow-lg" 
+    <div
+      className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-2 py-2 z-50 shadow-lg"
       style={{
-        paddingLeft: 'max(8px, env(safe-area-inset-left))',
-        paddingRight: 'max(8px, env(safe-area-inset-right))',
+        paddingLeft:   'max(8px, env(safe-area-inset-left))',
+        paddingRight:  'max(8px, env(safe-area-inset-right))',
         paddingBottom: 'max(8px, env(safe-area-inset-bottom))',
         height: 'auto',
-        minHeight: '64px'
+        minHeight: '64px',
       }}
     >
       <div className="flex items-center justify-around">
-        {/* Main navigation items */}
         {mainNavigation.map((item) => {
           const Icon = item.icon;
           const isActive = location === item.href || (item.href === "/dashboard" && location === "/");
-          
           return (
             <Link
               key={item.name}
@@ -84,38 +99,43 @@ export default function BottomNavigation() {
         {/* More dropdown */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button 
-              variant="ghost" 
+            <Button
+              variant="ghost"
               className="flex flex-col items-center py-2 px-3 rounded-lg h-auto min-w-0 flex-1 min-h-[44px] active:bg-gray-100"
             >
               <div className="grid grid-cols-2 gap-0.5 w-5 h-5 mb-1">
-                <div className="w-2 h-2 bg-gray-600 rounded-sm"></div>
-                <div className="w-2 h-2 bg-gray-600 rounded-sm"></div>
-                <div className="w-2 h-2 bg-gray-600 rounded-sm"></div>
-                <div className="w-2 h-2 bg-gray-600 rounded-sm"></div>
+                <div className="w-2 h-2 bg-gray-600 rounded-sm" />
+                <div className="w-2 h-2 bg-gray-600 rounded-sm" />
+                <div className="w-2 h-2 bg-gray-600 rounded-sm" />
+                <div className="w-2 h-2 bg-gray-600 rounded-sm" />
               </div>
               <span className="text-xs font-medium">More</span>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" side="top" className="w-56 mb-2">
-            {moreNavigation.map((item) => {
-              const Icon = item.icon;
-              const isActive = location === item.href;
-              return (
-                <DropdownMenuItem key={item.name} asChild>
-                  <Link 
-                    href={item.href}
-                    className={cn(
-                      "flex items-center w-full",
-                      isActive && "bg-primary text-white"
-                    )}
-                  >
-                    <Icon className="mr-2 h-4 w-4" />
-                    <span>{item.name}</span>
-                  </Link>
-                </DropdownMenuItem>
-              );
-            })}
+            {moreGroups.map((group, gi) => (
+              <div key={gi}>
+                {gi > 0 && <DropdownMenuSeparator />}
+                <DropdownMenuLabel className="text-xs text-gray-400 uppercase tracking-wider">
+                  {group.label}
+                </DropdownMenuLabel>
+                {group.items.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = location === item.href;
+                  return (
+                    <DropdownMenuItem key={item.name} asChild>
+                      <Link
+                        href={item.href}
+                        className={cn("flex items-center w-full", isActive && "bg-primary text-white")}
+                      >
+                        <Icon className="mr-2 h-4 w-4" />
+                        <span>{item.name}</span>
+                      </Link>
+                    </DropdownMenuItem>
+                  );
+                })}
+              </div>
+            ))}
             <DropdownMenuSeparator />
             <div className="px-2 py-2 border-b">
               <div className="flex items-center">
@@ -128,11 +148,13 @@ export default function BottomNavigation() {
                 </div>
               </div>
             </div>
-            <DropdownMenuItem>
-              <User className="mr-2 h-4 w-4" />
-              <span>Profile</span>
+            <DropdownMenuItem asChild>
+              <Link href="/profile" className="flex items-center w-full">
+                <User className="mr-2 h-4 w-4" />
+                <span>Profile</span>
+              </Link>
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={handleLogout} className="text-red-600">
+            <DropdownMenuItem onClick={logout} className="text-red-600">
               <LogOut className="mr-2 h-4 w-4" />
               <span>Sign out</span>
             </DropdownMenuItem>
