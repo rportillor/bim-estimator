@@ -2401,21 +2401,49 @@ Document: ${path.basename(filePath)}`;
     
     elements.forEach(el => {
       const storeyName = el.storey?.name;
-      const storeyElevation = el.storey?.elevation;
-      if (!storeyName || storeyElevation === undefined || storeyElevation === null) {
-        logger.warn(`Element '${el.id || 'UNKNOWN'}' has no storey name or elevation — excluded from storey map`);
-        return;
+      if (!storeyName) return;
+
+      let elevation = el.storey?.elevation;
+
+      // Follow inferStoreysIfMissing pattern: fall back to geometry z-value if storey elevation absent
+      if (elevation === undefined || elevation === null) {
+        const g = typeof el.geometry === 'string' ? JSON.parse(el.geometry) : el.geometry;
+        const z = g?.location?.realLocation?.z;
+        if (Number.isFinite(z)) {
+          elevation = z;
+        } else {
+          // No elevation from storey or geometry — register RFI and exclude (same as inferStoreysIfMissing)
+          try {
+            const { registerMissingData } = require('./estimator/rfi-generator');
+            registerMissingData({
+              category: 'dimension',
+              description: `Element '${el.id || 'UNKNOWN'}' on storey '${storeyName}' has no elevation and no geometry z-value. ` +
+                'Building section drawings must be uploaded to determine actual floor-to-floor heights.',
+              csiDivision: '00 00 00', impact: 'high',
+              drawingRef: 'Building sections (A-series) and elevation drawings',
+              costImpactLow: 0, costImpactHigh: 0,
+              assumptionUsed: undefined, discoveredBy: 'extractStoreysFromElements',
+            });
+          } catch { /* non-fatal */ }
+          return;
+        }
       }
+
       if (!storeyMap.has(storeyName)) {
         storeyMap.set(storeyName, {
           name: storeyName,
-          elevation: storeyElevation,
+          elevation,
           guid: randomUUID(),
           elementCount: 0
         });
       }
       storeyMap.get(storeyName)!.elementCount++;
     });
+
+    // If nothing built from elements, fall back to inferStoreysIfMissing
+    if (storeyMap.size === 0) {
+      return inferStoreysIfMissing(undefined, elements, {});
+    }
     
     return Array.from(storeyMap.values()).sort((a, b) => a.elevation - b.elevation);
   }
