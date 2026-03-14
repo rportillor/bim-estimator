@@ -38,6 +38,26 @@ const DEFAULT_DIMS: Record<string, { width: number; height: number; depth: numbe
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
+// GET /api/bim/models/:modelId/elements — Return all elements for the viewer
+// viewer-3d.tsx fetches this URL and parses: json.data || json.elements || json
+// ═════════════════════════════════════════════════════════════════════════════
+
+bimElementCrudRouter.get(
+  '/api/bim/models/:modelId/elements',
+  async (req: Request, res: Response) => {
+    try {
+      const { modelId } = req.params;
+      const raw = await storage.getBimElements(modelId);
+      const elements = (raw || []).map(parseElement);
+      return res.json({ elements, count: elements.length });
+    } catch (error: any) {
+      console.error('Error fetching BIM elements:', error);
+      return res.status(500).json({ error: `Failed to get elements: ${error?.message}` });
+    }
+  },
+);
+
+// ═════════════════════════════════════════════════════════════════════════════
 // POST /api/bim/models/:modelId/elements — Create a new element
 // ═════════════════════════════════════════════════════════════════════════════
 

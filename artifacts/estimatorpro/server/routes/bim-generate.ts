@@ -366,9 +366,10 @@ bimGenerateRouter.post("/bim/models/:modelId/extract-elements", async (req: Requ
       forceCalibrate: true,
     });
 
-    // Final element count from DB
+    // Final element count from DB — write it back to the model row so the frontend
+    // can gate on model.elementCount > 0 (viewer-3d.tsx, bim.tsx lines 79/399/478/482).
     const saved = await storage.getBimElements(modelId);
-    await storage.updateBimModel(modelId, { status: 'completed' as any });
+    await storage.updateBimModel(modelId, { status: 'completed' as any, elementCount: saved.length } as any);
 
     logger.info(`Re-extraction complete`, { modelId, elementCount: saved.length });
 
