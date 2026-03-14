@@ -1764,9 +1764,26 @@ END-ISO-10303-21;`;
 
       const pdfDocs: DocForAI[] = [];
       const pageBlobs: string[] = [];
+      const totalDocs = documents.length;
+      let docIndex = 0;
       
       for (const doc of documents) {
+        docIndex++;
         if (!(doc.fileType || "").includes("pdf")) continue;
+
+        // Emit per-document progress so the client can show "X / N"
+        if (opts.modelId) {
+          const shortName = doc.filename.length > 35
+            ? doc.filename.slice(0, 32) + '…'
+            : doc.filename;
+          const pct = 0.30 + (docIndex / totalDocs) * 0.15; // progress 30 → 45%
+          await updateModelStatus(storage, opts.modelId, {
+            progress: pct,
+            message: `Reading document ${docIndex}/${totalDocs}: ${shortName}`,
+            documentsProcessed: docIndex,
+            totalDocuments: totalDocs,
+          } as any);
+        }
         
         try {
           const fullDocument = await storage.getDocument(doc.id);

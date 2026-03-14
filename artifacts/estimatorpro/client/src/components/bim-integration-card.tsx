@@ -95,20 +95,29 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
     generatingLocal && !!latestModel?.id,
   );
 
+  const [docsProcessed, setDocsProcessed] = useState<number | null>(null);
+  const [docsTotal, setDocsTotal] = useState<number | null>(null);
+
   useEffect(() => {
     if (!sseProgress) return;
     setSsePercent(Math.round((sseProgress.progress ?? 0) * 100));
     setSseMsg(sseProgress.message || '');
+    if (sseProgress.documentsProcessed != null) setDocsProcessed(sseProgress.documentsProcessed);
+    if (sseProgress.totalDocuments != null) setDocsTotal(sseProgress.totalDocuments);
 
     if (sseProgress.status === 'completed') {
       setGeneratingLocal(false);
       setSsePercent(100);
+      setDocsProcessed(null);
+      setDocsTotal(null);
       toast({ title: 'BIM model ready', description: 'Your 3D model has been generated.' });
       refetch();
       queryClient.invalidateQueries({ queryKey: ['/api/projects', projectId, 'bim-models'] });
       setTimeout(() => setSsePercent(0), 3000);
     } else if (sseProgress.status === 'failed' || sseProgress.status === 'error') {
       setGeneratingLocal(false);
+      setDocsProcessed(null);
+      setDocsTotal(null);
       toast({
         title: 'Generation failed',
         description: sseProgress.error || sseProgress.message || 'Something went wrong.',
@@ -234,17 +243,31 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
             {/* Header row */}
             <div className="flex items-center gap-3">
               <Loader2 className="h-5 w-5 text-blue-600 animate-spin shrink-0" />
-              <div>
+              <div className="flex-1">
                 <p className="font-medium text-sm text-blue-900">Generating BIM model…</p>
                 <p className="text-xs text-blue-600 mt-0.5">
-                  Processing {documents?.length || 0} documents
-                  {elapsedStr && <> · {elapsedStr} elapsed</>}
+                  {elapsedStr && <>{elapsedStr} elapsed · </>}
+                  {documents?.length || 0} source documents
                 </p>
               </div>
-              <Badge variant="secondary" className="ml-auto">In Progress</Badge>
+              <Badge variant="secondary">In Progress</Badge>
             </div>
 
-            {/* Progress bar */}
+            {/* Document counter — shown as soon as SSE sends doc info */}
+            {docsTotal != null && (
+              <div className="flex items-center gap-3 px-3 py-2 bg-blue-50 rounded-lg">
+                <div className="text-2xl font-bold text-blue-700 tabular-nums leading-none">
+                  {docsProcessed ?? 0}
+                  <span className="text-base font-normal text-blue-400">/{docsTotal}</span>
+                </div>
+                <div className="text-xs text-blue-600">documents read</div>
+                <div className="ml-auto w-24">
+                  <Progress value={docsTotal > 0 ? Math.round(((docsProcessed ?? 0) / docsTotal) * 100) : 0} className="h-1.5" />
+                </div>
+              </div>
+            )}
+
+            {/* Overall progress bar */}
             <div className="space-y-1.5">
               <Progress value={ssePercent || 2} className="h-2" />
               <div className="flex justify-between text-xs text-gray-500">
@@ -256,7 +279,7 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
             {/* Steps summary */}
             <div className="grid grid-cols-3 gap-2 text-center text-xs text-gray-500">
               <div className={`p-2 rounded ${ssePercent >= 30 ? 'bg-blue-50 text-blue-700 font-medium' : 'bg-gray-50'}`}>
-                Document analysis
+                Document reading
               </div>
               <div className={`p-2 rounded ${ssePercent >= 60 ? 'bg-blue-50 text-blue-700 font-medium' : 'bg-gray-50'}`}>
                 AI extraction

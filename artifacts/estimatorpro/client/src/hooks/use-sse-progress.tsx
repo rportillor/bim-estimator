@@ -6,6 +6,8 @@ interface ProgressData {
   progress: number;
   message?: string;
   error?: string;
+  documentsProcessed?: number;
+  totalDocuments?: number;
   // Backend data format fields
   pct?: number;
   phase?: string;
@@ -43,9 +45,11 @@ export function useSSEProgress(modelId: string | null, enabled: boolean = true) 
           ts: Date.now(),
           status: rawData.phase === "error" ? "failed" : 
                   rawData.phase === "complete" ? "completed" : "generating",
-          progress: rawData.pct ? rawData.pct / 100 : (rawData.progress || 0), // Convert pct to decimal
+          progress: rawData.pct ? rawData.pct / 100 : (rawData.progress || 0),
           message: rawData.message || `${rawData.phase || 'Processing'}...`,
-          error: rawData.phase === "error" ? rawData.message : undefined
+          error: rawData.phase === "error" ? rawData.message : undefined,
+          documentsProcessed: rawData.documentsProcessed,
+          totalDocuments: rawData.totalDocuments,
         };
         
         console.log(`📊 SSE Progress: ${Math.round(progressData.progress * 100)}% - ${progressData.message}`);
