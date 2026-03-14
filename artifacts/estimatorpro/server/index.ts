@@ -10,7 +10,7 @@ import { sanitizeInput, securityLogger } from "./security";
 import { globalErrorHandler } from "./middleware/error-handler";
 import { setupCSPHeaders, setupCSRFProtection, setupSecureCookies, handleCSPViolation } from "./middleware/csp-security";
 import { setupGracefulShutdown } from "./middleware/graceful-shutdown";
-import { authenticateToken } from "./auth";
+import { authenticateToken, register, login } from "./auth";
 import { startSimilarityEvictionScheduler } from "./services/similarity-scheduler";
 import { storage } from "./storage";
 
@@ -183,6 +183,11 @@ app.get("/api/bim/models/:modelId/elements", authenticateToken, async (req, res)
 // ── Authentication routes (no wrapper — these ARE the auth) ─────────────────
 app.use("/api/auth", authTokensRouter);
 
+// Register + login must be declared here (before the /api protected middlewares below)
+// so authenticateToken on those middlewares doesn't intercept them first.
+app.post("/api/auth/register", register);
+app.post("/api/auth/login", login);
+
 // ── Security monitoring (authenticated — exposes internal system details) ────
 app.use("/api/security", authenticateToken, securityStatusRouter);
 
@@ -212,8 +217,8 @@ app.use("/api", authenticateToken, reportRouter);
 // GET  /api/verification/:projectId/content-comparison
 app.use("/api/verification", authenticateToken, verificationRouter);
 
-// Processing status — SECURITY FIX: Added authenticateToken
-app.use("/api", authenticateToken, processingStatusRouter);
+// Processing status — scoped to /api/bim/models so auth only applies to these routes
+app.use("/api/bim/models", processingStatusRouter);
 
 // ── Background services ───────────────────────────────────────────────────────
 startSimilarityEvictionScheduler();

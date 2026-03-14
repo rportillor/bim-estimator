@@ -1,11 +1,16 @@
 import { Router } from "express";
 import { backgroundProcessor } from "../services/background-processor";
 import { storage } from "../storage";
+import { authenticateToken } from "../auth";
 
 export const processingStatusRouter = Router();
 
+// All processing-status routes require authentication
+processingStatusRouter.use(authenticateToken);
+
 // Get current processing status for a model
-processingStatusRouter.get("/api/bim/models/:modelId/processing-status", async (req, res) => {
+// Mounted at /api/bim/models, so paths here are relative (/:modelId/...)
+processingStatusRouter.get("/:modelId/processing-status", async (req, res) => {
   try {
     const { modelId } = req.params;
     
@@ -73,7 +78,7 @@ processingStatusRouter.get("/api/bim/models/:modelId/processing-status", async (
 });
 
 // Resume processing for a model
-processingStatusRouter.post("/api/bim/models/:modelId/resume-processing", async (req, res) => {
+processingStatusRouter.post("/:modelId/resume-processing", async (req, res) => {
   try {
     const { modelId } = req.params;
     
@@ -119,7 +124,7 @@ processingStatusRouter.post("/api/bim/models/:modelId/resume-processing", async 
 });
 
 // Stop processing for a model
-processingStatusRouter.post("/api/bim/models/:modelId/stop-processing", async (req, res) => {
+processingStatusRouter.post("/:modelId/stop-processing", async (req, res) => {
   try {
     const { modelId } = req.params;
     
