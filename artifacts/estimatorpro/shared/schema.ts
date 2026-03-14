@@ -178,11 +178,14 @@ export const documents = pgTable("documents", {
   vectorHints: jsonb("vector_hints"),  // optional: grids/levels parsed later
 
   analysisResult: jsonb("analysis_result"),
+  reviewStatus: text("review_status").default("draft"), // draft, pending_review, approved, rejected
+  reviewedAt: timestamp("reviewed_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => ({
   projectIdIdx: index("documents_project_id_idx").on(table.projectId),
   analysisStatusIdx: index("documents_analysis_status_idx").on(table.analysisStatus),
+  reviewStatusIdx: index("documents_review_status_idx").on(table.reviewStatus),
   createdAtIdx: index("documents_created_at_idx").on(table.createdAt),
 }));
 
