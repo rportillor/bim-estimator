@@ -80,6 +80,13 @@ export default function BIM() {
       || bimModels?.filter((m: any) => m.status === 'completed')?.sort((a: any, b: any) => (b.elementCount || 0) - (a.elementCount || 0))?.[0] 
       || bimModels?.[0]; // Prioritize largest completed model
 
+  // Auto-redirect: if no modelId in URL but we have a completed model with elements, go straight to viewer
+  useEffect(() => {
+    if (!modelId && projectId && activeModel && (activeModel.status === 'ready' || activeModel.status === 'completed') && activeModel.elementCount > 0) {
+      window.location.replace(`/projects/${projectId}/bim/${activeModel.id}`);
+    }
+  }, [modelId, projectId, activeModel]);
+
   // Debug logging
   if (modelId && bimModels?.length > 0) {
     console.log('🏗️ BIM Debug:', { 
