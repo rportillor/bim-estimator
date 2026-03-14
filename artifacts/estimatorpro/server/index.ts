@@ -24,6 +24,7 @@ import { exportRouter } from "./routes/export-routes";
 import { reportRouter } from "./routes/report-routes";
 import verificationRouter from "./routes/verification";
 import { processingStatusRouter } from "./routes/processing-status";
+import { progressRouter } from "./routes/progress";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // IMPORTANT: All other routers (bimGenerateRouter, estimatorRouter,
@@ -244,6 +245,9 @@ app.use("/api/verification", authenticateToken, verificationRouter);
 
 // Processing status — scoped to /api/bim/models so auth only applies to these routes
 app.use("/api/bim/models", processingStatusRouter);
+
+// Real-time analysis progress stream (SSE) — no auth so EventSource can connect
+app.use("/api", progressRouter);
 
 // ── Background services ───────────────────────────────────────────────────────
 startSimilarityEvictionScheduler();

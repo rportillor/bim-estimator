@@ -1569,7 +1569,37 @@ END-ISO-10303-21;`;
     // Process each chunk sequentially to avoid Claude overload
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
+      const chunkProgressPct = Math.round(((i) / chunks.length) * 100);
       console.log(`🔍 Processing chunk ${i + 1}/${chunks.length}: ${chunk.title} (${chunk.tokenEstimate} tokens)`);
+
+      // Save chunk-level progress to DB so the frontend can poll it
+      if (opts.modelId) {
+        try {
+          const freshGeo: any = await storage.getBimModel(opts.modelId).then(m => {
+            if (!m) return {};
+            try { return m.geometryData ? (typeof m.geometryData === 'string' ? JSON.parse(m.geometryData) : m.geometryData) : {}; } catch { return {}; }
+          });
+          await storage.updateBimModel(opts.modelId, {
+            geometryData: {
+              ...freshGeo,
+              progressPercent: chunkProgressPct,
+              currentChunk: i + 1,
+              totalChunks: chunks.length,
+              currentChunkTitle: chunk.title,
+              updatedAt: new Date().toISOString()
+            } as any
+          });
+          const { publishProgress } = await import('./routes/progress');
+          publishProgress(opts.modelId, {
+            progress: chunkProgressPct,
+            message: `Analyzing chunk ${i + 1}/${chunks.length}: ${chunk.title}`,
+            phase: 'chunked-analysis',
+            details: { currentChunk: i + 1, totalChunks: chunks.length, title: chunk.title }
+          });
+        } catch (progressErr) {
+          console.warn(`Could not save chunk progress for chunk ${i + 1}:`, progressErr);
+        }
+      }
       
       try {
         // Create a specialized prompt for this chunk
