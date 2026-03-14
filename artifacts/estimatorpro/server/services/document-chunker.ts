@@ -86,12 +86,19 @@ export class DocumentChunker {
       );
       
       if (chunkContent.trim().length > 0) {
+        // Technical spec content tokenizes at ~1.2 chars/token (not 4).
+        // Reserve 20k tokens for system prompt + output headroom in a 200k context.
+        // Safe content budget: (200000 - 20000) * 1.2 chars/token ≈ 216,000 chars.
+        const MAX_SAFE_CHARS = 150_000;
+        const trimmedContent = chunkContent.length > MAX_SAFE_CHARS
+          ? chunkContent.slice(0, MAX_SAFE_CHARS) + '\n\n[Content truncated to fit context window]'
+          : chunkContent;
         const chunk: DocumentChunk = {
           id: `chunk_${i + 1}`,
           title: chunkDef.title,
-          content: chunkContent,
+          content: trimmedContent,
           csiDivisions: chunkDef.csiDivisions,
-          tokenEstimate: Math.ceil(chunkContent.length / 4), // Rough token estimate
+          tokenEstimate: Math.ceil(trimmedContent.length / 1.2), // Conservative: 1.2 chars/token for technical content
           chunkIndex: i + 1,
           totalChunks: strategy.chunks.length
         };

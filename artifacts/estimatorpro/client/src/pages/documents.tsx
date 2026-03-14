@@ -50,15 +50,6 @@ interface Document {
 export default function Documents() {
   const { toast } = useToast();
   
-  // Run live error check on component mount for debugging
-  React.useEffect(() => {
-    if (import.meta.env.DEV) {
-      console.log('🔍 Documents page loaded - running error diagnostics...');
-      runLiveErrorCheck().then(result => {
-        console.log('🧪 Live error check completed:', result);
-      });
-    }
-  }, []);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterProject, _setFilterProject] = useState<string>('all');
   const [filterStatus, setFilterStatus] = useState<string>('all');
