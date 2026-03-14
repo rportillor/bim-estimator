@@ -3499,6 +3499,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Document Comments
+  app.get('/api/documents/:documentId/comments', authenticateToken, async (req, res) => {
+    try {
+      const { documentId } = req.params;
+      const doc = await storage.getDocument(documentId);
+      if (!doc) return res.status(404).json({ error: 'Document not found' });
+      const comments = await storage.getDocumentComments(documentId);
+      res.json(comments);
+    } catch (err) {
+      console.error('GET document comments error:', err);
+      res.status(500).json({ error: 'Failed to fetch comments' });
+    }
+  });
+
+  app.post('/api/documents/:documentId/comments', authenticateToken, async (req, res) => {
+    try {
+      const { documentId } = req.params;
+      const { body, commentType } = req.body;
+      if (!body?.trim()) return res.status(400).json({ error: 'Comment body is required' });
+      const doc = await storage.getDocument(documentId);
+      if (!doc) return res.status(404).json({ error: 'Document not found' });
+      const user = req.user?.id ? await storage.getUser(req.user.id) : null;
+      const comment = await storage.createDocumentComment({
+        documentId,
+        authorId: req.user?.id || null,
+        authorName: user?.name || user?.username || req.user?.username || 'Unknown',
+        body: body.trim(),
+        commentType: commentType || 'comment',
+      });
+      res.status(201).json(comment);
+    } catch (err) {
+      console.error('POST document comment error:', err);
+      res.status(500).json({ error: 'Failed to save comment' });
+    }
+  });
+
+  app.patch('/api/documents/:documentId/comments/:commentId/resolve', authenticateToken, async (req, res) => {
+    try {
+      const { commentId } = req.params;
+      const user = req.user?.id ? await storage.getUser(req.user.id) : null;
+      const resolverName = user?.name || user?.username || req.user?.username || 'Unknown';
+      const updated = await storage.resolveDocumentComment(commentId, resolverName);
+      if (!updated) return res.status(404).json({ error: 'Comment not found' });
+      res.json(updated);
+    } catch (err) {
+      console.error('PATCH resolve comment error:', err);
+      res.status(500).json({ error: 'Failed to resolve comment' });
+    }
+  });
+
   app.post('/api/documents/:documentId/process', authenticateToken, async (req, res) => {
     try {
       const { documentId } = req.params;

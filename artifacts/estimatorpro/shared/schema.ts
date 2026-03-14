@@ -206,6 +206,26 @@ export const documentImages = pgTable("document_images", {
   sheetNumberIdx: index("document_images_sheet_number_idx").on(table.sheetNumber),
 }));
 
+// Document comments — review feedback tied to a specific document
+export const documentComments = pgTable("document_comments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  documentId: varchar("document_id").notNull().references(() => documents.id, { onDelete: "cascade" }),
+  authorId: varchar("author_id").references(() => users.id, { onDelete: "set null" }),
+  authorName: text("author_name").notNull(),
+  body: text("body").notNull(),
+  commentType: text("comment_type").notNull().default("comment"), // comment | question | issue | approval_note
+  resolved: boolean("resolved").notNull().default(false),
+  resolvedAt: timestamp("resolved_at"),
+  resolvedByName: text("resolved_by_name"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  documentIdIdx: index("document_comments_document_id_idx").on(table.documentId),
+  createdAtIdx: index("document_comments_created_at_idx").on(table.createdAt),
+}));
+
+export type DocumentComment = typeof documentComments.$inferSelect;
+export type InsertDocumentComment = typeof documentComments.$inferInsert;
+
 // Atomic revision counter table (inspired by Prisma approach)
 export const revisionCounters = pgTable("revision_counters", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

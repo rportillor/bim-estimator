@@ -28,6 +28,13 @@ import {
   UserCheck,
   Users,
   X,
+  MessageSquare,
+  ChevronDown,
+  ChevronUp,
+  CheckCheck,
+  HelpCircle,
+  AlertCircle,
+  Send,
 } from 'lucide-react';
 
 import { UserAccessPanel } from '@/components/documents/UserAccessPanel';
@@ -63,6 +70,200 @@ interface AppUser {
   username: string;
   name: string;
   role: string;
+}
+
+interface DocumentComment {
+  id: string;
+  documentId: string;
+  authorId: string | null;
+  authorName: string;
+  body: string;
+  commentType: 'comment' | 'question' | 'issue' | 'approval_note';
+  resolved: boolean;
+  resolvedAt: string | null;
+  resolvedByName: string | null;
+  createdAt: string;
+}
+
+function CommentTypeIcon({ type }: { type: string }) {
+  switch (type) {
+    case 'question':      return <HelpCircle className="w-3.5 h-3.5 text-blue-500" />;
+    case 'issue':         return <AlertCircle className="w-3.5 h-3.5 text-red-500" />;
+    case 'approval_note': return <CheckCircle className="w-3.5 h-3.5 text-green-500" />;
+    default:              return <MessageSquare className="w-3.5 h-3.5 text-gray-500" />;
+  }
+}
+
+function CommentTypeBadge({ type }: { type: string }) {
+  const map: Record<string, { label: string; cls: string }> = {
+    comment:      { label: 'Comment',      cls: 'bg-gray-100 text-gray-700' },
+    question:     { label: 'Question',     cls: 'bg-blue-100 text-blue-700' },
+    issue:        { label: 'Issue',        cls: 'bg-red-100 text-red-700' },
+    approval_note:{ label: 'Approval Note',cls: 'bg-green-100 text-green-700' },
+  };
+  const { label, cls } = map[type] || map.comment;
+  return <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${cls}`}>{label}</span>;
+}
+
+function DocumentCommentThread({ documentId, currentUserName }: { documentId: string; currentUserName: string }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [newBody, setNewBody] = useState('');
+  const [newType, setNewType] = useState('comment');
+
+  const { data: comments = [], isLoading } = useQuery<DocumentComment[]>({
+    queryKey: [`/api/documents/${documentId}/comments`],
+    queryFn: async () => {
+      const token = localStorage.getItem('auth_token');
+      const res = await fetch(`/api/documents/${documentId}/comments`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error('Failed to load comments');
+      return res.json();
+    },
+  });
+
+  const addComment = useMutation({
+    mutationFn: async () => {
+      const token = localStorage.getItem('auth_token');
+      const res = await fetch(`/api/documents/${documentId}/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ body: newBody.trim(), commentType: newType }),
+      });
+      if (!res.ok) throw new Error('Failed to save comment');
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/documents/${documentId}/comments`] });
+      setNewBody('');
+    },
+    onError: () => toast({ title: 'Could not save comment', variant: 'destructive' }),
+  });
+
+  const resolveComment = useMutation({
+    mutationFn: async (commentId: string) => {
+      const token = localStorage.getItem('auth_token');
+      const res = await fetch(`/api/documents/${documentId}/comments/${commentId}/resolve`, {
+        method: 'PATCH',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error('Failed to resolve comment');
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/documents/${documentId}/comments`] });
+      toast({ title: 'Comment marked as resolved' });
+    },
+    onError: () => toast({ title: 'Could not resolve comment', variant: 'destructive' }),
+  });
+
+  const formatCommentTime = (dateStr: string) => {
+    const d = new Date(dateStr);
+    return d.toLocaleDateString('en-CA', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  };
+
+  const open = (comments as DocumentComment[]).filter(c => !c.resolved);
+  const resolved = (comments as DocumentComment[]).filter(c => c.resolved);
+
+  return (
+    <div className="mt-3 pt-3 border-t border-gray-100 space-y-3">
+      {isLoading ? (
+        <p className="text-xs text-gray-400">Loading comments…</p>
+      ) : (
+        <>
+          {open.length === 0 && resolved.length === 0 && (
+            <p className="text-xs text-gray-400 italic">No comments yet. Be the first to add a note or question.</p>
+          )}
+          {open.map(c => (
+            <div key={c.id} className="flex gap-2">
+              <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gray-200 flex items-center justify-center text-xs font-bold text-gray-600">
+                {c.authorName.charAt(0).toUpperCase()}
+              </div>
+              <div className="flex-1 bg-gray-50 rounded-lg p-2.5 text-sm">
+                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                  <span className="font-semibold text-gray-800 text-xs">{c.authorName}</span>
+                  <CommentTypeBadge type={c.commentType} />
+                  <span className="text-xs text-gray-400 ml-auto">{formatCommentTime(c.createdAt)}</span>
+                </div>
+                <p className="text-gray-700 text-sm leading-snug">{c.body}</p>
+                <button
+                  onClick={() => resolveComment.mutate(c.id)}
+                  disabled={resolveComment.isPending}
+                  className="mt-1.5 text-xs text-gray-400 hover:text-green-600 flex items-center gap-1 transition-colors"
+                >
+                  <CheckCheck className="w-3 h-3" />Mark resolved
+                </button>
+              </div>
+            </div>
+          ))}
+          {resolved.length > 0 && (
+            <details className="group">
+              <summary className="text-xs text-gray-400 cursor-pointer hover:text-gray-600 list-none flex items-center gap-1">
+                <ChevronDown className="w-3 h-3 group-open:rotate-180 transition-transform" />
+                {resolved.length} resolved comment{resolved.length > 1 ? 's' : ''}
+              </summary>
+              <div className="mt-2 space-y-2 opacity-60">
+                {resolved.map(c => (
+                  <div key={c.id} className="flex gap-2">
+                    <div className="flex-shrink-0 w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-400">
+                      {c.authorName.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="flex-1 bg-gray-50 rounded-lg p-2 text-sm border border-gray-100">
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <span className="font-medium text-gray-500 text-xs">{c.authorName}</span>
+                        <CommentTypeBadge type={c.commentType} />
+                        <span className="text-xs text-gray-300 ml-auto">{formatCommentTime(c.createdAt)}</span>
+                      </div>
+                      <p className="text-gray-500 text-xs line-through">{c.body}</p>
+                      <p className="text-xs text-green-600 mt-0.5">Resolved by {c.resolvedByName}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+        </>
+      )}
+
+      {/* New comment form */}
+      <div className="flex gap-2 pt-1">
+        <div className="flex-shrink-0 w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center text-xs font-bold text-white">
+          {currentUserName.charAt(0).toUpperCase()}
+        </div>
+        <div className="flex-1 space-y-2">
+          <Textarea
+            placeholder="Add a comment, question, or flag an issue…"
+            value={newBody}
+            onChange={(e) => setNewBody(e.target.value)}
+            className="resize-none text-sm min-h-[60px]"
+            onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && newBody.trim()) addComment.mutate(); }}
+          />
+          <div className="flex items-center gap-2">
+            <Select value={newType} onValueChange={setNewType}>
+              <SelectTrigger className="h-7 w-36 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="comment"><span className="flex items-center gap-1.5"><MessageSquare className="w-3 h-3" />Comment</span></SelectItem>
+                <SelectItem value="question"><span className="flex items-center gap-1.5"><HelpCircle className="w-3 h-3 text-blue-500" />Question</span></SelectItem>
+                <SelectItem value="issue"><span className="flex items-center gap-1.5"><AlertCircle className="w-3 h-3 text-red-500" />Issue</span></SelectItem>
+                <SelectItem value="approval_note"><span className="flex items-center gap-1.5"><CheckCircle className="w-3 h-3 text-green-500" />Approval Note</span></SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              size="sm"
+              className="h-7 text-xs ml-auto"
+              onClick={() => addComment.mutate()}
+              disabled={!newBody.trim() || addComment.isPending}
+            >
+              <Send className="w-3 h-3 mr-1" />{addComment.isPending ? 'Saving…' : 'Save'}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /** Parse revision number from filename. Returns e.g. "R1", "R2.1", or null. */
@@ -114,6 +315,24 @@ export default function Documents() {
   const [assignDialog, setAssignDialog] = useState<{ open: boolean; documentId: string; documentName: string } | null>(null);
   const [selectedReviewerId, setSelectedReviewerId] = useState<string>('');
   const [reviewerNote, setReviewerNote] = useState<string>('');
+  const [expandedComments, setExpandedComments] = useState<Set<string>>(new Set());
+
+  const toggleComments = (docId: string) => {
+    setExpandedComments(prev => {
+      const next = new Set(prev);
+      if (next.has(docId)) { next.delete(docId); } else { next.add(docId); }
+      return next;
+    });
+  };
+
+  const currentUserName: string = (() => {
+    try {
+      const token = localStorage.getItem('auth_token');
+      if (!token) return 'You';
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      return payload.name || payload.username || 'You';
+    } catch { return 'You'; }
+  })();
 
   const updateReviewStatus = useMutation({
     mutationFn: async ({ documentId, reviewStatus }: { documentId: string; reviewStatus: string }) => {
@@ -673,9 +892,20 @@ export default function Documents() {
                               <UserCheck className="w-3 h-3 mr-1" />
                               {doc.assignedReviewerId ? 'Reassign' : 'Assign for Review'}
                             </Button>
+                            <Button variant="ghost" size="sm" className="h-7 text-xs text-gray-500 hover:text-gray-700 ml-auto"
+                              onClick={() => toggleComments(doc.id)}>
+                              <MessageSquare className="w-3 h-3 mr-1" />
+                              Comments
+                              {expandedComments.has(doc.id) ? <ChevronUp className="w-3 h-3 ml-1" /> : <ChevronDown className="w-3 h-3 ml-1" />}
+                            </Button>
                           </div>
                         )}
                       </div>
+
+                      {/* Comment thread — toggles open */}
+                      {expandedComments.has(doc.id) && (
+                        <DocumentCommentThread documentId={doc.id} currentUserName={currentUserName} />
+                      )}
                     </div>
                   );
                 })}

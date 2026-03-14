@@ -7,6 +7,9 @@ import {
   type InsertDocument,
   type DocumentImage,
   type InsertDocumentImage,
+  type DocumentComment,
+  type InsertDocumentComment,
+  documentComments,
   type BoqItem,
   type InsertBoqItem,
   type ComplianceCheck,
@@ -135,6 +138,11 @@ export interface IStorage {
   getDocumentSheets(documentId: string): Promise<DocumentImage[]>;
   createDocumentImage(documentImage: InsertDocumentImage): Promise<DocumentImage>;
   deleteDocument(id: string): Promise<boolean>;
+
+  // Document Comments
+  getDocumentComments(documentId: string): Promise<DocumentComment[]>;
+  createDocumentComment(comment: InsertDocumentComment): Promise<DocumentComment>;
+  resolveDocumentComment(commentId: string, resolvedByName: string): Promise<DocumentComment | undefined>;
   
   // Document Revision Management
   getDocumentRevisions(documentSetId: string): Promise<Document[]>;
@@ -583,6 +591,37 @@ export class MemStorage implements Partial<IStorage> {
     return documentImage;
   }
 
+  // Document Comments (in-memory)
+  private documentComments: Map<string, DocumentComment> = new Map();
+
+  async getDocumentComments(documentId: string): Promise<DocumentComment[]> {
+    return Array.from(this.documentComments.values())
+      .filter(c => c.documentId === documentId)
+      .sort((a, b) => new Date(a.createdAt!).getTime() - new Date(b.createdAt!).getTime());
+  }
+
+  async createDocumentComment(comment: InsertDocumentComment): Promise<DocumentComment> {
+    const id = randomUUID();
+    const newComment: DocumentComment = {
+      ...comment,
+      id,
+      resolved: false,
+      resolvedAt: null,
+      resolvedByName: null,
+      createdAt: new Date(),
+    };
+    this.documentComments.set(id, newComment);
+    return newComment;
+  }
+
+  async resolveDocumentComment(commentId: string, resolvedByName: string): Promise<DocumentComment | undefined> {
+    const comment = this.documentComments.get(commentId);
+    if (!comment) return undefined;
+    const updated = { ...comment, resolved: true, resolvedAt: new Date(), resolvedByName };
+    this.documentComments.set(commentId, updated);
+    return updated;
+  }
+
   // Simplified document management (removed revision features)
   async getDocumentRevisions(documentSetId: string): Promise<Document[]> {
     return Array.from(this.documents.values())
@@ -949,6 +988,26 @@ export class DBStorage implements Partial<IStorage> {
 
   async createDocumentImage(insertDocumentImage: InsertDocumentImage): Promise<DocumentImage> {
     const result = await db.insert(documentImages).values(insertDocumentImage).returning();
+    return result[0];
+  }
+
+  // Document Comments
+  async getDocumentComments(documentId: string): Promise<DocumentComment[]> {
+    return await db.select().from(documentComments)
+      .where(eq(documentComments.documentId, documentId))
+      .orderBy(documentComments.createdAt);
+  }
+
+  async createDocumentComment(comment: InsertDocumentComment): Promise<DocumentComment> {
+    const result = await db.insert(documentComments).values(comment).returning();
+    return result[0];
+  }
+
+  async resolveDocumentComment(commentId: string, resolvedByName: string): Promise<DocumentComment | undefined> {
+    const result = await db.update(documentComments)
+      .set({ resolved: true, resolvedAt: new Date(), resolvedByName })
+      .where(eq(documentComments.id, commentId))
+      .returning();
     return result[0];
   }
 
