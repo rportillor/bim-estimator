@@ -2591,9 +2591,7 @@ Document: ${path.basename(filePath)}`;
     const analysis: any = {
       dimensions: null,
       perimeter: null,
-      origin: analysisData?.coordinate_system?.origin || analysisData?.origin || (() => {
-        throw new Error('❌ MISSING COORDINATE SYSTEM ORIGIN: Claude must extract the building coordinate system origin from construction documents!\n🔍 Check drawing legends, survey points, or grid reference marks for the project datum.');
-      })()
+      origin: analysisData?.coordinate_system?.origin || analysisData?.origin || null
     };
     
     // Try to get perimeter from building_perimeter or building_analysis
