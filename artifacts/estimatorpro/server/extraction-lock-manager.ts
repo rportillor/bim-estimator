@@ -218,4 +218,24 @@ export class ExtractionLockManager {
       return { locked: false, error: (error as any)?.message || String(error) };
     }
   }
+
+  /**
+   * Force-release the lock regardless of which process owns it.
+   * Used by startup cleanup when orphaned models are found — the server
+   * restarted mid-generation so no legitimate lock holder exists.
+   */
+  static async forceReleaseLock(): Promise<void> {
+    try {
+      // Stop all in-memory heartbeats (server restarted so none should exist,
+      // but be defensive in case this is called mid-run in tests)
+      for (const [pid, interval] of this.heartbeatIntervals.entries()) {
+        clearInterval(interval);
+        this.heartbeatIntervals.delete(pid);
+      }
+      await db.execute(sql`DELETE FROM app_settings WHERE key = ${this.LOCK_KEY}`);
+      console.log('🔓 Force-released extraction lock on startup (orphaned models detected)');
+    } catch (error) {
+      console.error('Failed to force-release lock on startup:', error);
+    }
+  }
 }

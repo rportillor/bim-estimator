@@ -271,6 +271,11 @@ export async function autoResumeProcessing(): Promise<void> {
 
     if (result.length > 0) {
       console.log(`⚠️ Marked ${result.length} orphaned model(s) as failed on startup: ${result.map(r => r.id).join(', ')}`);
+      // Force-release the extraction lock — the server restarted mid-generation so
+      // no legitimate lock owner exists. Without this, users get a 409 for up to
+      // 2 minutes (2× heartbeat interval) while the stale lock appears active.
+      const { ExtractionLockManager } = await import('../extraction-lock-manager');
+      await ExtractionLockManager.forceReleaseLock();
     } else {
       console.log('✅ No orphaned BIM models found');
     }
