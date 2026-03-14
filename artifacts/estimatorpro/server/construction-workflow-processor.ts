@@ -858,6 +858,10 @@ export class ConstructionWorkflowProcessor {
       /** Accumulated schedule counts from prior batches (Schedules batch).
        *  CWP adds to these from products found in THIS batch and returns the totals. */
       priorScheduleCounts?: { doors: number; windows: number };
+      /** Optional SSE callback (browser-visible). The caller (bim-generator) provides a
+       *  batch-windowed version that remaps internal 0-1 progress to the batch's global
+       *  range so the browser progress bar never regresses. */
+      statusCallback?: (progress: number, message: string) => Promise<void>;
     }
   ): Promise<any> {
     const batchInfo = options ? ` (Batch ${options.batch}/${options.totalBatches})` : '';
@@ -1493,7 +1497,7 @@ Return ONLY valid JSON.`;
   /**
    * Extract PRODUCTS from specification documents
    */
-  private async extractProductsFromSpec(doc: any, options?: { batch?: number, totalBatches?: number, modelId?: string, maxChunks?: number, startChunk?: number, projectName?: string, legendContext?: string }): Promise<Product[]> {
+  private async extractProductsFromSpec(doc: any, options?: { batch?: number, totalBatches?: number, modelId?: string, maxChunks?: number, startChunk?: number, projectName?: string, legendContext?: string, statusCallback?: (progress: number, message: string) => Promise<void> }): Promise<Product[]> {
     // Check if this is a schedule document that needs visual analysis
     const isSchedule = doc.filename?.includes('SCHEDULE');
     if (isSchedule && doc.rasterPreviews && doc.rasterPreviews.length > 0) {
@@ -1591,6 +1595,13 @@ Return ONLY valid JSON.`;
             totalBatches: options.totalBatches || 1
           }
         });
+        // Also fire the SSE callback (browser-visible) if provided by the caller.
+        // The caller (bim-generator batch loop) remaps overallProgress (0-100) to the
+        // batch's global window so the browser progress bar never goes backwards.
+        if (options.statusCallback) {
+          const msg = `Batch ${options.batch || 1}/${options.totalBatches || 1}: Analyzing chunk ${i+1}/${chunks.length}`;
+          await options.statusCallback(overallProgress / 100, msg).catch(() => {});
+        }
       }
       
       // Add delay between EACH chunk to avoid overwhelming Claude

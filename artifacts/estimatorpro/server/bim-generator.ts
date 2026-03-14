@@ -806,6 +806,14 @@ export class BIMGenerator {
             // Emit live SSE progress so the client advances from 60% → 92% across all batches
             const batchOverallProgress = 0.60 + (i / batches.length) * 0.32;
             await _status({ progress: batchOverallProgress, message: `Batch ${i+1}/${batches.length}: ${batch.name}` });
+
+            // statusCallback: map the processor's internal 0-1 progress (which already spans
+            // all batches linearly, 0-100 total) into the global 60%-92% window so the
+            // browser progress bar is monotonically increasing and never regresses.
+            const batchStatusCallback = async (internalProgress: number, message: string) => {
+              const globalProgress = 0.60 + internalProgress * 0.32;
+              await _status({ progress: globalProgress, message });
+            };
             
             try {
               const batchResult = await this.constructionWorkflow.processConstructionDocuments(
@@ -821,6 +829,8 @@ export class BIMGenerator {
                   globalLegendContext: globalLegendContext || undefined,
                   // QS Step 6: Carry forward accumulated schedule counts across batches
                   priorScheduleCounts: { ...combinedResult.scheduleCounts },
+                  // Live SSE progress: remaps internal 0-1 to the 60%-92% global window
+                  statusCallback: batchStatusCallback,
                 }
               );
               
