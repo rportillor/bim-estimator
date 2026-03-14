@@ -27,7 +27,6 @@ import { UserAccessPanel } from '@/components/documents/UserAccessPanel';
 import { useToast } from '@/hooks/use-toast';
 import { logDocumentError, logAuthError } from '@/utils/error-monitoring';
 import { runLiveErrorCheck } from '@/utils/live-error-check';
-import { DebugPanel } from '@/components/debug-panel';
 import { mobileLog } from '@/utils/mobile-console';
 
 interface Document {
@@ -809,8 +808,6 @@ export default function Documents() {
         )}
       </div>
       
-      {/* Debug Panel for Development */}
-      <DebugPanel />
     </div>
   );
 }
