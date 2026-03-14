@@ -20,17 +20,18 @@ export const loginSchema = z.object({
 export const registerSchema = insertUserSchema.extend({
   password: z.string()
     .min(8, "Password must be at least 8 characters")
-    .max(128, "Password must be less than 128 characters")
-    .regex(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/, 
-           "Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character"),
-  confirmPassword: z.string().min(8),
+    .max(128, "Password must be less than 128 characters"),
+  confirmPassword: z.string().min(8, "Please confirm your password"),
   username: z.string()
     .min(3, "Username must be at least 3 characters")
     .max(30, "Username must be less than 30 characters")
     .regex(/^[a-zA-Z0-9_-]+$/, "Username can only contain letters, numbers, hyphens, and underscores"),
   email: z.string()
     .email("Please enter a valid email address")
-    .max(255, "Email must be less than 255 characters"),
+    .max(255, "Email must be less than 255 characters")
+    .optional()
+    .or(z.literal("")),
+  role: z.string().optional(),
 }).refine((data) => data.password === data.confirmPassword, {
   message: "Passwords don't match",
   path: ["confirmPassword"],
