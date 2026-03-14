@@ -252,33 +252,29 @@ class BackgroundProcessorService {
 export const backgroundProcessor = BackgroundProcessorService.getInstance();
 
 /**
- * Auto-resume on startup
+ * Auto-resume on startup — marks any orphaned generating/processing models as failed
+ * so users see the "Regenerate" button instead of an infinite spinner.
  */
 export async function autoResumeProcessing(): Promise<void> {
   console.log('🔍 Checking for incomplete processing tasks...');
   
   try {
-    // Get all BIM models that are still processing
     const { db } = await import('../db');
     const { bimModels } = await import('../../shared/schema');
-    const { eq } = await import('drizzle-orm');
+    const { inArray, sql } = await import('drizzle-orm');
     
-    const processingModels = await db
-      .select()
-      .from(bimModels)
-      .where(eq(bimModels.status, 'generating'));
-    
-    for (const model of processingModels) {
-      const geoData = model.geometryData as any;
-      if (geoData?.processingState?.status === 'processing') {
-        console.log(`⚠️ Found incomplete processing for model ${model.id} - Manual resume required`);
-        // DISABLED AUTO-RESUME: Prevents runaway generation
-        // Users must explicitly click to resume processing
-        // await backgroundProcessor.startProcessing(model.projectId, model.id);
-        break; // Only process one at a time
-      }
+    const result = await db
+      .update(bimModels)
+      .set({ status: 'failed', updatedAt: sql`NOW()` })
+      .where(inArray(bimModels.status, ['generating', 'processing']))
+      .returning({ id: bimModels.id });
+
+    if (result.length > 0) {
+      console.log(`⚠️ Marked ${result.length} orphaned model(s) as failed on startup: ${result.map(r => r.id).join(', ')}`);
+    } else {
+      console.log('✅ No orphaned BIM models found');
     }
   } catch (error) {
-    console.error('Failed to auto-resume processing:', error);
+    console.error('Failed to clean up orphaned models:', error);
   }
 }
