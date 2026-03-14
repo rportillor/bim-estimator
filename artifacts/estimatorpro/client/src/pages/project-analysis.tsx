@@ -273,7 +273,7 @@ export default function ProjectAnalysis() {
 
       {/* Main Analysis Content */}
       <div className="w-full">
-        <Tabs defaultValue="similarity" className="w-full">
+        <Tabs defaultValue="bim" className="w-full">
           <div className="px-2 sm:px-4 pt-3 sm:pt-4 pb-3 sm:pb-4 bg-white border-b sticky top-0 z-10">
             <div className="overflow-x-auto">
               <TabsList className="inline-flex w-max min-w-full gap-1 sm:gap-2 h-auto bg-gray-100 rounded-lg p-1">

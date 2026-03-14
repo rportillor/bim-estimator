@@ -1,0 +1,283 @@
+{
+  "projectId": "262dea72-aafd-4ba8-96b0-78bbc2335c62",
+  "documentMetadata": {
+    "a8aad353-b0fb-4938-a3d2-4f3ead2214ed": {
+      "name": "A004_R1_Construction_Assemblies_1_May_21.pdf"
+    },
+    "a7c80dbb-e1e5-432c-ada7-286444a71935": {
+      "name": "A402_R1_Building_Sections_1_May_21.pdf"
+    },
+    "32878be8-78a1-40fa-8696-f41b7655aae8": {
+      "name": "A412_R1_Wall_Sections_1_May_21.pdf"
+    },
+    "9e4638a2-f2dd-479a-897d-81bc5d25bf33": {
+      "name": "A701_R1_DOOR_AND_WINDOW_FINISH_SCHEDULE_1_May_21.pdf"
+    },
+    "b4b9676e-37db-442f-b3a5-5e8447cc6734": {
+      "name": "A713_R1_WINDOW_SCHEDULE_THIRD_1_May_21.pdf"
+    },
+    "bc3b445a-8979-4fa6-951c-af6f8a1356a7": {
+      "name": "A714_R1_WINDOW_SCHEDULE_THIRD_and_Interior_1_May_21.pdf"
+    },
+    "19c6c7d1-614a-417a-879a-34e139578c50": {
+      "name": "A103_R1_Second_Floor_Plan_1_May_21.pdf"
+    },
+    "086d7bb5-6883-4571-a721-8bbdd55bdf2f": {
+      "name": "A203_R1_GROUND_FLOOR_PLAN_C1_May_21.pdf"
+    },
+    "ca56b762-c77f-4aec-acd7-e561da76ba95": {
+      "name": "A206_R1_SECOND_FLOOR_PLAN_C1_May_21.pdf"
+    },
+    "7d39c93a-fd3c-44b2-bb74-df2a55a0a9c5": {
+      "name": "A209_R1_THIRD_FLOOR_PLAN_C1_May_21.pdf"
+    },
+    "59d2dc6f-9a86-4772-b409-3276c4ad469c": {
+      "name": "A210_R1_MECHANICAL_PENTHOUSE_A1_May_21.pdf"
+    },
+    "a2b0d19d-8b2a-4b2e-a316-99331699c789": {
+      "name": "A403_R1_Building_Sections_1_May_21.pdf"
+    },
+    "2ea2cc0a-415a-40f0-af35-b4e4499aa910": {
+      "name": "A411_R1_Wall_Sections_1_May_21.pdf"
+    },
+    "700fe92c-1d4a-4dc4-a5f5-70c5ba429dc8": {
+      "name": "A501_R1_Stair_Details_1_May_21.pdf"
+    },
+    "468b93d7-f961-4b09-b883-4b674252db69": {
+      "name": "A622_R1_TYPICAL_DETAILS_1_May_21.pdf"
+    },
+    "2d0b39cf-bb36-441a-b597-9018c35d709d": {
+      "name": "A712_R1_WINDOW_SCHEDULE_GROUND_AND_SECOND_1_May_21.pdf"
+    },
+    "cc191d81-bde9-4c60-9c7f-4f4ebde2ec6b": {
+      "name": "A204_R1_SECOND_FLOOR_PLAN_A1_May_21.pdf"
+    },
+    "9df732ad-c29d-4976-98d6-c0088d152365": {
+      "name": "A211_R1_MECHANICAL_PENTHOUSE_B1_May_21.pdf"
+    },
+    "32bc763f-1139-4a5c-bd98-73e70bde9251": {
+      "name": "A212_R1_MECHANICAL_PENTHOUSE_C1_May_21.pdf"
+    },
+    "8b723242-e5c7-4111-b95e-560081013614": {
+      "name": "A413_R1_Wall_Sections_1_May_21.pdf"
+    },
+    "da3a485c-d5e6-4dc1-8257-dc091e2f26ae": {
+      "name": "A621_R1_TYPICAL_DETAILS_1_May_21.pdf"
+    },
+    "1020ee08-4612-491e-8eba-ff663c13f494": {
+      "name": "A205_R1_SECOND_FLOOR_PLAN_B1_May_21.pdf"
+    },
+    "4def3694-0ea4-4b41-abe7-830f19fd4fe6": {
+      "name": "A216_R1_Washrooms_details_1_May_21.pdf"
+    },
+    "af8cea66-05b9-4a50-99f6-af2c2a37eb55": {
+      "name": "A401_R1_Building_Sections_1_May_21.pdf"
+    },
+    "e965a8ed-1cb1-48b4-8207-f6869e4e7c63": {
+      "name": "A611_R1_Sections_Details_1_May_21.pdf"
+    },
+    "e437231e-862e-4758-85fc-1f6a905acd11": {
+      "name": "A711_R1_WINDOW_SCHEDULE_GROUND_1_May_21.pdf"
+    },
+    "c79ab607-4f3b-41ef-ad41-df72a937c80e": {
+      "name": "A104_R1_Third_Floor_Plan_1_May_21.pdf"
+    },
+    "a7286fce-f9b5-4fc7-a0cf-c8b4ac9f47c3": {
+      "name": "LE_-_1.0_Landscape_Lighting_Plan_25_Apr._23.pdf"
+    },
+    "689f435b-e972-46a4-81e7-62e91ac63c46": {
+      "name": "landscape_april_2023.pdf"
+    },
+    "10356d0d-d2e7-4a6e-a7f3-c4a44d235b97": {
+      "name": "A002_R1_Site_Plan_1_May_21.pdf"
+    },
+    "7391f161-1525-43c2-ad71-17b4c0e3f00e": {
+      "name": "A101_R1_Underground_Parking_Plan_1_May_21.pdf"
+    },
+    "f25049e8-e0be-4ced-ae25-4f364448f802": {
+      "name": "A102_R1_Ground_Floor_Plan_1_May_21.pdf"
+    },
+    "2c4fb063-32f3-4f15-8a66-c6312c2dcc56": {
+      "name": "A105_R1_Mechanical_Penthouse_Plan_1_May_21.pdf"
+    },
+    "166c780d-6766-4a06-bee1-62156631163a": {
+      "name": "A207_R1_THIRD_FLOOR_PLAN_A1_May_21.pdf"
+    },
+    "921e088b-b3e7-480d-85b7-a5d4620622d5": {
+      "name": "A106_R1_Roof_Plan_1_May_21.pdf"
+    },
+    "b88a235f-42ec-43be-b023-e81004a674dd": {
+      "name": "A208_R1_THIRD_FLOOR_PLAN_B1_May_21.pdf"
+    }
+  },
+  "similarities": [
+    {
+      "idA": "a8aad353-b0fb-4938-a3d2-4f3ead2214ed",
+      "idB": "a7c80dbb-e1e5-432c-ada7-286444a71935",
+      "score": 0.15
+    },
+    {
+      "idA": "a8aad353-b0fb-4938-a3d2-4f3ead2214ed",
+      "idB": "32878be8-78a1-40fa-8696-f41b7655aae8",
+      "score": 0.15
+    },
+    {
+      "idA": "a8aad353-b0fb-4938-a3d2-4f3ead2214ed",
+      "idB": "9e4638a2-f2dd-479a-897d-81bc5d25bf33",
+      "score": 0.15
+    },
+    {
+      "idA": "a8aad353-b0fb-4938-a3d2-4f3ead2214ed",
+      "idB": "b4b9676e-37db-442f-b3a5-5e8447cc6734",
+      "score": 0.1
+    },
+    {
+      "idA": "a8aad353-b0fb-4938-a3d2-4f3ead2214ed",
+      "idB": "19c6c7d1-614a-417a-879a-34e139578c50",
+      "score": 0.1
+    },
+    {
+      "idA": "a8aad353-b0fb-4938-a3d2-4f3ead2214ed",
+      "idB": "ca56b762-c77f-4aec-acd7-e561da76ba95",
+      "score": 0.1
+    },
+    {
+      "idA": "a8aad353-b0fb-4938-a3d2-4f3ead2214ed",
+      "idB": "a2b0d19d-8b2a-4b2e-a316-99331699c789",
+      "score": 0.1
+    },
+    {
+      "idA": "a8aad353-b0fb-4938-a3d2-4f3ead2214ed",
+      "idB": "468b93d7-f961-4b09-b883-4b674252db69",
+      "score": 0.15
+    },
+    {
+      "idA": "a8aad353-b0fb-4938-a3d2-4f3ead2214ed",
+      "idB": "2d0b39cf-bb36-441a-b597-9018c35d709d",
+      "score": 0.1
+    },
+    {
+      "idA": "a8aad353-b0fb-4938-a3d2-4f3ead2214ed",
+      "idB": "cc191d81-bde9-4c60-9c7f-4f4ebde2ec6b",
+      "score": 0.1
+    },
+    {
+      "idA": "a8aad353-b0fb-4938-a3d2-4f3ead2214ed",
+      "idB": "9df732ad-c29d-4976-98d6-c0088d152365",
+      "score": 0.1
+    },
+    {
+      "idA": "a8aad353-b0fb-4938-a3d2-4f3ead2214ed",
+      "idB": "af8cea66-05b9-4a50-99f6-af2c2a37eb55",
+      "score": 0.15
+    },
+    {
+      "idA": "a8aad353-b0fb-4938-a3d2-4f3ead2214ed",
+      "idB": "c79ab607-4f3b-41ef-ad41-df72a937c80e",
+      "score": 0.1
+    },
+    {
+      "idA": "a8aad353-b0fb-4938-a3d2-4f3ead2214ed",
+      "idB": "7391f161-1525-43c2-ad71-17b4c0e3f00e",
+      "score": 0.15
+    },
+    {
+      "idA": "a7c80dbb-e1e5-432c-ada7-286444a71935",
+      "idB": "32878be8-78a1-40fa-8696-f41b7655aae8",
+      "score": 0.75
+    },
+    {
+      "idA": "a7c80dbb-e1e5-432c-ada7-286444a71935",
+      "idB": "a2b0d19d-8b2a-4b2e-a316-99331699c789",
+      "score": 0.85
+    },
+    {
+      "idA": "a7c80dbb-e1e5-432c-ada7-286444a71935",
+      "idB": "e437231e-862e-4758-85fc-1f6a905acd11",
+      "score": 0.15
+    },
+    {
+      "idA": "a7c80dbb-e1e5-432c-ada7-286444a71935",
+      "idB": "7391f161-1525-43c2-ad71-17b4c0e3f00e",
+      "score": 0.15
+    },
+    {
+      "idA": "32878be8-78a1-40fa-8696-f41b7655aae8",
+      "idB": "b4b9676e-37db-442f-b3a5-5e8447cc6734",
+      "score": 0.15
+    },
+    {
+      "idA": "32878be8-78a1-40fa-8696-f41b7655aae8",
+      "idB": "19c6c7d1-614a-417a-879a-34e139578c50",
+      "score": 0.1
+    },
+    {
+      "idA": "32878be8-78a1-40fa-8696-f41b7655aae8",
+      "idB": "7d39c93a-fd3c-44b2-bb74-df2a55a0a9c5",
+      "score": 0.15
+    },
+    {
+      "idA": "32878be8-78a1-40fa-8696-f41b7655aae8",
+      "idB": "a2b0d19d-8b2a-4b2e-a316-99331699c789",
+      "score": 0.85
+    },
+    {
+      "idA": "32878be8-78a1-40fa-8696-f41b7655aae8",
+      "idB": "2ea2cc0a-415a-40f0-af35-b4e4499aa910",
+      "score": 0.85
+    },
+    {
+      "idA": "32878be8-78a1-40fa-8696-f41b7655aae8",
+      "idB": "da3a485c-d5e6-4dc1-8257-dc091e2f26ae",
+      "score": 0.15
+    },
+    {
+      "idA": "32878be8-78a1-40fa-8696-f41b7655aae8",
+      "idB": "4def3694-0ea4-4b41-abe7-830f19fd4fe6",
+      "score": 0.1
+    },
+    {
+      "idA": "32878be8-78a1-40fa-8696-f41b7655aae8",
+      "idB": "e965a8ed-1cb1-48b4-8207-f6869e4e7c63",
+      "score": 0.15
+    },
+    {
+      "idA": "32878be8-78a1-40fa-8696-f41b7655aae8",
+      "idB": "e437231e-862e-4758-85fc-1f6a905acd11",
+      "score": 0.15
+    },
+    {
+      "idA": "32878be8-78a1-40fa-8696-f41b7655aae8",
+      "idB": "2c4fb063-32f3-4f15-8a66-c6312c2dcc56",
+      "score": 0.15
+    },
+    {
+      "idA": "9e4638a2-f2dd-479a-897d-81bc5d25bf33",
+      "idB": "468b93d7-f961-4b09-b883-4b674252db69",
+      "score": 0.1
+    },
+    {
+      "idA": "b4b9676e-37db-442f-b3a5-5e8447cc6734",
+      "idB": "19c6c7d1-614a-417a-879a-34e139578c50",
+      "score": 0.1
+    },
+    {
+      "idA": "bc3b445a-8979-4fa6-951c-af6f8a1356a7",
+      "idB": "8b723242-e5c7-4111-b95e-560081013614",
+      "score": 0.15
+    },
+    {
+      "idA": "bc3b445a-8979-4fa6-951c-af6f8a1356a7",
+      "idB": "4def3694-0ea4-4b41-abe7-830f19fd4fe6",
+      "score": 0.1
+    },
+    {
+      "idA": "bc3b445a-8979-4fa6-951c-af6f8a1356a7",
+      "idB": "f25049e8-e0be-4ced-ae25-4f364448f802",
+      "score": 0.1
+    }
+  ],
+  "overallScore": 0.2106,
+  "riskAreas": [],
+  "analyzedAt": "2026-03-14T14:36:38.379Z"
+}

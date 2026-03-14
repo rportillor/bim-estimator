@@ -1,5 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import Anthropic from "@anthropic-ai/sdk";
 import { storage } from "./storage";
 import { extractProjectFacts } from "./compliance/extract-project-facts";
 import { EnhancedErrorHandler } from "./helpers/enhanced-error-handler";
@@ -811,12 +812,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/projects/:projectId/similarity/run", authenticateToken, async (req, res) => {
     try {
       const projectId = req.params.projectId;
-      const { pairs, documentMetadata } = req.body || {};
-      // Use the anthropic client from our existing system
-      const anthropic = req.app.get("anthropic");
-      similarityAnalyzer.start(projectId, anthropic, pairs || [], documentMetadata || {})
+      let { pairs, documentMetadata } = req.body || {};
+      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+      // Auto-build pairs from project documents when none provided
+      if (!pairs || pairs.length === 0) {
+        const docs = await storage.getDocumentsByProject(projectId);
+        const readyDocs = docs.filter((d: any) => d.textContent && d.textContent.trim().length > 0);
+        pairs = [];
+        const meta: Record<string, any> = {};
+        for (let i = 0; i < readyDocs.length; i++) {
+          meta[readyDocs[i].id] = { name: readyDocs[i].originalName || readyDocs[i].filename || readyDocs[i].id };
+          for (let j = i + 1; j < readyDocs.length; j++) {
+            pairs.push({
+              a: { id: readyDocs[i].id, text: readyDocs[i].textContent, filename: readyDocs[i].originalName || readyDocs[i].filename },
+              b: { id: readyDocs[j].id, text: readyDocs[j].textContent, filename: readyDocs[j].originalName || readyDocs[j].filename },
+            });
+          }
+        }
+        if (!documentMetadata || Object.keys(documentMetadata).length === 0) {
+          documentMetadata = meta;
+        }
+        logger.info(`[doc-sim] auto-built ${pairs.length} pairs from ${readyDocs.length} ready docs for project ${projectId}`);
+      }
+
+      if (pairs.length === 0) {
+        return res.status(400).json({ error: "No documents with extracted text found. Upload and process documents first." });
+      }
+
+      similarityAnalyzer.start(projectId, anthropic, pairs, documentMetadata || {})
         .catch((e: any) => logger.warn("[doc-sim] background error:", e?.message || e));
-      res.json({ ok: true, status: "started" });
+      res.json({ ok: true, status: "started", pairCount: pairs.length });
     } catch (error) {
       logger.error("Document similarity run error:", error as any);
       res.status(500).json({ error: "Failed to start similarity analysis" });
