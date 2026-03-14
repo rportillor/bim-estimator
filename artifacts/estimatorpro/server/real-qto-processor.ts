@@ -887,33 +887,40 @@ Document: ${path.basename(filePath)}`;
     
     // Extract building perimeter from Claude's analysis
     const buildingAnalysis = this.extractBuildingAnalysis(aiAnalysis);
-    
-    // Parse Claude's CSI-organized assembly response
-    const analysisData = typeof aiAnalysis === 'string' ? 
+
+    // CSI/text extraction is a FALLBACK — only run when the floors loop produced nothing.
+    // If the floors loop already populated `elements`, do NOT overwrite them.
+    if (elements.length === 0) {
+      // Parse Claude's CSI-organized assembly response
+      const analysisData = typeof aiAnalysis === 'string' ? 
+        this.parseClaudeResponse(aiAnalysis) : aiAnalysis;
+      
+      logger.info('Floors loop produced 0 elements — attempting CSI assemblies fallback...');
+      
+      if (analysisData?.csi_organized_assemblies) {
+        logger.debug('Found CSI-organized assemblies in Claude response');
+        elements = this.processCSIAssemblies(analysisData.csi_organized_assemblies, storeys, buildingAnalysis);
+        
+        if (analysisData?.assembly_cross_references) {
+          logger.debug('Processing assembly cross-references');
+          elements = elements.concat(this.processAssemblyCrossReferences(analysisData.assembly_cross_references, storeys, buildingAnalysis));
+        }
+      } else {
+        logger.warn('No CSI assemblies found, falling back to text extraction');
+        elements = this.extractElementsFromText(aiAnalysis, storeys);
+      }
+      
+      logger.info(`Generated ${elements.length} assembly-based elements from CSI/text fallback`);
+    } else {
+      logger.info(`Using ${elements.length} elements from floors JSON extraction — skipping CSI/text fallback`);
+    }
+
+    // Validate geometry (runs for both floors-path and CSI-path elements)
+    const _analysisDataForValidation = typeof aiAnalysis === 'string' ?
       this.parseClaudeResponse(aiAnalysis) : aiAnalysis;
     
-    logger.info('Processing CSI assemblies from Claude analysis...');
-    
-    // Check if we have the new CSI-organized format
-    if (analysisData?.csi_organized_assemblies) {
-      logger.debug('Found CSI-organized assemblies in Claude response');
-      elements = this.processCSIAssemblies(analysisData.csi_organized_assemblies, storeys, buildingAnalysis);
-      
-      // Also process assembly cross-references for detailed components
-      if (analysisData?.assembly_cross_references) {
-        logger.debug('Processing assembly cross-references');
-        elements = elements.concat(this.processAssemblyCrossReferences(analysisData.assembly_cross_references, storeys, buildingAnalysis));
-      }
-    } else {
-      logger.warn('No CSI assemblies found, falling back to text extraction');
-      // Fallback to text-based extraction for backwards compatibility
-      elements = this.extractElementsFromText(aiAnalysis, storeys);
-    }
-    
-    logger.info(`Generated ${elements.length} assembly-based elements from Claude analysis`);
-    
     // 📐 Validate geometry after extraction
-    const validatedElements = this.validateWithGridSystem(elements, analysisData, []);
+    const validatedElements = this.validateWithGridSystem(elements, _analysisDataForValidation, []);
 
     // ✅ QTO Cross-Check
     const perimeter = (() => {
