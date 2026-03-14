@@ -1672,6 +1672,15 @@ export class DBStorage implements Partial<IStorage> {
       
       // 🚀 BATCH INSERT: Insert all elements in this batch at once
       // v15.13b: Sanitize geometry coordinates — NaN/Infinity → 0 so DB insert never fails
+      // v15.31: Clamp all decimal(10,3) fields to ±9,999,999.999 to prevent numeric overflow
+      //         (volumes in mm³ can exceed 10^9; quantities are also susceptible).
+      const DECIMAL_MAX = 9_999_999.999;
+      const clampDecimal = (v: any): number | null => {
+        if (v === null || v === undefined) return null;
+        const n = Number(v);
+        if (!Number.isFinite(n)) return null;
+        return Math.max(-DECIMAL_MAX, Math.min(DECIMAL_MAX, n));
+      };
       if (insertElements.length > 0) {
         const sanitize = (v: any) => {
           const n = Number(v);
@@ -1690,6 +1699,11 @@ export class DBStorage implements Partial<IStorage> {
         await db.insert(bimElements).values(insertElements.map(el => ({
           ...el,
           geometry: sanitizeGeom(el.geometry),
+          // Clamp all decimal(10,3) fields — never let overflow reach the DB
+          quantity:        clampDecimal(el.quantity),
+          elevation:       clampDecimal(el.elevation),
+          quantityMetric:  clampDecimal(el.quantityMetric),
+          quantityImperial: clampDecimal(el.quantityImperial),
           createdAt: new Date(),
           updatedAt: new Date()
         })));
