@@ -34,6 +34,31 @@ import { processingStatusRouter } from "./routes/processing-status";
 // routes.ts is the canonical and only registration point for those routers.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ── Safe console.error patch ─────────────────────────────────────────────────
+// Node 24's util.inspect crashes when passed certain non-standard objects
+// (e.g. from pdf-parse / multer internals). Wrap console.error globally so
+// every argument is safely coerced before util.inspect sees it.
+const _origConsoleError = console.error.bind(console);
+console.error = (...args: unknown[]) => {
+  const safe = args.map((a) => {
+    if (typeof a === "string") return a;
+    if (a instanceof Error) return `${a.name}: ${a.message}${a.stack ? `\n${a.stack}` : ""}`;
+    try { return JSON.stringify(a) ?? String(a); } catch {
+      try { return String(a); } catch { return "[unserializable]"; }
+    }
+  });
+  try { _origConsoleError(...safe); } catch { _origConsoleError("[console.error: serialization failed]"); }
+};
+
+// Last-resort guard: log the error but keep the server alive
+process.on("uncaughtException", (err) => {
+  try {
+    _origConsoleError("[uncaughtException]", err instanceof Error ? err.stack : String(err));
+  } catch {
+    _origConsoleError("[uncaughtException] (could not log error)");
+  }
+});
+
 const app = express();
 
 // Trust proxy for rate limiting accuracy in production

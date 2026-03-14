@@ -1527,6 +1527,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/projects", authenticateToken, requireActiveSubscription, async (req, res) => {
     try {
       const projectData = insertProjectSchema.parse({
+        country: "canada",
+        federalCode: "NBC",
         ...req.body,
         userId: req.user!.id
       });
@@ -1697,10 +1699,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const documentData = insertDocumentSchema.parse({
           projectId: req.params.projectId,
           filename: file.filename,
+          storageKey: file.filename,
           originalName: file.originalname,
           fileType: path.extname(file.originalname).toLowerCase(),
           fileSize: file.size,
-          analysisStatus: "Processing", // Will be updated after extraction
+          analysisStatus: "Processing",
         });
 
         const document = await storage.createDocument(documentData);
@@ -1727,10 +1730,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
             console.log(`🎯 Claude will now receive REAL content instead of fallback strings!`);
             
           } catch (error) {
-            console.error(`[*] PDF content extraction failed for ${file.originalname}:`, error);
+            const errMsg = error instanceof Error ? error.message : String(error);
+            console.error(`[*] PDF content extraction failed for ${file.originalname}: ${errMsg}`);
             await storage.updateDocument(document.id, {
               analysisStatus: "Failed",
-              textContent: `PDF extraction failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+              textContent: `PDF extraction failed: ${errMsg}`
             });
           }
         } else {
@@ -1818,7 +1822,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 analysisStatus: "Ready",
               });
             } catch (importError) {
-              console.error(`[3D] CAD import failed for ${file.originalname}:`, importError);
+              const importErrMsg = importError instanceof Error ? importError.message : String(importError);
+              console.error(`[3D] CAD import failed for ${file.originalname}: ${importErrMsg}`);
               await storage.updateDocument(document.id, {
                 analysisStatus: "Ready",
               });
@@ -1837,7 +1842,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.status(201).json(documents);
     } catch (error) {
-      console.error("Error uploading documents:", error);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      console.error(`Error uploading documents: ${errMsg}`);
       res.status(400).json({ message: "Error uploading files" });
     }
   });
