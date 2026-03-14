@@ -799,6 +799,10 @@ export class BIMGenerator {
             constructionType: null,       // STEP-4: dominant construction type
           };
           
+          // Tracks the highest global progress ever emitted. Ensures progress only goes
+          // forward even though the processor's internal counter resets per document.
+          let highWaterMark = 0.60;
+
           for (let i = 0; i < batches.length; i++) {
             const batch = batches[i];
             console.log(`\n📦 Processing batch ${i+1}/${batches.length}: ${batch.name} (${batch.docs.length} documents)`);
@@ -807,12 +811,17 @@ export class BIMGenerator {
             const batchOverallProgress = 0.60 + (i / batches.length) * 0.32;
             await _status({ progress: batchOverallProgress, message: `Batch ${i+1}/${batches.length}: ${batch.name}` });
 
-            // statusCallback: map the processor's internal 0-1 progress (which already spans
-            // all batches linearly, 0-100 total) into the global 60%-92% window so the
-            // browser progress bar is monotonically increasing and never regresses.
+            // statusCallback: maps the processor's internal 0-1 progress into the 60%-92%
+            // global window, then clamps to highWaterMark so the bar never regresses.
+            // The internal counter resets per document, causing backwards jumps without
+            // this clamp (62% → 64% → 62% → ...). highWaterMark is shared across all
+            // batches so progress is always monotonically increasing end-to-end.
             const batchStatusCallback = async (internalProgress: number, message: string) => {
-              const globalProgress = 0.60 + internalProgress * 0.32;
-              await _status({ progress: globalProgress, message });
+              const candidate = 0.60 + internalProgress * 0.32;
+              if (candidate > highWaterMark) {
+                highWaterMark = candidate;
+                await _status({ progress: highWaterMark, message });
+              }
             };
             
             try {
