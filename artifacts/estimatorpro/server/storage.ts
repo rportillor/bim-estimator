@@ -973,7 +973,7 @@ export class DBStorage implements Partial<IStorage> {
   }
 
   async deleteDocument(id: string): Promise<boolean> {
-    const result = await db.delete(documents).where(eq(documents.id, id));
+    const result = await db.delete(documents).where(eq(documents.id, id)).returning({ id: documents.id });
     return result.length > 0;
   }
 
