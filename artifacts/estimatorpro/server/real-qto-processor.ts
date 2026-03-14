@@ -564,33 +564,53 @@ ${textContent.substring(0, 500000)}`;
         if (_proj?.name) pdfProjectName = _proj.name;
       } catch { /* non-fatal */ }
 
-      const analysisPrompt = `Extract ALL building elements from these "${pdfProjectName}" construction drawings to enable accurate 3D BIM reconstruction.
+      const analysisPrompt = `You are a SENIOR QUANTITY SURVEYOR extracting a COMPLETE BIM element inventory from "${pdfProjectName}" construction drawings. Your output feeds a cost estimate — missing elements = missing cost. Be exhaustive.
 
-CRITICAL: Extract ACTUAL measurements only — no assumptions, no placeholder values.
-- Floor-to-floor heights: read from building sections using the legend's elevation notation
-- Floor elevations: read from elevation marks and section datum references
-- Wall positions: measure start/end x,y coordinates from floor plans using grid lines
-- Column positions: read x,y from structural and architectural plans
-- Door/window positions: read x,y from floor plan symbols and door/window schedules
+CRITICAL: Extract ACTUAL measurements only from the drawings — return null for any field not visible.
 
-OUTPUT JSON FORMAT ONLY (no other text, no markdown, no explanation):
+═══════════════════════════════════════════════════════════
+TYPICAL FLOOR RULE (MOST IMPORTANT FOR APARTMENT BUILDINGS)
+═══════════════════════════════════════════════════════════
+If drawings show a "TYPICAL FLOOR PLAN" (e.g. Floors 2–5 use same plan):
+→ COPY that floor's FULL element list into EACH floor that references it
+→ DO NOT output only one floor entry for "Floors 2–5" — create SEPARATE entries for Floor 2, Floor 3, Floor 4, Floor 5 each with IDENTICAL elements
+→ Adjust "elevation" value per floor, keep all other data the same
+→ Prefix IDs with floor number: Floor 2 = "F2-W1", Floor 3 = "F3-W1", etc.
+
+═══════════════════════════════════════════════════════════
+ROOMS / SPACES — EXTRACT EVERY ROOM ON EVERY FLOOR
+═══════════════════════════════════════════════════════════
+For an apartment building: list EVERY room/space on every floor:
+- Each apartment unit (Unit 1A, Unit 1B, etc.) = 1 room entry
+- Corridors, lobbies, stairwells, mechanical rooms = each a separate room entry
+- Expected count for a 5-story apartment: 30–70 rooms total (6–14 per floor)
+
+═══════════════════════════════════════════════════════════
+EXHAUSTIVE ELEMENT EXTRACTION TARGETS
+═══════════════════════════════════════════════════════════
+For a 5-story residential apartment building, expected totals:
+- WALLS: 200–600 (every individual wall segment — not "there are walls")
+- COLUMNS: 50–150 (every column at its grid position)
+- DOORS: 100–300 (every door from floor plan symbols AND door schedule)
+- WINDOWS: 80–250 (every window from floor plans AND window schedule)
+- SLABS: 5–15 (one per floor + roof + any transfer slabs)
+- BEAMS: 30–100 (structural plan)
+- MEP: 100–400 (every light, sprinkler, outlet, diffuser visible on MEP plans)
+- ROOMS: 30–70 (every apartment unit and common space)
+TOTAL EXPECTED: 600–2000+ elements
+
+OUTPUT JSON FORMAT ONLY (no text outside the JSON block):
 {
   "drawing_legend": {
     "found_on_sheets": ["List ALL sheets where legend appears"],
-    "dimension_format": "How dimensions are shown (mm, m, ft-in) from legend",
-    "elevation_datum": "Datum reference point for elevations",
+    "dimension_format": "mm/m/ft-in from legend",
+    "elevation_datum": "Datum reference point",
     "height_notation": "How vertical dimensions are indicated",
-    "line_patterns": {
-      "grid_lines": "Pattern used for grids (e.g., dash-dot)",
-      "walls": "Pattern for walls (e.g., solid)",
-      "hidden": "Pattern for hidden/above (e.g., dashed)"
-    }
+    "line_patterns": {"grid_lines": "dash-dot or similar", "walls": "solid double line", "hidden": "dashed"}
   },
-  "building_perimeter": [{"x": 0, "y": 0}, {"x": 30, "y": 0}],
+  "building_perimeter": [{"x": 0, "y": 0}, {"x": 30, "y": 0}, {"x": 30, "y": 20}, {"x": 0, "y": 20}],
   "floor_to_floor_heights": {
     "ground_to_second": null,
-    "second_to_third": null,
-    "third_to_fourth": null,
     "typical_floor_height": null
   },
   "floors": [
@@ -598,19 +618,27 @@ OUTPUT JSON FORMAT ONLY (no other text, no markdown, no explanation):
       "level": "Ground Floor",
       "elevation": null,
       "ceiling_height": null,
-      "walls": [{"id": "W1", "start": {"x": 0, "y": 0}, "end": {"x": 5, "y": 0}, "thickness": 200, "ceiling_height": null, "type": "exterior", "material": "concrete", "fire_rating": null}],
-      "columns": [{"id": "C1", "x": 5, "y": 5, "size": "400x400", "height": null, "type": "concrete"}],
-      "beams": [{"id": "B1", "start": {"x": 0, "y": 5}, "end": {"x": 6, "y": 5}, "size": "300x600", "depth": 600, "material": "concrete", "top_elevation": null}],
-      "slabs": [{"id": "SL1", "boundary": [{"x": 0, "y": 0}, {"x": 22, "y": 0}, {"x": 22, "y": 15}, {"x": 0, "y": 15}], "thickness": 200, "type": "floor", "material": "concrete", "top_elevation": null}],
-      "stairs": [{"id": "ST1", "x": 10, "y": 5, "width": 1200, "length": 4000, "rises": 16, "rise_mm": 175, "run_mm": 275, "type": "straight", "material": "concrete"}],
-      "foundations": [{"id": "F1", "x": 5, "y": 5, "width": 600, "depth_mm": 400, "bearing_depth_m": 1.5, "type": "spread", "material": "concrete"}],
-      "mep": [{"id": "L1", "category": "electrical", "type": "light", "x": 3, "y": 3, "mounting_height": 2.7}],
-      "doors": [{"id": "D1", "x": 2.5, "y": 0, "width": 900, "height": null, "thickness": null, "wall_thickness": null, "type": "single", "fire_rating": null}],
-      "windows": [{"id": "WIN1", "x": 7, "y": 0, "width": 1800, "height": null, "sill_height": null, "type": "fixed", "glazing": null}],
-      "rooms": [{"id": "R1", "name": "Room Name", "boundary": [{"x": 0, "y": 0}, {"x": 5, "y": 0}, {"x": 5, "y": 4}, {"x": 0, "y": 4}], "ceiling_height": null, "area_m2": null}]
+      "walls": [{"id": "W1", "start": {"x": 0.0, "y": 0.0}, "end": {"x": 5.0, "y": 0.0}, "thickness": null, "ceiling_height": null, "type": "exterior", "material": null, "fire_rating": null}],
+      "columns": [{"id": "C1", "x": 5.0, "y": 5.0, "size": null, "height": null, "type": "concrete"}],
+      "beams": [{"id": "B1", "start": {"x": 0.0, "y": 5.0}, "end": {"x": 6.0, "y": 5.0}, "size": null, "depth": null, "material": null, "top_elevation": null}],
+      "slabs": [{"id": "SL1", "boundary": [{"x": 0, "y": 0}, {"x": 22, "y": 0}, {"x": 22, "y": 15}, {"x": 0, "y": 15}], "thickness": null, "type": "floor", "material": null}],
+      "stairs": [{"id": "ST1", "x": null, "y": null, "width": null, "length": null, "rises": null, "rise_mm": null, "run_mm": null, "type": "straight"}],
+      "foundations": [{"id": "F1", "x": null, "y": null, "width": null, "depth_mm": null, "bearing_depth_m": null, "type": "spread"}],
+      "mep": [{"id": "L1", "category": "electrical", "type": "light_fixture", "x": null, "y": null, "mounting_height": null}],
+      "doors": [{"id": "D1", "x": null, "y": null, "width": null, "height": null, "type": "single", "fire_rating": null}],
+      "windows": [{"id": "WIN1", "x": null, "y": null, "width": null, "height": null, "sill_height": null, "type": "fixed", "glazing": null}],
+      "rooms": [{"id": "R1", "name": "Unit 1A", "boundary": [{"x": 0, "y": 0}, {"x": 8, "y": 0}, {"x": 8, "y": 12}, {"x": 0, "y": 12}], "ceiling_height": null, "area_m2": null}]
     }
   ]
 }
+
+EXTRACTION RULES:
+- Return null for any field not found — NEVER substitute a standard value
+- INCLUDE every element even if most fields are null (null fields become RFI items)
+- List EACH individual element as a SEPARATE entry — do not summarize
+- For walls: every wall segment is a separate entry with start/end coords
+- For doors/windows: use schedule data when available for counts even without exact positions
+- For MEP: count every fixture symbol visible on electrical, plumbing, HVAC plans
 
 MANDATORY EXTRACTION REQUIREMENTS:
 - Extract EVERY wall (exterior, interior, fire-rated, curtain) with real x,y start/end points
@@ -900,6 +928,18 @@ MANDATORY EXTRACTION REQUIREMENTS:
             const windowElement = this.createWindowElement(win, storey);
             if (windowElement) {
               elements.push(windowElement);
+              storey.elementCount++;
+            }
+          }
+        }
+
+        // Process rooms — each room is a spatial element (apartment unit, corridor, etc.)
+        // These are critical for apartment buildings where unit count drives the estimate.
+        if (floor.rooms) {
+          for (const room of floor.rooms) {
+            const roomElement = this.createRoomElement(room, storey);
+            if (roomElement) {
+              elements.push(roomElement);
               storey.elementCount++;
             }
           }
@@ -1430,10 +1470,27 @@ MANDATORY EXTRACTION REQUIREMENTS:
     const end = wallData.end;
     // NO DEFAULTS - only use actual thickness from Claude's analysis
     // Normalise thickness — Claude returns mm by convention but handles any unit string
-    const thickness = toMetres(wallData.thickness, 'dimension') !== null
+    let thickness = toMetres(wallData.thickness, 'dimension') !== null
       ? toMetres(wallData.thickness, 'dimension')! * 1000  // keep as mm for length calcs below
       : wallData.thickness; // raw fallback
-    if (!thickness) return null; // Skip if no thickness found
+    // Missing thickness: register RFI and include as placeholder (do NOT silently drop)
+    if (!thickness) {
+      try {
+        const { registerMissingData } = require('./estimator/rfi-generator');
+        registerMissingData({
+          category: 'dimension',
+          description:
+            `Wall '${wallData.id || 'UNKNOWN'}' on storey '${storey.name}' has no thickness. ` +
+            `Required: wall schedule or section detail. Wall included as placeholder.`,
+          csiDivision: '03 00 00', impact: 'medium',
+          drawingRef: `Floor plan — Wall ${wallData.id || 'UNKNOWN'}, Storey ${storey.name}`,
+          costImpactLow: 0, costImpactHigh: 0,
+          assumptionUsed: 'thickness_null_rfi',
+          discoveredBy: 'createWallElement',
+        });
+      } catch { /* non-fatal */ }
+      thickness = null; // Keeps the wall in the model with null thickness
+    }
     
     // Calculate wall center and dimensions
     const centerX = (start.x + end.x) / 2;
@@ -1697,20 +1754,32 @@ MANDATORY EXTRACTION REQUIREMENTS:
    *      NOT costed, clearly flagged as unresolved)
    */
   private createDoorElement(doorData: any, storey: StoreyData): RealBIMElement | null {
-    if (doorData.x == null || doorData.y == null) {
+    // Position: include door even if x/y unknown — flag as RFI placeholder (do NOT exclude)
+    let x = doorData.x;
+    let y = doorData.y;
+    const positionMissing = (x == null || y == null);
+    if (positionMissing) {
       try {
         registerMissingData({ category: 'drawing', csiDivision: '08 00 00', impact: 'high',
-          description: `Door '${doorData.id || 'UNKNOWN'}' on storey '${storey.name}' has no x/y coordinates. Door excluded.`,
+          description: `Door '${doorData.id || 'UNKNOWN'}' on storey '${storey.name}' has no x/y coordinates. ` +
+            `Required: floor plan door symbol position. Door included as RFI placeholder at (0,0).`,
           drawingRef: `Floor plan — Door ${doorData.id || 'UNKNOWN'}`, costImpactLow: 0, costImpactHigh: 0,
-          assumptionUsed: 'door_excluded_no_coordinates', discoveredBy: 'createDoorElement' }); } catch { /* non-fatal */ }
-      return null;
+          assumptionUsed: 'door_position_unknown_rfi', discoveredBy: 'createDoorElement' }); } catch { /* non-fatal */ }
+      x = 0; y = 0;
     }
-    const x = doorData.x;
-    const y = doorData.y ?? 0;  // Bug-D: x/y null already checked above, doorY fallback
 
-    // Width is required — cannot place door without it
-    if (!doorData.width) return null;
-    const width = toMetres(doorData.width, 'dimension') ?? (doorData.width / 1000);
+    // Width: include as RFI placeholder if missing, do not silently drop
+    let width: number | null = null;
+    if (doorData.width) {
+      width = toMetres(doorData.width, 'dimension') ?? (doorData.width / 1000);
+    } else {
+      try {
+        registerMissingData({ category: 'dimension', csiDivision: '08 14 00', impact: 'high',
+          description: `Door '${doorData.id || 'UNKNOWN'}' on storey '${storey.name}' has no width. ` +
+            `Required: door schedule. Door included as RFI placeholder.`,
+          drawingRef: `Door schedule — Door ${doorData.id || 'UNKNOWN'}`, costImpactLow: 0, costImpactHigh: 0,
+          assumptionUsed: 'none — rfi_placeholder_only', discoveredBy: 'createDoorElement' }); } catch { /* non-fatal */ }
+    }
     // Height: must come from door schedule — NO assumed values
     const heightRaw = doorData.height != null
       ? (toMetres(doorData.height, 'dimension') ?? (doorData.height / 1000))
@@ -1803,7 +1872,7 @@ MANDATORY EXTRACTION REQUIREMENTS:
           length: width,
           width:  thicknessM ?? null,
           height: heightRaw,                 // null propagates — viewer renders as point marker
-          area:   heightRaw != null ? width * heightRaw : null,
+          area:   (heightRaw != null && width != null) ? width * heightRaw : null,
           volume: null,                      // never calculated when any dimension is missing
         },
       },
@@ -1835,9 +1904,18 @@ MANDATORY EXTRACTION REQUIREMENTS:
     const x = winData.x;
     const y = winData.y ?? 0;  // Bug-D: x/y null already checked above, winY fallback
 
-    // Width is required — cannot place window without it
-    if (!winData.width) return null;
-    const width = toMetres(winData.width, 'dimension') ?? (winData.width / 1000);
+    // Width: include as RFI placeholder if missing, do not silently drop
+    let width: number | null = null;
+    if (winData.width) {
+      width = toMetres(winData.width, 'dimension') ?? (winData.width / 1000);
+    } else {
+      try {
+        registerMissingData({ category: 'dimension', csiDivision: '08 50 00', impact: 'high',
+          description: `Window '${winData.id || 'UNKNOWN'}' on storey '${storey.name}' has no width. ` +
+            `Required: window schedule. Window included as RFI placeholder.`,
+          drawingRef: `Window schedule — Window ${winData.id || 'UNKNOWN'}`, costImpactLow: 0, costImpactHigh: 0,
+          assumptionUsed: 'none — rfi_placeholder_only', discoveredBy: 'createWindowElement' }); } catch { /* non-fatal */ }
+    }
     // Height: must come from window schedule — NO assumed values
     const heightRaw = winData.height != null
       ? (toMetres(winData.height, 'dimension') ?? (winData.height / 1000))
@@ -1912,8 +1990,10 @@ MANDATORY EXTRACTION REQUIREMENTS:
     }
 
     const heightMissing = heightRaw === null;
-    const isRfiFlagged = sillRfi || depthRfi || heightMissing;
+    const widthMissing = width === null;
+    const isRfiFlagged = sillRfi || depthRfi || heightMissing || widthMissing;
     const attentionParts: string[] = [];
+    if (widthMissing)  attentionParts.push('window width not found in schedule');
     if (heightMissing) attentionParts.push('window height not found in schedule');
     if (sillRfi)       attentionParts.push('sill height not found in drawings');
     if (depthRfi)      attentionParts.push('frame depth not found in window schedule');
@@ -1944,7 +2024,7 @@ MANDATORY EXTRACTION REQUIREMENTS:
           length: width,
           width:  frameDepth ?? null,
           height: heightRaw,              // null propagates — viewer renders as point marker
-          area:   heightRaw != null ? width * heightRaw : null,
+          area:   (heightRaw != null && width != null) ? width * heightRaw : null,
           volume: null,                   // never calculated when any dimension is missing
         },
       },
@@ -1953,6 +2033,86 @@ MANDATORY EXTRACTION REQUIREMENTS:
         metric:   [{ type: 'count', value: 1, unit: 'ea', name: 'Window Count',
                      source: isRfiFlagged ? 'rfi_placeholder' : 'ai_extracted' }],
         imperial: [{ type: 'count', value: 1, unit: 'ea', name: 'Window Count',
+                     source: isRfiFlagged ? 'rfi_placeholder' : 'ai_extracted' }],
+      },
+      storey: { name: storey.name, elevation: storey.elevation },
+    };
+  }
+
+  /**
+   * 🏠 Create room/space element (apartment unit, corridor, common area, etc.)
+   * Critical for apartment buildings — unit count drives the estimate.
+   * Rooms must always be included even if boundary is incomplete (flag as RFI).
+   */
+  private createRoomElement(roomData: any, storey: StoreyData): RealBIMElement | null {
+    const name = roomData.name || roomData.id || 'Space';
+    const boundary: Array<{x: number; y: number}> = Array.isArray(roomData.boundary) ? roomData.boundary : [];
+
+    // Compute centroid from boundary (or fall back to 0,0 as RFI placeholder)
+    let centroidX = 0, centroidY = 0, areaM2: number | null = null;
+    const isRfiFlagged = boundary.length < 3;
+
+    if (boundary.length >= 3) {
+      centroidX = boundary.reduce((s, p) => s + p.x, 0) / boundary.length;
+      centroidY = boundary.reduce((s, p) => s + p.y, 0) / boundary.length;
+      // Shoelace area
+      let area = 0;
+      for (let i = 0; i < boundary.length; i++) {
+        const j = (i + 1) % boundary.length;
+        area += boundary[i].x * boundary[j].y;
+        area -= boundary[j].x * boundary[i].y;
+      }
+      areaM2 = roomData.area_m2 != null ? Number(roomData.area_m2) : Math.abs(area) / 2;
+    } else {
+      try {
+        const { registerMissingData } = require('./estimator/rfi-generator');
+        registerMissingData({
+          category: 'drawing', csiDivision: '01 00 00', impact: 'medium',
+          description: `Room/space '${name}' on storey '${storey.name}' has no boundary polygon. ` +
+            `Required: floor plan with room boundary. Room included as placeholder.`,
+          drawingRef: `Floor plan — Room ${roomData.id || 'UNKNOWN'}, Storey ${storey.name}`,
+          costImpactLow: 0, costImpactHigh: 0, assumptionUsed: 'room_centroid_unknown',
+          discoveredBy: 'createRoomElement',
+        });
+      } catch { /* non-fatal */ }
+    }
+
+    const ceilingH = roomData.ceiling_height != null
+      ? (toMetres(roomData.ceiling_height, 'dimension') ?? Number(roomData.ceiling_height))
+      : null;
+
+    return {
+      id: roomData.id || `room-${storey.name}-${Date.now()}`,
+      type: 'space',
+      name: `${name} — ${storey.name}`,
+      category: 'Architectural',
+      properties: {
+        element_type: 'space',
+        room_type: roomData.type || 'room',
+        area_m2: areaM2,
+        ceiling_height_m: ceilingH,
+        exclude_from_boq: isRfiFlagged,
+        rfi_flag: isRfiFlagged,
+        attention_required: isRfiFlagged ? 'boundary polygon missing — verify from floor plan' : undefined,
+        source: isRfiFlagged ? 'rfi_placeholder' : 'ai_extracted',
+      },
+      geometry: {
+        type: 'box',
+        position: { x: centroidX, y: centroidY, z: storey.elevation },
+        dimensions: {
+          width: areaM2 ? Math.sqrt(areaM2) : null,
+          height: ceilingH,
+          depth: areaM2 ? Math.sqrt(areaM2) : null,
+        },
+        location: { realLocation: { x: centroidX, y: centroidY, z: storey.elevation } },
+      },
+      location: storey.name,
+      material: null,
+      quantity: areaM2,
+      quantities: {
+        metric: [{ type: 'area', value: areaM2 ?? 0, unit: 'm²', name: 'Floor Area',
+                   source: isRfiFlagged ? 'rfi_placeholder' : 'ai_extracted' }],
+        imperial: [{ type: 'area', value: areaM2 != null ? areaM2 * 10.7639 : 0, unit: 'ft²', name: 'Floor Area',
                      source: isRfiFlagged ? 'rfi_placeholder' : 'ai_extracted' }],
       },
       storey: { name: storey.name, elevation: storey.elevation },
