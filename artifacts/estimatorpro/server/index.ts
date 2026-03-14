@@ -47,7 +47,10 @@ app.use(setupSecureCookies);
 // Legacy security headers (backwards compatibility)
 app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "DENY");
+  // X-Frame-Options: allow embedding in Replit preview iframe (dev); deny in production
+  if (process.env.NODE_ENV !== "development") {
+    res.setHeader("X-Frame-Options", "DENY");
+  }
   res.setHeader("X-XSS-Protection", "1; mode=block");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.removeHeader("X-Powered-By");
@@ -57,11 +60,21 @@ app.use((_req, res, next) => {
   next();
 });
 
-// CORS — SECURITY: Never allow wildcard origin with credentials
+// CORS — allow Replit preview domains in development; lock down in production
 app.use(cors({
-  origin: (process.env.CLIENT_ORIGIN && process.env.CLIENT_ORIGIN !== "*")
-    ? process.env.CLIENT_ORIGIN
-    : (process.env.NODE_ENV === "development" ? "http://localhost:5000" : false),
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true); // server-to-server / curl
+    if (process.env.CLIENT_ORIGIN && process.env.CLIENT_ORIGIN !== "*") {
+      return callback(null, origin === process.env.CLIENT_ORIGIN);
+    }
+    if (process.env.NODE_ENV === "development") {
+      // Allow all replit.dev preview domains and localhost
+      if (/\.replit\.dev$/.test(origin) || /^https?:\/\/localhost(:\d+)?$/.test(origin)) {
+        return callback(null, true);
+      }
+    }
+    return callback(null, false);
+  },
   credentials: true,
   optionsSuccessStatus: 200,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -200,7 +213,7 @@ app.use("/api", authenticateToken, reportRouter);
 app.use("/api/verification", authenticateToken, verificationRouter);
 
 // Processing status — SECURITY FIX: Added authenticateToken
-app.use(authenticateToken, processingStatusRouter);
+app.use("/api", authenticateToken, processingStatusRouter);
 
 // ── Background services ───────────────────────────────────────────────────────
 startSimilarityEvictionScheduler();
