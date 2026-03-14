@@ -178,8 +178,10 @@ export const documents = pgTable("documents", {
   vectorHints: jsonb("vector_hints"),  // optional: grids/levels parsed later
 
   analysisResult: jsonb("analysis_result"),
-  reviewStatus: text("review_status").default("draft"), // draft, pending_review, approved, rejected
+  reviewStatus: text("review_status").default("draft"), // draft, approved, rejected
   reviewedAt: timestamp("reviewed_at"),
+  assignedReviewerId: varchar("assigned_reviewer_id").references(() => users.id, { onDelete: "set null" }),
+  assignedReviewerNote: text("assigned_reviewer_note"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => ({

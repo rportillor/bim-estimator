@@ -3472,13 +3472,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put('/api/documents/:documentId', authenticateToken, async (req, res) => {
     try {
       const { documentId } = req.params;
-      const { reviewStatus } = req.body;
+      const { reviewStatus, assignedReviewerId, assignedReviewerNote } = req.body;
       const doc = await storage.getDocument(documentId);
       if (!doc) return res.status(404).json({ error: 'Document not found' });
       const isReviewAction = reviewStatus === 'approved' || reviewStatus === 'rejected';
       const updated = await storage.updateDocument(documentId, {
         ...(reviewStatus !== undefined ? { reviewStatus } : {}),
         ...(isReviewAction ? { reviewedAt: new Date() } : {}),
+        ...(assignedReviewerId !== undefined ? { assignedReviewerId: assignedReviewerId || null } : {}),
+        ...(assignedReviewerNote !== undefined ? { assignedReviewerNote: assignedReviewerNote || null } : {}),
         updatedAt: new Date(),
       });
       res.json(updated);
@@ -4565,6 +4567,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error('Error fetching documents:', error);
       res.status(500).json({ error: 'Failed to fetch documents' });
+    }
+  });
+
+  // List all users (for reviewer picker — returns only safe public fields)
+  app.get('/api/users', authenticateToken, async (req, res) => {
+    try {
+      const allUsers = await storage.getAllUsers();
+      const safeUsers = allUsers.map(u => ({ id: u.id, username: u.username, name: u.name, role: u.role }));
+      res.json(safeUsers);
+    } catch (err) {
+      console.error('GET /api/users error:', err);
+      res.status(500).json({ error: 'Failed to fetch users' });
     }
   });
 
