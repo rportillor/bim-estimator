@@ -941,6 +941,13 @@ export class BIMGenerator {
               buildingDimensions: analysisStrategy?.building_analysis?.dimensions,
               gridSystem: analysisStrategy?.building_analysis?.grid_system,
               spatialCoordinates: analysisStrategy?.building_analysis?.coordinates,
+
+              // CRITICAL FIX: pass all PDF storage keys so all 36 drawings are
+              // analyzed, not just the single documentPath file.
+              allDocumentStorageKeys: documents
+                .filter((d: any) => (d.fileType || '').toLowerCase().includes('pdf'))
+                .map((d: any) => d.storageKey || d.filename)
+                .filter(Boolean),
             } as any
           );
         }
@@ -1182,6 +1189,28 @@ export class BIMGenerator {
       const elementsPositioned = elements; // elements from buildElementsFromClaude above
 
       console.log(`📦 ${elementsPositioned.length} elements → postprocessor`);
+
+      // ── GUARD: Never wipe existing elements with an empty new extraction ──
+      // If the new run produced 0 elements, the existing DB elements are already
+      // the best available data. Skip the postprocessor (which would overwrite
+      // them with nothing) and mark the model complete with the existing count.
+      if (elementsPositioned.length === 0) {
+        const existingCount = await storage.getBimElements(modelId).then(e => e.length).catch(() => 0);
+        if (existingCount > 0) {
+          console.log(
+            `🛡️ ZERO-ELEMENT GUARD: new extraction produced 0 elements — ` +
+            `preserving ${existingCount} existing elements unchanged. ` +
+            `Re-extraction will be retried when new drawing data is available.`
+          );
+          await _status({ progress: 1.0, message: `Model preserved with ${existingCount} existing elements` });
+          return {
+            modelId,
+            elementCount: existingCount,
+            status: 'completed',
+            message: `Preserved ${existingCount} existing elements — new extraction yielded 0 placeable elements`,
+          };
+        }
+      }
 
       // ── ITERATIVE REFINEMENT: Diff against previous extraction ──────────
       // If the model had existing elements, merge new extraction results
@@ -2570,6 +2599,19 @@ Return comprehensive analysis with ALL discovered elements and cross-document co
       qtoOptions.extractedProducts = workflowResult.products;
       qtoOptions.extractedAssemblies = workflowResult.assemblies;
       qtoOptions.workflowElements = workflowResult.elements;
+
+      // CRITICAL FIX: Pass all PDF storage keys so analyzePDFForBuildingGeometry
+      // processes ALL 36 documents (not just the 1 documentPath file).
+      // Without this, batch-1/1 means only 1-4 PDFs are analyzed instead of 36.
+      // When workflowElements is empty, the RealQTO processor falls through to
+      // the PDF-buffer batching loop which requires allDocumentStorageKeys to pick
+      // up the full drawing set.
+      qtoOptions.allDocumentStorageKeys = (documents as any[])
+        .filter((d: any) => (d.fileType || '').toLowerCase().includes('pdf'))
+        .map((d: any) => d.storageKey || d.filename)
+        .filter(Boolean);
+      
+      console.log(`📐 Passing ${qtoOptions.allDocumentStorageKeys.length} PDF storage keys to RealQTO for full drawing set analysis`);
       
       // Now process with RealQTO using the product knowledge
       const realQTOResult = await this.realQTOProcessor.processRealBIMData(

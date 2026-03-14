@@ -229,8 +229,27 @@ export class ConstructionWorkflowProcessor {
       if (elementsToSave.length === 0) {
         logger.warn(`saveElementsAsBimElements: no placeable elements (${skippedCount.noCoords} skipped — no real coordinates)`);
       } else {
-        await storage.upsertBimElements(modelId, elementsToSave);
-        logger.info(`Upserted ${elementsToSave.length} placed elements (${skippedCount.noCoords} skipped — no coords)`);
+        // GUARD: Never reduce the element count — only allow saves that ADD elements.
+        // upsertBimElements does DELETE + INSERT, so saving 2 new elements would wipe
+        // 604 existing ones. Instead, only replace if count is growing or equal.
+        const existingCount = await storage.getBimElements(modelId).then((e: any[]) => e.length).catch(() => 0);
+        if (existingCount > elementsToSave.length) {
+          // Fewer new elements than existing — do a merge-only: filter out IDs already
+          // in the DB and insert only the genuinely new ones without touching existing.
+          const existingEls = await storage.getBimElements(modelId);
+          const existingIds = new Set((existingEls as any[]).map((e: any) => e.elementId || e.id));
+          const trulyNew = elementsToSave.filter((e: any) => !existingIds.has(e.id || e.elementId));
+          if (trulyNew.length > 0) {
+            // Insert only the new elements, preserving existing
+            await storage.upsertBimElements(modelId, [...existingEls, ...trulyNew]);
+            logger.info(`Merged ${trulyNew.length} new placed elements into ${existingCount} existing (total: ${existingCount + trulyNew.length})`);
+          } else {
+            logger.warn(`saveElementsAsBimElements: GUARD — ${elementsToSave.length} new < ${existingCount} existing, all already present — skipping save`);
+          }
+        } else {
+          await storage.upsertBimElements(modelId, elementsToSave);
+          logger.info(`Upserted ${elementsToSave.length} placed elements (${skippedCount.noCoords} skipped — no coords)`);
+        }
         const sample = elementsToSave.slice(0, 3);
         for (const el of sample) {
           const p = el.geometry.location.realLocation;
