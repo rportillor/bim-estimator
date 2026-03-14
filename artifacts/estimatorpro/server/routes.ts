@@ -3493,7 +3493,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete('/api/documents/:documentId', authenticateToken, async (req, res) => {
     try {
       const { documentId } = req.params;
-      res.json({ message: `Document ${documentId} deleted` });
+      const doc = await storage.getDocument(documentId);
+      if (!doc) return res.status(404).json({ error: 'Document not found' });
+      const success = await storage.deleteDocument(documentId);
+      if (!success) return res.status(500).json({ error: 'Failed to delete document' });
+      res.json({ message: 'Document deleted successfully', documentId });
     } catch (_error) {
       res.status(500).json({ error: "Failed to delete document" });
     }

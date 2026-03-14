@@ -6,12 +6,13 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Textarea } from '@/components/ui/textarea';
 import {
   Search, Filter, FileText, Calendar, FolderOpen, Download, Eye,
   AlertTriangle, History, Grid, List, SortAsc, SortDesc,
   Cpu, UserCheck, Users, X, MessageSquare, ChevronDown, ChevronUp,
-  CheckCheck, HelpCircle, AlertCircle, Send, ArrowUpCircle, FileSearch,
+  CheckCheck, HelpCircle, AlertCircle, Send, ArrowUpCircle, FileSearch, Trash2,
 } from 'lucide-react';
 
 import { UserAccessPanel } from '@/components/documents/UserAccessPanel';
@@ -360,6 +361,7 @@ export default function Documents() {
   const [reviewerNote, setReviewerNote] = useState<string>('');
   const [textViewerDocId, setTextViewerDocId] = useState<string | null>(null);
   const [textSearch, setTextSearch] = useState<string>('');
+  const [deletingDoc, setDeletingDoc] = useState<{ id: string; name: string } | null>(null);
 
   const toggleComments = (id: string) =>
     setExpandedComments(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -412,6 +414,22 @@ export default function Documents() {
       setAssignDialog(null); setSelectedReviewerId(''); setReviewerNote('');
     },
     onError: () => toast({ title: 'Assignment failed', variant: 'destructive' }),
+  });
+
+  const deleteDocument = useMutation({
+    mutationFn: async (documentId: string) => {
+      const res = await fetch(`/api/documents/${documentId}`, {
+        method: 'DELETE', headers: authHeaders(),
+      });
+      if (!res.ok) throw new Error('Failed to delete document');
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/documents'] });
+      toast({ title: 'Document deleted', description: 'The drawing has been permanently removed.' });
+      setDeletingDoc(null);
+    },
+    onError: () => toast({ title: 'Delete failed', description: 'Could not delete the document. Please try again.', variant: 'destructive' }),
   });
 
   // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -694,6 +712,15 @@ export default function Documents() {
                             <FileSearch className="w-4 h-4 mr-1.5" />Extracted Text
                           </Button>
                         )}
+                        <Button
+                          variant="ghost" size="sm"
+                          onClick={() => setDeletingDoc({ id: doc.id, name: doc.name })}
+                          data-testid={`delete-${doc.id}`}
+                          className="h-9 text-red-500 hover:text-red-700 hover:bg-red-50 shrink-0"
+                          title="Delete drawing"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
                       </div>
 
                       {/* Metadata row */}
@@ -768,6 +795,7 @@ export default function Documents() {
                       <Button variant="ghost" size="sm" onClick={() => handleViewDocument(doc.projectId, doc.id, doc.name)} data-testid={`view-${doc.id}`}><Eye className="w-4 h-4" /></Button>
                       <Button variant="ghost" size="sm" onClick={() => handleDownloadDocument(doc.projectId, doc.id, doc.name)} data-testid={`download-${doc.id}`}><Download className="w-4 h-4" /></Button>
                       <Button variant="ghost" size="sm" onClick={() => openAssignDialog(doc)} className="text-violet-600"><UserCheck className="w-4 h-4" /></Button>
+                      <Button variant="ghost" size="sm" onClick={() => setDeletingDoc({ id: doc.id, name: doc.name })} data-testid={`delete-${doc.id}`} className="text-red-500 hover:text-red-700 hover:bg-red-50" title="Delete drawing"><Trash2 className="w-4 h-4" /></Button>
                     </div>
                   </CardContent>
                 </Card>
@@ -883,6 +911,32 @@ export default function Documents() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ── Delete Confirmation Dialog ──────────────────────────────────────── */}
+      <AlertDialog open={!!deletingDoc} onOpenChange={open => { if (!open) setDeletingDoc(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-red-700">
+              <Trash2 className="w-5 h-5" />Delete Drawing
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              <span className="block">Are you sure you want to permanently delete this drawing?</span>
+              <span className="block font-medium text-gray-800 break-all">{deletingDoc?.name}</span>
+              <span className="block text-red-600 text-sm">This cannot be undone. Any extracted text and comments on this document will also be removed.</span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteDocument.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deletingDoc && deleteDocument.mutate(deletingDoc.id)}
+              disabled={deleteDocument.isPending}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              {deleteDocument.isPending ? 'Deleting…' : 'Yes, delete it'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
