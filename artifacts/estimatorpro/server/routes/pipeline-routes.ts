@@ -15,7 +15,6 @@ import { logger } from '../utils/enterprise-logger';
 import { SequentialPipeline } from '../pipeline/sequential-pipeline';
 import type { GridData, PipelineState } from '../pipeline/stage-types';
 import { updateModelStatus } from '../services/model-status';
-
 export const pipelineRouter = Router();
 
 // ---------------------------------------------------------------------------
@@ -23,7 +22,7 @@ export const pipelineRouter = Router();
 // Start the sequential pipeline for a project.
 // Body: { modelName?: string }
 // ---------------------------------------------------------------------------
-pipelineRouter.post('/api/bim/pipeline/:projectId/start', async (req: Request, res: Response) => {
+pipelineRouter.post('/:projectId/start', async (req: Request, res: Response) => {
   const { projectId } = req.params;
   const { modelName } = req.body || {};
 
@@ -105,7 +104,7 @@ pipelineRouter.post('/api/bim/pipeline/:projectId/start', async (req: Request, r
 // GET /api/bim/pipeline/:modelId/status
 // Returns the current pipeline state: stage, results, timings, errors.
 // ---------------------------------------------------------------------------
-pipelineRouter.get('/api/bim/pipeline/:modelId/status', async (req: Request, res: Response) => {
+pipelineRouter.get('/:modelId/status', async (req: Request, res: Response) => {
   const { modelId } = req.params;
 
   try {
@@ -144,7 +143,7 @@ pipelineRouter.get('/api/bim/pipeline/:modelId/status', async (req: Request, res
 // Confirm (and optionally edit) the extracted grid, then resume the pipeline.
 // Body: GridData (with confirmed: true)
 // ---------------------------------------------------------------------------
-pipelineRouter.post('/api/bim/pipeline/:modelId/confirm-grid', async (req: Request, res: Response) => {
+pipelineRouter.post('/:modelId/confirm-grid', async (req: Request, res: Response) => {
   const { modelId } = req.params;
   const gridInput = req.body;
 
@@ -237,7 +236,7 @@ pipelineRouter.post('/api/bim/pipeline/:modelId/confirm-grid', async (req: Reque
 // Run enrichment pass on existing elements (Path B - The Moorings).
 // Extracts schedules/sections/specs, then matches to existing BIM elements.
 // ---------------------------------------------------------------------------
-pipelineRouter.post('/api/bim/pipeline/:modelId/enrich', async (req: Request, res: Response) => {
+pipelineRouter.post('/:modelId/enrich', async (req: Request, res: Response) => {
   const { modelId } = req.params;
 
   try {
@@ -304,7 +303,7 @@ pipelineRouter.post('/api/bim/pipeline/:modelId/enrich', async (req: Request, re
 // batch2 (floor plans): runs full pipeline stages 4-5 with floor plan docs
 //   → grid extraction + element placement using confirmed gridlines
 // ---------------------------------------------------------------------------
-pipelineRouter.post('/api/bim/pipeline/:modelId/run-batch', async (req: Request, res: Response) => {
+pipelineRouter.post('/:modelId/run-batch', async (req: Request, res: Response) => {
   const { modelId } = req.params;
   const { batch } = req.body || {};
 
@@ -476,7 +475,7 @@ pipelineRouter.post('/api/bim/pipeline/:modelId/run-batch', async (req: Request,
 // Inserts the 47 user-confirmed gridlines (28 alpha + 19 numeric) into the 10-table
 // grid hierarchy, using the BIM element bounding box to derive real-world coordinates.
 // Idempotent — deletes and rebuilds if called more than once on the same model.
-pipelineRouter.post('/api/bim/pipeline/:modelId/save-confirmed-gridlines', async (req: Request, res: Response) => {
+pipelineRouter.post('/:modelId/save-confirmed-gridlines', async (req: Request, res: Response) => {
   const { modelId } = req.params;
 
   // These are the user-verified gridlines for The Moorings (confirmed from drawings).
