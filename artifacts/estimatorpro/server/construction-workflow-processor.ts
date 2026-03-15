@@ -883,6 +883,9 @@ export class ConstructionWorkflowProcessor {
       statusCallback?: (progress: number, message: string) => Promise<void>;
     }
   ): Promise<any> {
+    // Extract modelId early so it's available throughout the entire function
+    // (including the storey-elevation sanity check below that calls storage.getBimStoreys)
+    const modelId = options?.modelId;
     const batchInfo = options ? ` (Batch ${options.batch}/${options.totalBatches})` : '';
 
     // ── Populate storey elevation map from Claude's analysis ─────────────────
@@ -976,8 +979,6 @@ export class ConstructionWorkflowProcessor {
       this.clearState();
     }
     
-    // Use the modelId passed from the route (which already created the model)
-    const modelId = options?.modelId;
     if (!modelId) {
       throw new Error('Model ID is required for construction workflow processing');
     }

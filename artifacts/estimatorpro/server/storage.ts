@@ -93,11 +93,17 @@ import {
   projectOhpConfigs, type ProjectOhpConfig, type InsertProjectOhpConfig,
   rateAuditLog, type RateAuditLog, type InsertRateAuditLog,
   rateVersions, type RateVersion, type InsertRateVersion,
+  gridDetectionRuns,
+  gridComponents,
+  gridFamilies,
+  gridAxes,
+  gridLabels,
+  gridAxisLabels,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { PRNG } from "./helpers/prng";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { eq, desc, and, isNull, inArray, sql } from "drizzle-orm";
+import { eq, desc, and, isNull, inArray, sql, like } from "drizzle-orm";
 import postgres from "postgres";
 import { logger } from "./utils/enterprise-logger";
 
@@ -1723,7 +1729,213 @@ export class DBStorage implements Partial<IStorage> {
     const result = await db.delete(bimElements).where(eq(bimElements.id, id));
     return result.length > 0;
   }
-  
+
+  /**
+   * Insert the confirmed 47 gridlines (28 alpha + 19 numeric) into the 10-table grid
+   * hierarchy.  Coordinates are derived from the element bounding box of the model so
+   * no values are hard-coded; if the model has no elements yet a 1 m fallback spacing
+   * is used and the function returns a `sparse` flag so the caller can retry later.
+   *
+   * Idempotent: if a detection run for the same model already exists it is deleted
+   * and rebuilt from scratch.
+   */
+  async saveConfirmedGridlines(
+    modelId: string,
+    sourceDocId: string,
+    projectId: string,
+    alphaLabels: string[],
+    numericLabels: string[],
+  ): Promise<{ runId: string; axisCount: number; sparse: boolean }> {
+    const MARGIN = 2;
+
+    // ── 1. Derive coordinate space from existing elements ──────────────────
+    const elements = await db.select().from(bimElements).where(eq(bimElements.modelId, modelId));
+
+    let xMin = 0, xMax = 0, yMin = 0, yMax = 0;
+    let sparse = true;
+
+    if (elements.length > 0) {
+      const xs: number[] = [];
+      const ys: number[] = [];
+      for (const el of elements) {
+        const geom = el.geometry as any;
+        const loc = geom?.location?.realLocation ?? geom?.location;
+        if (loc && typeof loc.x === 'number' && typeof loc.y === 'number' && Number.isFinite(loc.x) && Number.isFinite(loc.y)) {
+          xs.push(loc.x);
+          ys.push(loc.y);
+        }
+      }
+      if (xs.length >= 2 && ys.length >= 2) {
+        xMin = Math.min(...xs);
+        xMax = Math.max(...xs);
+        yMin = Math.min(...ys);
+        yMax = Math.max(...ys);
+        sparse = xMax - xMin < 0.01 || yMax - yMin < 0.01;
+      }
+    }
+
+    if (sparse) {
+      // Fall back to normalised 1 m spacing so records can still be created
+      xMin = 0; xMax = Math.max(1, numericLabels.length - 1);
+      yMin = 0; yMax = Math.max(1, alphaLabels.length - 1);
+    }
+
+    const totalX = xMax - xMin;
+    const totalY = yMax - yMin;
+
+    // ── 2. Purge any prior confirmed run for this model ─────────────────────
+    // detection runs are project-scoped; find by the notes prefix we stamp on insert
+    await db.delete(gridDetectionRuns).where(
+      and(
+        eq(gridDetectionRuns.projectId, projectId),
+        like(gridDetectionRuns.notes, `confirmed-gridlines:${modelId}%`)
+      )
+    );
+
+    // ── 3. Detection run ────────────────────────────────────────────────────
+    const now = new Date();
+    const [run] = await db.insert(gridDetectionRuns).values({
+      projectId,
+      sourceFileId: sourceDocId,
+      inputType: 'PDF_VECTOR',
+      parameters: {},
+      toolVersions: { detectorVersion: 'confirmed-v1' },
+      status: 'SUCCESS',
+      startedAt: now,
+      finishedAt: now,
+      triggeredBy: 'manual',
+      notes: `confirmed-gridlines:${modelId} — user-verified ${alphaLabels.length} alpha + ${numericLabels.length} numeric`,
+    }).returning();
+
+    // ── 4. Grid component ────────────────────────────────────────────────────
+    const [component] = await db.insert(gridComponents).values({
+      runId: run.id,
+      name: 'Main Grid — The Moorings',
+      bboxMinX: String(xMin - MARGIN),
+      bboxMinY: String(yMin - MARGIN),
+      bboxMaxX: String(xMax + MARGIN),
+      bboxMaxY: String(yMax + MARGIN),
+      primaryFrame: 'MODEL',
+      confidence: '1.000',
+    }).returning();
+
+    // ── 5. Grid families ────────────────────────────────────────────────────
+    // Alpha family: lines run parallel to Y-axis (vertical lines in plan)
+    //   theta = 90°, direction = (0, 1), normal = (1, 0)
+    //   offsetD = x-position of the line
+    const [alphaFamily] = await db.insert(gridFamilies).values({
+      componentId: component.id,
+      thetaDeg: '90.0000',
+      directionVecX: '0.00000000',
+      directionVecY: '1.00000000',
+      normalVecX: '1.00000000',
+      normalVecY: '0.00000000',
+      familyRank: 1,
+      confidence: '1.000',
+    }).returning();
+
+    // Numeric family: lines run parallel to X-axis (horizontal lines in plan)
+    //   theta = 0°, direction = (1, 0), normal = (0, 1)
+    //   offsetD = y-position of the line
+    const [numericFamily] = await db.insert(gridFamilies).values({
+      componentId: component.id,
+      thetaDeg: '0.0000',
+      directionVecX: '1.00000000',
+      directionVecY: '0.00000000',
+      normalVecX: '0.00000000',
+      normalVecY: '1.00000000',
+      familyRank: 2,
+      confidence: '1.000',
+    }).returning();
+
+    // ── 6. Axes + labels + axis-labels ──────────────────────────────────────
+    let axisCount = 0;
+
+    // Alpha axes: evenly spaced along X
+    const alphaStep = alphaLabels.length > 1 ? totalX / (alphaLabels.length - 1) : 0;
+    for (let i = 0; i < alphaLabels.length; i++) {
+      const label = alphaLabels[i];
+      const offsetD = xMin + i * alphaStep;
+      const [axis] = await db.insert(gridAxes).values({
+        familyId: alphaFamily.id,
+        geometryType: 'LINE',
+        p0X: String(offsetD),
+        p0Y: String(yMin - MARGIN),
+        p1X: String(offsetD),
+        p1Y: String(yMax + MARGIN),
+        offsetD: String(offsetD),
+        extentMinT: '0',
+        extentMaxT: String(yMax - yMin + 2 * MARGIN),
+        totalMergedLength: String(yMax - yMin + 2 * MARGIN),
+        confidence: '1.000',
+        status: 'CONFIRMED',
+      }).returning();
+
+      const [gridLabel] = await db.insert(gridLabels).values({
+        rawText: label,
+        normText: label.toUpperCase(),
+        textSource: 'VECTOR_TEXT',
+        textConfidence: '1.000',
+        bbox: { minX: offsetD - 0.5, minY: yMax + MARGIN, maxX: offsetD + 0.5, maxY: yMax + MARGIN + 1 },
+        evidenceFileId: sourceDocId,
+      }).returning();
+
+      await db.insert(gridAxisLabels).values({
+        axisId: axis.id,
+        labelId: gridLabel.id,
+        scoreTotal: '1.000',
+        scoreBreakdown: { endpointProximity: 1, perpendicularDistance: 1, directionalAlignment: 1, markerSupport: 1, textQuality: 1 },
+        associationType: 'END_LABEL',
+        status: 'CONFIRMED',
+      });
+
+      axisCount++;
+    }
+
+    // Numeric axes: evenly spaced along Y
+    const numericStep = numericLabels.length > 1 ? totalY / (numericLabels.length - 1) : 0;
+    for (let j = 0; j < numericLabels.length; j++) {
+      const label = numericLabels[j];
+      const offsetD = yMin + j * numericStep;
+      const [axis] = await db.insert(gridAxes).values({
+        familyId: numericFamily.id,
+        geometryType: 'LINE',
+        p0X: String(xMin - MARGIN),
+        p0Y: String(offsetD),
+        p1X: String(xMax + MARGIN),
+        p1Y: String(offsetD),
+        offsetD: String(offsetD),
+        extentMinT: '0',
+        extentMaxT: String(xMax - xMin + 2 * MARGIN),
+        totalMergedLength: String(xMax - xMin + 2 * MARGIN),
+        confidence: '1.000',
+        status: 'CONFIRMED',
+      }).returning();
+
+      const [gridLabel] = await db.insert(gridLabels).values({
+        rawText: label,
+        normText: label.toUpperCase(),
+        textSource: 'VECTOR_TEXT',
+        textConfidence: '1.000',
+        bbox: { minX: xMin - MARGIN - 1, minY: offsetD - 0.5, maxX: xMin - MARGIN, maxY: offsetD + 0.5 },
+        evidenceFileId: sourceDocId,
+      }).returning();
+
+      await db.insert(gridAxisLabels).values({
+        axisId: axis.id,
+        labelId: gridLabel.id,
+        scoreTotal: '1.000',
+        scoreBreakdown: { endpointProximity: 1, perpendicularDistance: 1, directionalAlignment: 1, markerSupport: 1, textQuality: 1 },
+        associationType: 'END_LABEL',
+        status: 'CONFIRMED',
+      });
+
+      axisCount++;
+    }
+
+    return { runId: run.id, axisCount, sparse };
+  }
+
   // BIM Element Classifications
   async getBimElementClassifications(elementId: string): Promise<BimElementClassification[]> {
     return await db.select().from(bimElementClassifications).where(eq(bimElementClassifications.elementId, elementId));

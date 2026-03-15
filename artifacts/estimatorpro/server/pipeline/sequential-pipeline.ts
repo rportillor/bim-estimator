@@ -171,6 +171,22 @@ export class SequentialPipeline {
     this.state.currentStage = 'FAILED';
   }
 
+  /**
+   * Reset pipeline state back to the initial SCHEDULES stage, clearing all
+   * previous stage results. Saves to DB so the next run() call starts fresh.
+   * Required for Batch 2 re-runs when a previous COMPLETE state is saved.
+   */
+  async resetState(): Promise<void> {
+    this.state = {
+      version: 2,
+      currentStage: 'SCHEDULES',
+      stageResults: {},
+      stageTimings: {},
+    };
+    await this.saveState();
+    logger.info('Pipeline state reset to SCHEDULES', { modelId: this.modelId });
+  }
+
   // ------------------------------------------------------------------
   // Main entry point
   // ------------------------------------------------------------------
@@ -243,12 +259,20 @@ export class SequentialPipeline {
 
   /**
    * Resume after grid confirmation. Called from the confirm-grid endpoint.
+   * @param confirmedGrid - The confirmed grid data
+   * @param statusCallback - Status update callback
+   * @param documents - Project documents to use for Stage 5 (floor plan extraction)
    */
   async resume(
     confirmedGrid: GridData,
     statusCallback?: StatusCallback,
+    documents?: Document[],
   ): Promise<PipelineState> {
     const notify = statusCallback || (async () => {});
+
+    if (documents && documents.length > 0) {
+      this.documents = documents;
+    }
 
     this.state.stageResults.grid = confirmedGrid;
     this.state.currentStage = 'FLOOR_PLANS';
@@ -943,55 +967,71 @@ ${text.substring(0, 300000)}`;
     const elements: any[] = Array.isArray(parsed.elements) ? parsed.elements : [];
     const storeys: any[] = Array.isArray(parsed.storeys) ? parsed.storeys : [];
 
-    // Transform elements into the format expected by upsertBimElements
-    const dbElements = elements.map((el: any, idx: number) => ({
-      id: `pipe_${this.modelId}_${idx}`,
-      elementId: `pipe_${this.modelId}_${idx}`,
-      type: el.type || 'unknown',
-      elementType: el.type || 'unknown',
-      name: el.name || `${el.type || 'Element'} ${idx + 1}`,
-      category: el.category || 'Architectural',
-      storey: typeof el.storey === 'string' ? { name: el.storey } : el.storey,
-      storeyName: typeof el.storey === 'string' ? el.storey : el.storey?.name,
-      material: el.material || null,
-      quantity: 1,
-      properties: JSON.stringify({
-        ...el.properties,
-        assemblyCode: el.assemblyCode,
-        mark: el.mark || el.scheduleMark,
-        gridStart: el.gridStart,
-        gridEnd: el.gridEnd,
-        gridNearest: el.gridNearest,
-        offset_m: el.offset_m,
-        hostWall: el.hostWall,
-        fire_rating: el.fire_rating,
-        pipelineStage: 'FLOOR_PLANS',
-      }),
-      geometry: JSON.stringify({
-        dimensions: {
-          width: el.width_mm ? el.width_mm / 1000 : el.length_m || 0,
-          height: el.height_mm ? el.height_mm / 1000 : el.height_m || 0,
-          depth: el.thickness_mm ? el.thickness_mm / 1000 : el.depth_m || 0,
-        },
-      }),
-      location: JSON.stringify({
-        gridStart: el.gridStart,
-        gridEnd: el.gridEnd,
-        gridNearest: el.gridNearest,
-        offset_m: el.offset_m,
-      }),
-    }));
+    // Enrich existing elements with grid coordinates — do NOT delete/replace existing elements.
+    // upsertBimElements does a full DELETE+INSERT so we never call it here.
+    // Instead, load existing elements, match by mark/type/storey, update location only.
+    const existingElements = await storage.getBimElements(this.modelId);
+    let enrichedCount = 0;
 
-    // Write elements to DB
-    if (dbElements.length > 0) {
-      await storage.upsertBimElements(this.modelId, dbElements);
-      logger.info('Stage 5: Elements written to DB', {
-        modelId: this.modelId,
-        elementCount: dbElements.length,
+    for (const el of elements) {
+      const elMark = (el.mark || el.scheduleMark || '').toString().trim().toUpperCase();
+      const elType = (el.type || '').toLowerCase();
+      const elStoreyRaw = typeof el.storey === 'string' ? el.storey : el.storey?.name || '';
+      const elStoreyNorm = elStoreyRaw.toLowerCase().replace(/\s+/g, '');
+
+      const match = existingElements.find((ex) => {
+        const exProps =
+          typeof ex.properties === 'string'
+            ? (() => { try { return JSON.parse(ex.properties as string); } catch { return {}; } })()
+            : (ex.properties as any) || {};
+        const exMark = (
+          exProps.mark ||
+          exProps.tag ||
+          exProps.doorMark ||
+          exProps.windowMark ||
+          ''
+        )
+          .toString()
+          .trim()
+          .toUpperCase();
+        const exStoreyName = (
+          typeof ex.storey === 'string' ? ex.storey : (ex.storey as any)?.name || ''
+        )
+          .toLowerCase()
+          .replace(/\s+/g, '');
+        const typeMatch = (ex.elementType || '').toLowerCase() === elType;
+        if (elMark && exMark) return exMark === elMark && typeMatch;
+        return (
+          typeMatch &&
+          (!elStoreyNorm || exStoreyName.includes(elStoreyNorm) || elStoreyNorm.includes(exStoreyName)) &&
+          (ex.name || '').toLowerCase() === (el.name || '').toLowerCase()
+        );
       });
+
+      if (match) {
+        const existingLoc: any =
+          typeof match.location === 'string'
+            ? (() => { try { return JSON.parse(match.location as string); } catch { return {}; } })()
+            : (match.location as any) || {};
+        await storage.updateBimElement(match.id, {
+          location: JSON.stringify({
+            ...existingLoc,
+            gridStart: el.gridStart,
+            gridEnd: el.gridEnd,
+            gridNearest: el.gridNearest,
+            offset_m: el.offset_m,
+          }) as any,
+        });
+        enrichedCount++;
+      }
     }
 
-    // Write storeys to DB
+    logger.info('Stage 5: Elements written to DB', {
+      modelId: this.modelId,
+      elementCount: enrichedCount,
+    });
+
+    // Write storeys to DB (upsert is safe here — storeys don't cascade-delete elements)
     if (storeys.length > 0) {
       await storage.upsertBimStoreys(this.modelId, storeys);
     }
@@ -999,16 +1039,17 @@ ${text.substring(0, 300000)}`;
     // Update model status
     await storage.updateBimModel(this.modelId, { status: 'completed' });
 
-    this.state.stageResults.floorPlans = { elementCount: dbElements.length };
+    this.state.stageResults.floorPlans = { elementCount: enrichedCount, claudeExtracted: elements.length };
     this.endTiming('FLOOR_PLANS');
     await this.saveState();
 
     logger.info('Stage 5 complete', {
       modelId: this.modelId,
-      elements: dbElements.length,
+      enriched: enrichedCount,
+      claudeExtracted: elements.length,
       storeys: storeys.length,
     });
 
-    await notify(0.95, `Floor plans complete: ${dbElements.length} elements placed, ${storeys.length} storeys`);
+    await notify(0.95, `Floor plans complete: ${enrichedCount} elements enriched with grid data, ${storeys.length} storeys`);
   }
 }

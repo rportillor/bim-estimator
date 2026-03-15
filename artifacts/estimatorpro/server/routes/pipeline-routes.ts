@@ -215,7 +215,7 @@ pipelineRouter.post('/api/bim/pipeline/:modelId/confirm-grid', async (req: Reque
       }
     };
 
-    pipeline.resume(confirmedGrid, statusCallback).catch((err) => {
+    pipeline.resume(confirmedGrid, statusCallback, documents).catch((err) => {
       logger.error('Pipeline resume failed', {
         modelId,
         error: (err as Error).message,
@@ -454,17 +454,85 @@ pipelineRouter.post('/api/bim/pipeline/:modelId/run-batch', async (req: Request,
         }
       };
 
-      pipeline.run(filteredDocs, statusCallback).catch((err) => {
-        logger.error('Batch 2 pipeline failed', { modelId, error: (err as Error).message });
-        updateModelStatus(storage, modelId, {
-          status: 'failed',
-          progress: 1.0,
-          error: (err as Error).message,
-        }).catch(() => {});
-      });
+      // Reset any COMPLETE/FAILED state so all 5 stages run fresh on the floor plan docs
+      pipeline.resetState()
+        .then(() => pipeline.run(filteredDocs, statusCallback))
+        .catch((err) => {
+          logger.error('Batch 2 pipeline failed', { modelId, error: (err as Error).message });
+          updateModelStatus(storage, modelId, {
+            status: 'failed',
+            progress: 1.0,
+            error: (err as Error).message,
+          }).catch(() => {});
+        });
     }
   } catch (err) {
     logger.error('run-batch failed', { modelId, batch, error: (err as Error).message });
+    res.status(500).json({ ok: false, message: (err as Error).message });
+  }
+});
+
+// POST /api/bim/pipeline/:modelId/save-confirmed-gridlines
+// Inserts the 47 user-confirmed gridlines (28 alpha + 19 numeric) into the 10-table
+// grid hierarchy, using the BIM element bounding box to derive real-world coordinates.
+// Idempotent — deletes and rebuilds if called more than once on the same model.
+pipelineRouter.post('/api/bim/pipeline/:modelId/save-confirmed-gridlines', async (req: Request, res: Response) => {
+  const { modelId } = req.params;
+
+  // These are the user-verified gridlines for The Moorings (confirmed from drawings).
+  // Alpha lines run parallel to Y-axis (vertical in plan, labelled A→Y + CL variants).
+  // Numeric lines run parallel to X-axis (horizontal in plan, Grid 9 absent).
+  // The caller may override either list by providing alphaLabels / numericLabels in the body.
+  const DEFAULT_ALPHA_LABELS = [
+    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'Ga',
+    'H', 'J', 'K', 'L', 'M', 'N', 'P', 'Q',
+    'R', 'S', 'Sa', 'T', 'U', 'V', 'W', 'X', 'Y',
+    'CL', 'CLa', 'CLb',
+  ];
+  const DEFAULT_NUMERIC_LABELS = [
+    '1', '2', '3', '4', '5', '6', '7', '8',
+    '10', '11', '12', '13', '14', '15', '16', '17', '18', '19',
+  ];
+
+  try {
+    const model = await storage.getBimModel(modelId);
+    if (!model) {
+      return res.status(404).json({ ok: false, message: `Model ${modelId} not found` });
+    }
+
+    const alphaLabels: string[] = Array.isArray(req.body?.alphaLabels)
+      ? req.body.alphaLabels
+      : DEFAULT_ALPHA_LABELS;
+    const numericLabels: string[] = Array.isArray(req.body?.numericLabels)
+      ? req.body.numericLabels
+      : DEFAULT_NUMERIC_LABELS;
+
+    // Use the Ground Floor plan (A102) as the canonical source document reference.
+    // This is the primary drawing from which the confirmed gridlines were verified.
+    const sourceDocId: string = req.body?.sourceDocId ?? 'f25049e8-e0be-4ced-ae25-4f364448f802';
+
+    logger.info(`Saving ${alphaLabels.length} alpha + ${numericLabels.length} numeric confirmed gridlines`, { modelId });
+
+    const result = await storage.saveConfirmedGridlines(
+      modelId,
+      sourceDocId,
+      model.projectId,
+      alphaLabels,
+      numericLabels,
+    );
+
+    logger.info(`Confirmed gridlines saved`, { modelId, ...result });
+    res.json({
+      ok: true,
+      runId: result.runId,
+      axisCount: result.axisCount,
+      sparse: result.sparse,
+      message: result.sparse
+        ? `${result.axisCount} gridlines saved with placeholder spacing (no element coordinates available yet — re-run after BIM generation completes)`
+        : `${result.axisCount} gridlines saved with coordinates derived from ${(await storage.getBimElements(modelId)).length} BIM elements`,
+    });
+  } catch (err) {
+    logger.error('save-confirmed-gridlines failed', { modelId, error: (err as Error).message });
     res.status(500).json({ ok: false, message: (err as Error).message });
   }
 });

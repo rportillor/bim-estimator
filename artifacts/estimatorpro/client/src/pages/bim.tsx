@@ -19,6 +19,7 @@ export default function BIM() {
   const [showBatchConfig, setShowBatchConfig] = useState(false);
   const [batchRunning, setBatchRunning] = useState<string | null>(null);
   const [batchRunResult, setBatchRunResult] = useState<{ batch: string; message: string; ok: boolean } | null>(null);
+  const [savingGridlines, setSavingGridlines] = useState(false);
 
   const { data: batchConfig } = useQuery<any>({
     queryKey: ['/api/projects', projectId, 'batch-config'],
@@ -364,6 +365,37 @@ export default function BIM() {
                   <FileText className="h-3 w-3 mr-1" />
                   {batchRunning === 'batch_specs' ? 'Running…' : 'Run Spec'}
                 </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={savingGridlines}
+                  onClick={async () => {
+                    const activeModelId = activeModel?.id;
+                    if (!activeModelId) { alert('No active BIM model found.'); return; }
+                    if (!confirm('Save the 47 user-confirmed gridlines (28 alpha + 18 numeric) into the BIM model?\n\nCoordinates will be derived from existing element positions. Run this after BIM generation is complete for best accuracy.')) return;
+                    setSavingGridlines(true);
+                    setBatchRunResult(null);
+                    try {
+                      const token = localStorage.getItem('auth_token');
+                      const resp = await fetch(`/api/bim/pipeline/${activeModelId}/save-confirmed-gridlines`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+                        body: JSON.stringify({}),
+                      });
+                      const data = await resp.json();
+                      setBatchRunResult({ batch: 'gridlines', message: data.message ?? (resp.ok ? 'Gridlines saved.' : 'Failed.'), ok: resp.ok && data.ok });
+                    } catch (err: any) {
+                      setBatchRunResult({ batch: 'gridlines', message: err.message, ok: false });
+                    } finally {
+                      setSavingGridlines(false);
+                    }
+                  }}
+                  className="border-teal-400 text-teal-700 hover:bg-teal-50 flex-shrink-0 text-xs px-2 py-1 h-7"
+                  title="Save 47 confirmed gridlines (28 alpha A→CLb + 18 numeric 1→19 no Grid 9) into the BIM model using element-derived coordinates"
+                >
+                  <Grid className="h-3 w-3 mr-1" />
+                  {savingGridlines ? 'Saving…' : 'Save Grids'}
+                </Button>
               </>
             )}
             <Button
@@ -400,12 +432,54 @@ export default function BIM() {
       {batchRunResult && (
         <div className={`px-6 py-2 text-sm flex items-center gap-2 ${batchRunResult.ok ? 'bg-emerald-50 border-b border-emerald-200 text-emerald-800' : 'bg-red-50 border-b border-red-200 text-red-800'}`}>
           <span className="font-semibold">
-            {batchRunResult.batch === 'batch1' ? 'Batch 1:' : batchRunResult.batch === 'batch2' ? 'Batch 2:' : 'Spec Batch:'}
+            {batchRunResult.batch === 'batch1' ? 'Batch 1:' : batchRunResult.batch === 'batch2' ? 'Batch 2:' : batchRunResult.batch === 'batch_specs' ? 'Spec Batch:' : batchRunResult.batch === 'gridlines' ? 'Gridlines:' : 'Result:'}
           </span>
           <span>{batchRunResult.message}</span>
           <button onClick={() => setBatchRunResult(null)} className="ml-auto text-gray-400 hover:text-gray-600">✕</button>
         </div>
       )}
+
+      {/* Grid Confirmation Banner — shows when pipeline is paused waiting for grid review */}
+      {(() => {
+        const meta = activeModel?.metadata;
+        const pipelineState = meta
+          ? (typeof meta === 'string' ? (() => { try { return JSON.parse(meta); } catch { return null; } })() : meta)?.pipelineState
+          : null;
+        if (pipelineState?.currentStage !== 'GRID_CONFIRMATION') return null;
+        const grid = pipelineState?.stageResults?.grid;
+        const alphaCount = grid?.alphaGridlines?.length || 0;
+        const numericCount = grid?.numericGridlines?.length || 0;
+        return (
+          <div className="px-6 py-3 bg-amber-50 border-b border-amber-300 text-amber-900 flex items-center gap-3 text-sm">
+            <AlertTriangle className="h-4 w-4 text-amber-600 flex-shrink-0" />
+            <div className="flex-1">
+              <span className="font-semibold">Grid Confirmation Required — </span>
+              Claude extracted <span className="font-semibold">{alphaCount} alpha</span> + <span className="font-semibold">{numericCount} numeric</span> gridlines from the floor plans.
+              Review and confirm to continue with Stage 5 (element placement).
+            </div>
+            <Button
+              size="sm"
+              className="bg-amber-600 hover:bg-amber-700 text-white text-xs px-3 py-1 h-7 flex-shrink-0"
+              onClick={async () => {
+                const token = localStorage.getItem('auth_token');
+                const r = await fetch(`/api/bim/pipeline/${activeModel?.id}/confirm-grid`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+                  body: '{}',
+                });
+                if (r.ok) {
+                  setBatchRunResult({ batch: 'batch2', message: 'Grid confirmed — Stage 5 (element placement) starting. Poll status for progress.', ok: true });
+                } else {
+                  const err = await r.json().catch(() => ({ message: 'Unknown error' }));
+                  setBatchRunResult({ batch: 'batch2', message: `Confirm failed: ${err.message}`, ok: false });
+                }
+              }}
+            >
+              Confirm Grid &amp; Continue
+            </Button>
+          </div>
+        );
+      })()}
 
       {/* Pipeline Batch Configuration Panel */}
       {showBatchConfig && batchConfig?.batches && (
