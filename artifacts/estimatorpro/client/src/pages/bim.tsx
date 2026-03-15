@@ -282,6 +282,32 @@ export default function BIM() {
               <AlertTriangle className="h-4 w-4 sm:mr-2" />
               <span className="hidden sm:inline">Missing Data</span>
             </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={async () => {
+                if (!projectId) return;
+                if (!confirm('Clear cached analysis and re-run Claude with updated prompts? This will use API credits.')) return;
+                try {
+                  const token = localStorage.getItem('auth_token');
+                  const resp = await fetch(`/api/projects/${projectId}/clear-analysis-cache`, {
+                    method: 'POST',
+                    headers: { ...(token ? { 'Authorization': `Bearer ${token}` } : {}), 'Content-Type': 'application/json' },
+                  });
+                  if (resp.ok) {
+                    const data = await resp.json();
+                    alert(`${data.message}\n\nClick "Regen" to start fresh analysis.`);
+                  } else {
+                    alert('Failed to clear cache.');
+                  }
+                } catch { alert('Failed to clear cache.'); }
+              }}
+              className="border-red-300 text-red-700 hover:bg-red-50 flex-shrink-0 text-xs px-2 py-1 h-6"
+              title="Clear cached Claude analysis — next regeneration will re-analyze all documents"
+            >
+              <Zap className="h-3 w-3 mr-1" />
+              <span className="hidden sm:inline">Re-analyze</span>
+            </Button>
           </div>
         </div>
       </header>

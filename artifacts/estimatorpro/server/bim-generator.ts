@@ -78,6 +78,8 @@ export interface BIMGenerationRequirements {
   units?: "metric" | "imperial";
   standards?: string[];
   qualityLevel?: "basic" | "professional" | "advanced";
+  /** When true, use the sequential 5-stage pipeline instead of batch processing. */
+  useSequentialPipeline?: boolean;
 }
 
 // ✅ Extended options interface for BIM processing - moved to shared types
@@ -282,20 +284,54 @@ export class BIMGenerator {
     documents: Document[],
     requirements: BIMGenerationRequirements
   ): Promise<BimModel> {
+    // Sequential pipeline path: delegate entirely to SequentialPipeline
+    if (requirements.useSequentialPipeline) {
+      logger.info('Using sequential pipeline for BIM generation', { projectId });
+      const { SequentialPipeline } = await import('./pipeline/sequential-pipeline');
+      // Find or create model
+      const existingModels = await storage.getBimModels(projectId);
+      let model: BimModel;
+      if (existingModels.length > 0) {
+        model = existingModels[0];
+        await storage.updateBimModel(model.id, { status: 'generating' });
+      } else {
+        model = await storage.createBimModel({
+          projectId,
+          name: requirements.modelName || `Sequential Pipeline Model`,
+          status: 'generating',
+          geometryData: null,
+        });
+      }
+      const pipeline = new SequentialPipeline(projectId, model.id);
+      const statusCb = async (progress: number, message: string) => {
+        try {
+          await updateModelStatus(storage, model.id, {
+            status: progress >= 1.0 ? 'completed' : 'generating',
+            progress,
+            message,
+          });
+        } catch { /* non-blocking */ }
+      };
+      await pipeline.run(documents, statusCb);
+      // Re-fetch model to get updated state
+      const updated = await storage.getBimModel(model.id);
+      return updated || model;
+    }
+
     const startTime = new Date();
     logger.info('Starting AI-powered BIM generation', { projectId, startTime: startTime.toISOString() });
-    
+
     // Helper for status updates
     let modelId = '';
     const _status = async (patch: { status?: any; progress?: number; message?: string; error?: string }) => {
       if (!modelId) return;
-      try { 
-        await updateModelStatus(storage, modelId, patch); 
-      } catch (e) { 
-        logger.warn('Status update failed', { error: (e as any)?.message }); 
+      try {
+        await updateModelStatus(storage, modelId, patch);
+      } catch (e) {
+        logger.warn('Status update failed', { error: (e as any)?.message });
       }
     };
-    
+
     // v15.12: Accept lod OR levelOfDetail; never throw — default to 'detailed'
     const lodProfileName: string = (requirements as any)?.lod
       || (requirements as any)?.levelOfDetail

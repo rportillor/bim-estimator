@@ -1699,6 +1699,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const documentData = insertDocumentSchema.parse({
           projectId: req.params.projectId,
           filename: file.filename,
+          storageKey: file.filename,
           originalName: file.originalname,
           fileType: path.extname(file.originalname).toLowerCase(),
           fileSize: file.size,
@@ -4453,6 +4454,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       logger.error("Error saving grid config", { error });
       res.status(500).json({ error: "Failed to save grid configuration" });
+    }
+  });
+
+  // POST /api/projects/:projectId/clear-analysis-cache — forces re-analysis with updated prompts
+  app.post("/api/projects/:projectId/clear-analysis-cache", authenticateToken, async (req: any, res) => {
+    try {
+      const { projectId } = req.params;
+      if (!req.user) return res.status(401).json({ error: "Authentication required" });
+
+      const project = await storage.getProject(projectId);
+      if (!project || project.userId !== req.user.id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      // Clear analysisResult from all project documents to force fresh Claude call
+      const documents = await storage.getDocumentsByProject(projectId);
+      let cleared = 0;
+      for (const doc of documents) {
+        if ((doc as any).analysisResult) {
+          await storage.updateDocument(doc.id, { analysisResult: null } as any);
+          cleared++;
+        }
+      }
+
+      logger.info(`Cleared analysis cache for project ${projectId}: ${cleared} documents`);
+      res.json({ success: true, clearedDocuments: cleared, message: `Cleared cached analysis from ${cleared} documents. Next BIM generation will run fresh Claude analysis with updated prompts.` });
+    } catch (error) {
+      logger.error("Error clearing analysis cache", { error });
+      res.status(500).json({ error: "Failed to clear analysis cache" });
     }
   });
 
