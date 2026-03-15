@@ -438,12 +438,26 @@ export class RealQTOProcessor {
         const analysisPrompt = `Extract ALL building elements from these "${qtoProjectName}" construction documents.
 
 COORDINATE SYSTEM (MUST USE FOR ALL ELEMENTS):
-- ORIGIN (0,0,0): Place at Grid A / Grid 1 intersection (bottom-left of the structural grid on the ground floor plan). If no grid, use bottom-left corner of the building footprint.
-- X axis: Horizontal (along grid letters A→B→C, or left→right on the plan)
-- Y axis: Depth (along grid numbers 1→2→3, or bottom→top on the plan)
-- Z axis: Vertical height (0 at ground floor slab, positive upward)
+- ORIGIN (0,0,0): Place at the lowest-level slab at the first grid intersection visible on the drawings. This may be a basement or half-basement — whatever is the lowest occupied level.
+- X axis: Along one grid direction (could be letters OR numbers — read from the drawing to determine which)
+- Y axis: Along the other grid direction
+- Z axis: Vertical height (0 at lowest slab, positive upward)
 - ALL coordinates in METRES relative to origin
-- Floor elevations: Z=0 at ground floor, upper floors = cumulative floor-to-floor heights from sections
+- Floor elevations: Z=0 at lowest slab, upper floors = cumulative floor-to-floor heights from sections
+- If an absolute elevation datum is shown (e.g. "262.25 mASL"), record it separately as "absolute_datum_m" but do NOT use it as the Z coordinate
+- Extract ALL gridlines — do not skip any, even if they seem unusual. Report every gridline you see.
+- Report the angle of each gridline: 0 for orthogonal, non-zero degrees for angled/tilted lines
+- Some buildings have angled wings — gridlines like CL, CLa, CLb may be rotated. Report their angle.
+- Letters I and O may be skipped in grid labeling (standard convention). Grid numbering may not start at 1.
+- Report which direction letters run and which direction numbers run (varies between projects)
+
+DIMENSION SOURCE PRIORITY (CRITICAL):
+- For THICKNESS (walls, slabs): Use SECTIONS and DETAILS first, NOT plan views. In plan view a wall shows as a line — you cannot determine thickness from plan scale.
+- For HEIGHT (walls, doors, windows, columns): Use SECTIONS and ELEVATIONS, or SCHEDULES (door schedule, window schedule). Plan views do not show heights.
+- For WIDTH (doors, windows): Use SCHEDULES first (door/window schedule), then plan symbols.
+- For POSITION (x, y): Use FLOOR PLANS with the grid system — this is where positions come from.
+- For DIAMETER (conduit, pipes): Use SCHEDULES or DETAILS — in plan view they appear as dots or thin lines.
+- NEVER derive a real dimension from the graphical line thickness in a plan view. A 2mm line on a 1:100 plan does NOT mean the wall is 2mm thick.
 
 CRITICAL: Extract ACTUAL measurements from the construction documents:
 - FIRST: Check EVERY sheet - legend may be on ALL sheets or just SOME sheets
@@ -468,6 +482,17 @@ OUTPUT JSON FORMAT ONLY:
     }
   },
   "building_perimeter": [{"x": 0, "y": 0}, {"x": 30, "y": 0}, ...], // ACTUAL shape from floor plans
+  "grid_system": {
+    "alpha_gridlines": [
+      {"label": "A", "axis": "x_or_y", "position_m": 0, "angle_deg": 0},
+      {"label": "B", "axis": "x_or_y", "position_m": 6.0, "angle_deg": 0}
+    ],
+    "numeric_gridlines": [
+      {"label": "1", "axis": "x_or_y", "position_m": 0, "angle_deg": 0},
+      {"label": "2", "axis": "x_or_y", "position_m": 8.5, "angle_deg": 0}
+    ],
+    "notes": "List which gridlines are ANGLED/TILTED relative to the main grid. Some buildings have wings at an angle — those gridlines will have angle_deg != 0. Also note skipped letters (I, O) and any centerline grids (CL, CLa, CLb)."
+  },
   "floor_to_floor_heights": {
     "ground_to_second": null, // EXTRACT from sections (e.g., 3.65m)
     "second_to_third": null,  // EXTRACT from sections
@@ -575,13 +600,27 @@ CRITICAL: Extract ACTUAL measurements only from the drawings — return null for
 ═══════════════════════════════════════════════════════════
 COORDINATE SYSTEM (MUST USE FOR ALL ELEMENTS)
 ═══════════════════════════════════════════════════════════
-- ORIGIN (0,0,0): Grid A / Grid 1 intersection (bottom-left of structural grid on ground floor plan). If no grid exists, use bottom-left corner of building footprint.
-- X axis: Horizontal — along grid letters A→B→C (left→right on plan)
-- Y axis: Depth — along grid numbers 1→2→3 (bottom→top on plan)
-- Z axis: Height — vertical (0 at ground floor slab, positive upward)
+- ORIGIN (0,0,0): Lowest-level slab at the first grid intersection visible on drawings (may be basement)
+- X axis: Along one grid direction (letters OR numbers — read from drawing)
+- Y axis: Along the other grid direction
+- Z axis: Height — vertical (0 at lowest slab, positive upward)
 - ALL coordinates in METRES relative to this origin
-- Floor elevations: Z=0 at ground floor, upper floors = cumulative floor-to-floor heights extracted from building sections
-- EVERY element must have x,y coordinates from the floor plan grid
+- If absolute elevation datum shown (e.g. "262.25 mASL"), record as "absolute_datum_m" separately
+- Extract ALL gridlines — every one visible, including grid 1 if it exists
+- Report angle_deg per gridline (0 = orthogonal, non-zero = angled wing)
+- Centerlines (CL, CLa, CLb) may be at an angle — report their rotation
+- Letters I and O may be skipped. Grid numbering may not start at 1.
+- Report which direction letters run and which direction numbers run
+
+═══════════════════════════════════════════════════════════
+DIMENSION SOURCE PRIORITY (CRITICAL)
+═══════════════════════════════════════════════════════════
+- THICKNESS (walls, slabs): From SECTIONS and DETAILS only — NOT from plan view line thickness
+- HEIGHT (walls, doors, windows): From SECTIONS, ELEVATIONS, or SCHEDULES — NOT from plan views
+- WIDTH (doors, windows): From SCHEDULES first, then plan symbols
+- POSITION (x, y): From FLOOR PLANS using the grid system
+- DIAMETER (conduit, pipes): From SCHEDULES or DETAILS — plan view shows dots/thin lines only
+- NEVER derive a real dimension from graphical line thickness at drawing scale
 
 ═══════════════════════════════════════════════════════════
 TYPICAL FLOOR RULE (MOST IMPORTANT FOR APARTMENT BUILDINGS)

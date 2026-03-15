@@ -54,6 +54,8 @@ export function GridConfirmationDialog({
   const [originNumber, setOriginNumber] = useState("1");
   const [groundFloorName, setGroundFloorName] = useState("Ground Floor");
   const [units, setUnits] = useState<UnitSystem>("mm");
+  const [hasAngledGrids, setHasAngledGrids] = useState(false);
+  const [angledGridNotes, setAngledGridNotes] = useState("");
 
   // Derive numbers axis from letters axis
   const numbersAxis: Axis = lettersAxis === "x" ? "y" : "x";
@@ -93,6 +95,8 @@ export function GridConfirmationDialog({
             originNumber: originNumber.trim(),
             groundFloorName: groundFloorName.trim(),
             units,
+            hasAngledGrids,
+            angledGridNotes: hasAngledGrids ? angledGridNotes.trim() : '',
           }),
         }
       );
@@ -223,6 +227,30 @@ export function GridConfirmationDialog({
                 <SelectItem value="ft-in">Feet-Inches (ft-in)</SelectItem>
               </SelectContent>
             </Select>
+          </div>
+
+          {/* Angled grids */}
+          <div className="grid gap-2">
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="angled-grids"
+                checked={hasAngledGrids}
+                onChange={(e) => setHasAngledGrids(e.target.checked)}
+                className="h-4 w-4 rounded border-gray-300"
+              />
+              <Label htmlFor="angled-grids" className="text-sm font-normal">
+                Building has angled/tilted gridlines (rotated wing)
+              </Label>
+            </div>
+            {hasAngledGrids && (
+              <Input
+                value={angledGridNotes}
+                onChange={(e) => setAngledGridNotes(e.target.value)}
+                placeholder="e.g., CL, CLa, CLb are tilted ~15 degrees"
+                className="text-sm"
+              />
+            )}
           </div>
 
           {/* Detected grid info hint */}
