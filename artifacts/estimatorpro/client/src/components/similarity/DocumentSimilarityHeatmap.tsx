@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -14,18 +14,10 @@ import {
   ZoomIn,
   AlertCircle,
   Info,
-  HelpCircle,
-  Play
+  HelpCircle
 } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-
-function getAuthHeaders(): Record<string, string> {
-  const token = localStorage.getItem("auth_token");
-  const h: Record<string, string> = { "Content-Type": "application/json" };
-  if (token) h["Authorization"] = `Bearer ${token}`;
-  return h;
-}
 
 interface ConflictDetail {
   type: 'specification_mismatch' | 'code_violation' | 'material_conflict' | 'timeline_overlap' | 'compliance_gap';
@@ -75,13 +67,20 @@ interface DocumentSimilarityHeatmapProps {
 export function DocumentSimilarityHeatmap({ projectId }: DocumentSimilarityHeatmapProps) {
   const [_selectedCell, _setSelectedCell] = useState<{row: number, col: number, similarity?: DocumentSimilarity} | null>(null);
   const [_viewMode, _setViewMode] = useState<'heatmap' | 'details'>('heatmap');
-
-  // Run-analysis state
-  const [isRunning, setIsRunning] = useState(false);
-  const [runProgress, setRunProgress] = useState(0);
-  const [runTask, setRunTask] = useState('');
-  const [runError, setRunError] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [analysisProgress, setAnalysisProgress] = useState(() => {
+    const saved = sessionStorage.getItem(`similarity-progress-${projectId}`);
+    return saved ? JSON.parse(saved).progress : 0;
+  });
+  const [currentTask, setCurrentTask] = useState(() => {
+    const saved = sessionStorage.getItem(`similarity-progress-${projectId}`);
+    return saved ? JSON.parse(saved).task : 'Initializing analysis...';
+  });
+  const [analysisCompleted, setAnalysisCompleted] = useState(() => {
+    const saved = sessionStorage.getItem(`similarity-progress-${projectId}`);
+    const completed = saved ? JSON.parse(saved).completed : false;
+    // If we already have the matrix data, mark as completed to stop polling
+    return completed;
+  });
 
   // Fetch project documents first to check count
   const { data: documents } = useQuery<any[]>({
@@ -89,74 +88,99 @@ export function DocumentSimilarityHeatmap({ projectId }: DocumentSimilarityHeatm
     enabled: !!projectId,
   });
 
-  // Fetch similarity matrix — refetch enabled while running
+  // COMPLETELY DISABLED - No progress polling needed
+  const realProgress = null;
+
+  // Fetch similarity matrix
   const { data: matrix, isLoading, refetch, isRefetching } = useQuery<SimilarityMatrix>({
     queryKey: ['/api/projects', projectId, 'similarity'],
-    enabled: !!projectId && !!documents && documents.length >= 2,
-    staleTime: 5 * 60 * 1000,
-    retry: false,
+    enabled: !!projectId && documents && documents.length >= 2,
+    staleTime: 5 * 60 * 1000, // 5 minutes
   });
 
-  // Poll progress while running
+  // Save progress state to sessionStorage
   useEffect(() => {
-    if (!isRunning) return;
-    pollRef.current = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/projects/${projectId}/similarity/progress`, { headers: getAuthHeaders() });
-        if (!res.ok) return;
-        const p = await res.json();
-        const pct = p.totalPairs > 0 ? Math.round(((p.processed || 0) / p.totalPairs) * 100) : 0;
-        setRunProgress(pct);
-        setRunTask(p.currentTask || `Processing ${p.processed || 0} / ${p.totalPairs || 0} pairs…`);
-        if (p.completed || p.error) {
-          clearInterval(pollRef.current!);
-          setIsRunning(false);
-          if (p.error) {
-            setRunError(p.error);
-          } else {
-            setRunProgress(100);
-            refetch();
-          }
-        }
-      } catch {}
-    }, 2000);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [isRunning, projectId, refetch]);
-
-  // When matrix arrives after a run, stop polling
-  useEffect(() => {
-    if (matrix && isRunning) {
-      if (pollRef.current) clearInterval(pollRef.current);
-      setIsRunning(false);
-      setRunProgress(100);
+    if (projectId) {
+      const state = {
+        progress: analysisProgress,
+        task: currentTask,
+        completed: analysisCompleted
+      };
+      sessionStorage.setItem(`similarity-progress-${projectId}`, JSON.stringify(state));
     }
-  }, [matrix, isRunning]);
+  }, [analysisProgress, currentTask, analysisCompleted, projectId]);
 
-  async function startAnalysis() {
-    setRunError(null);
-    setRunProgress(0);
-    setRunTask('Starting analysis…');
-    setIsRunning(true);
-    try {
-      const res = await fetch(`/api/projects/${projectId}/similarity/run`, {
-        method: 'POST',
-        headers: getAuthHeaders(),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setRunError(data.error || 'Failed to start analysis');
-        setIsRunning(false);
-        return;
+  // Use real progress from backend instead of simulation
+  useEffect(() => {
+    if (realProgress && !analysisCompleted) {
+      setAnalysisProgress((realProgress as any)?.progress || 0);
+      setCurrentTask((realProgress as any)?.currentTask || '');
+      
+      if ((realProgress as any)?.completed || ((realProgress as any)?.progress || 0) >= 100) {
+        setAnalysisCompleted(true);
+        setAnalysisProgress((realProgress as any)?.error ? 0 : 100);
       }
-      setRunTask(`Analysing ${data.pairCount || '?'} document pairs with AI…`);
-    } catch (e: any) {
-      setRunError(e.message || 'Network error');
-      setIsRunning(false);
     }
+  }, [realProgress, analysisCompleted]);
+
+  // Check if we have matrix data and mark as complete to stop polling
+  useEffect(() => {
+    if (matrix && (matrix as any).matrix && (matrix as any).matrix.length > 0 && !analysisCompleted) {
+      console.log('📊 Matrix data detected, stopping polling');
+      setAnalysisCompleted(true);
+      setAnalysisProgress(100);
+    }
+  }, [matrix, analysisCompleted]);
+
+  // Show error state if analysis failed
+  if ((realProgress as any)?.error) {
+    return (
+      <Card className="h-full">
+        <CardHeader>
+          <CardTitle className="flex items-center text-red-600">
+            <AlertCircle className="h-5 w-5 mr-2" />
+            Analysis Failed
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+            <h4 className="font-semibold text-red-800 mb-2">Error Details</h4>
+            <p className="text-red-700 mb-3">{(realProgress as any)?.error?.message || 'Unknown error occurred'}</p>
+            <p className="text-sm text-red-600">
+              Please try again or contact support if the issue persists.
+            </p>
+          </div>
+          
+          <div className="flex gap-2">
+              <Button 
+                onClick={() => {
+                  sessionStorage.removeItem(`similarity-progress-${projectId}`);
+                  setAnalysisProgress(0);
+                  setCurrentTask('Initializing analysis...');
+                  setAnalysisCompleted(false);
+                  window.location.reload();
+                }}
+                className="bg-blue-600 hover:bg-blue-700"
+              >
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Retry Analysis
+              </Button>
+              <Button 
+                variant="outline"
+                onClick={() => {
+                  alert('Contact support with error details: ' + (realProgress as any)?.error?.message);
+                }}
+              >
+                Get Help
+              </Button>
+            </div>
+        </CardContent>
+      </Card>
+    );
   }
 
-  // Loading initial data from cache
-  if (isLoading) {
+  // Show loading state with progress
+  if (isLoading && !analysisCompleted) {
     return (
       <Card className="h-full">
         <CardHeader>
@@ -166,10 +190,35 @@ export function DocumentSimilarityHeatmap({ projectId }: DocumentSimilarityHeatm
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="flex items-center justify-center h-64">
-            <div className="text-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4" />
-              <p className="text-gray-500 text-sm">Loading cached results…</p>
+          <div className="flex items-center justify-center h-96">
+            <div className="text-center w-full max-w-md">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-6"></div>
+              
+              <p className="text-gray-600 font-medium mb-2">Analyzing document similarities...</p>
+              <p className="text-sm text-gray-500 mb-4">
+                Processing {documents?.length || 0} documents
+              </p>
+              
+              <div className="bg-gray-50 rounded-lg p-4 mb-4">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-sm text-gray-600 text-left flex-1 pr-2 break-words">
+                    {(realProgress as any)?.currentTask || currentTask}
+                  </span>
+                  <span className="text-sm font-bold text-blue-600 flex-shrink-0">
+                    {Math.round((realProgress as any)?.progress || analysisProgress)}%
+                  </span>
+                </div>
+                <Progress value={(realProgress as any)?.progress || analysisProgress} className="h-2" />
+                {realProgress && (
+                  <div className="text-xs text-gray-500 mt-2 text-center">
+                    Step {(realProgress as any)?.currentStep || 1}/{(realProgress as any)?.totalSteps || 1} • Live Claude Analysis
+                  </div>
+                )}
+              </div>
+              
+              <p className="text-xs text-gray-400">
+                This may take a few moments for large document sets
+              </p>
             </div>
           </div>
         </CardContent>
@@ -205,11 +254,8 @@ export function DocumentSimilarityHeatmap({ projectId }: DocumentSimilarityHeatm
     );
   }
 
-  // No cached analysis yet — show run CTA (or in-progress state)
+  // Show analysis in progress if matrix is not ready
   if (!matrix) {
-    const readyCount = documents.filter((d: any) => d.analysisStatus === 'completed' || d.textContent).length;
-    const pairCount = Math.floor(readyCount * (readyCount - 1) / 2);
-
     return (
       <Card className="h-full">
         <CardHeader>
@@ -219,83 +265,48 @@ export function DocumentSimilarityHeatmap({ projectId }: DocumentSimilarityHeatm
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="flex items-center justify-center min-h-80">
-            <div className="text-center w-full max-w-md px-4 space-y-6">
-
-              {/* Running state */}
-              {isRunning && (
-                <>
-                  <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto" />
-                  <div>
-                    <p className="text-gray-700 font-medium mb-1">Analysing documents…</p>
-                    <p className="text-sm text-gray-500">{runTask}</p>
-                  </div>
-                  <div className="bg-gray-50 rounded-lg p-4">
-                    <div className="flex justify-between items-center mb-2">
-                      <span className="text-sm text-gray-600">Progress</span>
-                      <span className="text-sm font-bold text-blue-600">{runProgress}%</span>
-                    </div>
-                    <Progress value={runProgress} className="h-2" />
-                    <p className="text-xs text-gray-400 mt-2">
-                      This may take several minutes for large document sets
-                    </p>
-                  </div>
-                </>
-              )}
-
-              {/* Error state */}
-              {!isRunning && runError && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-left">
-                  <div className="flex items-center mb-2">
-                    <AlertCircle className="h-5 w-5 text-red-600 mr-2 flex-shrink-0" />
-                    <p className="font-semibold text-red-800">Analysis Failed</p>
-                  </div>
-                  <p className="text-sm text-red-700 mb-3">{runError}</p>
-                  <Button onClick={startAnalysis} size="sm" className="bg-red-600 hover:bg-red-700">
-                    <RefreshCw className="h-4 w-4 mr-2" />
-                    Retry
-                  </Button>
+          <div className="flex items-center justify-center h-96">
+            <div className="text-center w-full max-w-md px-4">
+              <div className="animate-pulse">
+                <BarChart3 className="h-12 w-12 text-blue-400 mx-auto mb-4" />
+              </div>
+              <p className="text-gray-600 font-medium mb-2">Analysis In Progress</p>
+              <p className="text-sm text-gray-500 mb-6">
+                Claude AI analyzing {documents.length} documents for similarities and conflicts
+              </p>
+              
+              {/* Real progress display */}
+              <div className="bg-gray-50 rounded-lg p-4 mb-6">
+                <div className="flex justify-between items-center mb-3">
+                  <span className="text-sm text-gray-600 text-left flex-1 pr-2 break-words">
+                    {(realProgress as any)?.currentTask || 'Initializing analysis...'}
+                  </span>
+                  <span className="text-sm font-bold text-blue-600 flex-shrink-0">
+                    {Math.round((realProgress as any)?.progress || 0)}%
+                  </span>
                 </div>
-              )}
-
-              {/* Idle CTA */}
-              {!isRunning && !runError && (
-                <>
-                  <BarChart3 className="h-14 w-14 text-blue-300 mx-auto" />
-                  <div>
-                    <p className="text-gray-700 font-semibold text-lg mb-1">No analysis yet</p>
-                    <p className="text-sm text-gray-500">
-                      Run AI-powered similarity analysis across your {readyCount} processed{' '}
-                      document{readyCount !== 1 ? 's' : ''} ({pairCount} pair{pairCount !== 1 ? 's' : ''}).
-                      Results are cached for future visits.
-                    </p>
+                <Progress value={(realProgress as any)?.progress || 0} className="h-2" />
+                {realProgress && (
+                  <div className="text-xs text-gray-500 mt-2 text-center">
+                    Step {(realProgress as any)?.currentStep || 1}/{(realProgress as any)?.totalSteps || 1} • Live Claude Analysis
                   </div>
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-left text-sm text-blue-800">
-                    <p className="font-medium mb-1">What this analysis does:</p>
-                    <ul className="list-disc list-inside space-y-1 text-blue-700">
-                      <li>Compares every document pair for content overlap</li>
-                      <li>Detects specification conflicts and material mismatches</li>
-                      <li>Flags compliance and schedule conflicts</li>
-                      <li>Provides prioritised recommendations</li>
-                    </ul>
-                  </div>
-                  <Button
-                    onClick={startAnalysis}
-                    disabled={readyCount < 2}
-                    className="w-full bg-blue-600 hover:bg-blue-700"
-                    size="lg"
-                  >
-                    <Play className="h-5 w-5 mr-2" />
-                    Run Similarity Analysis
-                  </Button>
-                  {readyCount < 2 && (
-                    <p className="text-xs text-gray-400">
-                      Need at least 2 documents with extracted text. Upload and process documents first.
-                    </p>
-                  )}
-                </>
-              )}
-
+                )}
+              </div>
+              
+              <Button 
+                onClick={() => {
+                  sessionStorage.clear();
+                  localStorage.clear();
+                  window.location.reload();
+                }} 
+                variant="outline" 
+                size="sm"
+                disabled={isRefetching}
+                className="w-full"
+              >
+                <RefreshCw className={`h-4 w-4 mr-2 ${isRefetching ? 'animate-spin' : ''}`} />
+                Force Refresh
+              </Button>
             </div>
           </div>
         </CardContent>
@@ -579,7 +590,7 @@ export function DocumentSimilarityHeatmap({ projectId }: DocumentSimilarityHeatm
                           (s.overlapTypes && s.overlapTypes.includes(type as any)) || 
                           s.overlapType === type
                         ) || [];
-                        const avgScore = conflicts.length > 0 ? (conflicts.reduce((acc, s) => acc + (s.similarityScore ?? 0), 0) / conflicts.length) : 0;
+                        const avgScore = conflicts.length > 0 ? (conflicts.reduce((acc, s) => acc + s.similarityScore, 0) / conflicts.length) : 0;
                         const criticalCount = conflicts.filter(c => c.criticalLevel === 'high' || c.criticalLevel === 'critical').length;
                         
                         const typeDescriptions: Record<string, string> = {
@@ -703,9 +714,7 @@ export function DocumentSimilarityHeatmap({ projectId }: DocumentSimilarityHeatm
               </CardHeader>
               <CardContent>
                 <div className="space-y-4 max-h-96 overflow-y-auto">
-                  {matrix.similarities.slice(0, 15).map((sim) => {
-                    const simScore = sim.similarityScore ?? 0;
-                    return (
+                  {matrix.similarities.slice(0, 15).map((sim) => (
                     <div key={sim.id} className={`border rounded-lg p-4 ${
                       sim.criticalLevel === 'critical' ? 'border-red-300 bg-red-50' :
                       sim.criticalLevel === 'high' ? 'border-orange-300 bg-orange-50' :
@@ -722,7 +731,7 @@ export function DocumentSimilarityHeatmap({ projectId }: DocumentSimilarityHeatm
                         </div>
                         <div className="flex items-center gap-2 ml-4">
                           <Badge variant={sim.criticalLevel === 'high' || sim.criticalLevel === 'critical' ? 'destructive' : 'secondary'}>
-                            {simScore.toFixed(1)}% overlap
+                            {(sim.similarityScore ?? 0).toFixed(1)}% overlap
                           </Badge>
                           <Badge variant="outline" className="capitalize">
                             {sim.criticalLevel}
@@ -734,16 +743,16 @@ export function DocumentSimilarityHeatmap({ projectId }: DocumentSimilarityHeatm
                       <div className="mb-3">
                         <div className="bg-blue-50 border border-blue-200 rounded p-2">
                           <p className="text-xs text-blue-800 font-medium mb-1">
-                            📊 What {simScore.toFixed(1)}% means for your project:
+                            📊 What {(sim.similarityScore ?? 0).toFixed(1)}% means for your project:
                           </p>
                           <p className="text-xs text-blue-700">
-                            {simScore < 5 
-                              ? `These documents have minimal overlap (${simScore.toFixed(1)}%). This usually means they cover different aspects of construction - which is good for project organization.`
-                              : simScore < 15
-                              ? `Low overlap (${simScore.toFixed(1)}%) indicates these documents complement each other with some shared elements like dimensions or materials.`
-                              : simScore < 35
-                              ? `Moderate overlap (${simScore.toFixed(1)}%) suggests these documents address similar building components. Check for any conflicting specifications.`
-                              : `High overlap (${simScore.toFixed(1)}%) means significant content duplication. This could indicate conflicting requirements or redundant information.`
+                            {(sim.similarityScore ?? 0) < 5 
+                              ? `These documents have minimal overlap (${(sim.similarityScore ?? 0).toFixed(1)}%). This usually means they cover different aspects of construction - which is good for project organization.`
+                              : (sim.similarityScore ?? 0) < 15
+                              ? `Low overlap (${(sim.similarityScore ?? 0).toFixed(1)}%) indicates these documents complement each other with some shared elements like dimensions or materials.`
+                              : (sim.similarityScore ?? 0) < 35
+                              ? `Moderate overlap (${(sim.similarityScore ?? 0).toFixed(1)}%) suggests these documents address similar building components. Check for any conflicting specifications.`
+                              : `High overlap (${(sim.similarityScore ?? 0).toFixed(1)}%) means significant content duplication. This could indicate conflicting requirements or redundant information.`
                             }
                           </p>
                         </div>
@@ -789,7 +798,7 @@ export function DocumentSimilarityHeatmap({ projectId }: DocumentSimilarityHeatm
                         </div>
                       )}
                     </div>
-                  ); })}
+                  ))}
                   
                   {matrix.similarities.length > 15 && (
                     <div className="text-center p-4 text-gray-500 text-sm">

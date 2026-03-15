@@ -437,6 +437,14 @@ export class RealQTOProcessor {
 
         const analysisPrompt = `Extract ALL building elements from these "${qtoProjectName}" construction documents.
 
+COORDINATE SYSTEM (MUST USE FOR ALL ELEMENTS):
+- ORIGIN (0,0,0): Place at Grid A / Grid 1 intersection (bottom-left of the structural grid on the ground floor plan). If no grid, use bottom-left corner of the building footprint.
+- X axis: Horizontal (along grid letters A→B→C, or left→right on the plan)
+- Y axis: Depth (along grid numbers 1→2→3, or bottom→top on the plan)
+- Z axis: Vertical height (0 at ground floor slab, positive upward)
+- ALL coordinates in METRES relative to origin
+- Floor elevations: Z=0 at ground floor, upper floors = cumulative floor-to-floor heights from sections
+
 CRITICAL: Extract ACTUAL measurements from the construction documents:
 - FIRST: Check EVERY sheet - legend may be on ALL sheets or just SOME sheets
 - LEGEND LOCATIONS: Document ALL sheets where legend appears (could be every sheet!)
@@ -471,30 +479,26 @@ OUTPUT JSON FORMAT ONLY:
       "level": "Ground Floor",
       "elevation": null, // EXTRACT actual elevation mark (e.g., 219.85)
       "ceiling_height": null, // EXTRACT using legend's conventions from section dimensions
-      "walls": [{"id": "W1", "start": {"x": 0, "y": 0}, "end": {"x": 5, "y": 0}, "thickness": 200, "ceiling_height": null, "type": "exterior|interior|fire-rated|curtain", "material": "concrete|masonry|stud", "fire_rating": null}], // EXTRACT from architectural drawings — thickness in mm, ceiling_height in mm. Return null if not in drawings
-      "columns": [{"id": "C1", "x": 5, "y": 5, "size": "400x400", "height": null, "type": "concrete|steel|timber", "reinforcement": null}], // USE LEGEND to read height — return null if not in structural drawings
-      "beams": [{"id": "B1", "start": {"x": 0, "y": 5}, "end": {"x": 6, "y": 5}, "size": "300x600", "depth": 600, "material": "concrete|steel", "top_elevation": null}], // EXTRACT from structural drawings
-      "slabs": [{"id": "SL1", "boundary": [{"x": 0, "y": 0}, {"x": 22, "y": 0}, {"x": 22, "y": 15}, {"x": 0, "y": 15}], "thickness": 200, "type": "floor|roof|transfer", "material": "concrete", "top_elevation": null}], // EXTRACT slab boundary = floor plate extents; thickness from sections
+      "walls": [{"id": "W1", "start": {"x": 0, "y": 0}, "end": {"x": 5, "y": 0}, "thickness": 200, "ceiling_height": null, "type": "exterior", "material": "concrete", "fire_rating": null}], // EXTRACT from drawings — return null if not visible
+      "columns": [{"id": "C1", "x": 5, "y": 5, "size": "400x400", "height": null, "type": "concrete", "reinforcement": null}], // EXTRACT from structural drawings — return null if not visible
+      "beams": [{"id": "B1", "start": {"x": 0, "y": 5}, "end": {"x": 6, "y": 5}, "size": "300x600", "depth": 600, "material": "concrete", "top_elevation": null}], // EXTRACT from structural drawings
+      "slabs": [{"id": "SL1", "boundary": [{"x": 0, "y": 0}, {"x": 22, "y": 0}, {"x": 22, "y": 15}, {"x": 0, "y": 15}], "thickness": 200, "type": "floor", "material": "concrete", "top_elevation": null}], // EXTRACT slab boundary = floor plate extents; thickness from sections
       "stairs": [{"id": "ST1", "x": 10, "y": 5, "width": 1200, "length": 4000, "rises": 16, "rise_mm": 175, "run_mm": 275, "type": "straight|L-shaped|U-shaped", "material": "concrete|steel|timber"}], // EXTRACT from floor plans and sections
       "foundations": [{"id": "F1", "x": 5, "y": 5, "width": 600, "depth_mm": 400, "bearing_depth_m": 1.5, "type": "spread|strip|pile|raft", "material": "concrete"}], // GROUND FLOOR ONLY — from foundation plan/sections
       "mep": [{"id": "L1", "category": "electrical", "type": "light", "x": 3, "y": 3, "mounting_height": 2.7}, {"id": "SP1", "category": "mechanical", "type": "sprinkler", "x": 3, "y": 3, "mounting_height": 2.9}, {"id": "REC1", "category": "electrical", "type": "receptacle", "x": 1, "y": 2, "mounting_height": 0.4}], // EXTRACT MEP symbols from plans per legend
-      "doors": [{"id": "D1", "x": 2.5, "y": 0, "width": 900, "height": null, "thickness": null, "wall_thickness": null, "type": "single|double|sliding", "fire_rating": null, "hardware_set": null}], // EXTRACT width AND height from door schedule. Return null for any field not in drawings — do NOT use standard values
-      "windows": [{"id": "WIN1", "x": 7, "y": 0, "width": 1800, "height": null, "sill_height": null, "type": "fixed|casement|curtain-wall", "glazing": null}], // EXTRACT width AND height from window schedule. Return null for any field not in drawings — do NOT use standard values
+      "doors": [{"id": "D1", "x": 2.5, "y": 0, "width": 900, "height": null, "thickness": null, "wall_thickness": null, "type": "single|double|sliding", "fire_rating": null, "hardware_set": null}], // EXTRACT from door schedule — return null for fields not in drawings
+      "windows": [{"id": "WIN1", "x": 7, "y": 0, "width": 1800, "height": null, "sill_height": null, "type": "fixed|casement|curtain-wall", "glazing": null}], // EXTRACT from window schedule — return null for fields not in drawings
       "rooms": [{"id": "R1", "name": "Living Room", "boundary": [{"x": 0, "y": 0}, {"x": 5, "y": 0}, {"x": 5, "y": 4}, {"x": 0, "y": 4}], "ceiling_height": null, "area_m2": null}] // USE LEGEND
     }
   ]
 }
 
-CRITICAL — REAL VALUES FROM DRAWINGS ONLY:
-- Extract ONLY what is explicitly shown in the drawings — never invent or estimate dimensions
-- Return null for any field not found in the drawings — do NOT substitute standard values
-- Required fields (return null if not in drawings, element will be flagged as RFI):
-  walls: start, end (x/y coords from floor plan grid), thickness (mm from sections)
-  columns: x, y (from grid), size (from schedule or structural plan)
-  doors: x, y (from floor plan), width (from door schedule)
-  windows: x, y (from floor plan), width (from window schedule)
-  slabs: boundary polygon (min 3 points from floor plan), thickness (from sections)
-  beams: start, end (x/y from structural plan), size (from structural schedule)
+CRITICAL — EXTRACT REAL VALUES, RETURN null WHEN NOT VISIBLE:
+- Extract ONLY what is explicitly shown in the drawings
+- Return null for any dimension not found — the system will create RFI placeholders
+- Required coordinate fields (element excluded if missing): x, y, start, end, boundary
+- Dimension fields (null OK — element included as RFI placeholder): height, thickness, ceiling_height, sill_height
+- The system handles null dimensions by creating visible RFI placeholder elements
 
 MANDATORY EXTRACTION REQUIREMENTS:
 - Extract EVERY wall, column, beam, slab, stair, foundation, door, window visible in drawings
@@ -566,7 +570,18 @@ ${textContent.substring(0, 500000)}`;
 
       const analysisPrompt = `You are a SENIOR QUANTITY SURVEYOR extracting a COMPLETE BIM element inventory from "${pdfProjectName}" construction drawings. Your output feeds a cost estimate — missing elements = missing cost. Be exhaustive.
 
-CRITICAL: Extract ACTUAL measurements only from the drawings — return null for any field not visible.
+CRITICAL: Extract ACTUAL measurements only from the drawings — return null for any field not visible. The system will create RFI placeholder elements for missing dimensions.
+
+═══════════════════════════════════════════════════════════
+COORDINATE SYSTEM (MUST USE FOR ALL ELEMENTS)
+═══════════════════════════════════════════════════════════
+- ORIGIN (0,0,0): Grid A / Grid 1 intersection (bottom-left of structural grid on ground floor plan). If no grid exists, use bottom-left corner of building footprint.
+- X axis: Horizontal — along grid letters A→B→C (left→right on plan)
+- Y axis: Depth — along grid numbers 1→2→3 (bottom→top on plan)
+- Z axis: Height — vertical (0 at ground floor slab, positive upward)
+- ALL coordinates in METRES relative to this origin
+- Floor elevations: Z=0 at ground floor, upper floors = cumulative floor-to-floor heights extracted from building sections
+- EVERY element must have x,y coordinates from the floor plan grid
 
 ═══════════════════════════════════════════════════════════
 TYPICAL FLOOR RULE (MOST IMPORTANT FOR APARTMENT BUILDINGS)
@@ -817,8 +832,17 @@ MANDATORY EXTRACTION REQUIREMENTS:
             elevSource = 'derived_from_previous_storey';
             elevRfi = true;
           } else if (prev) {
-            storeyElevation = (prev.elevation as number) + 3.0;
-            elevSource = 'sequential_3m_estimate';
+            // No ceiling height from PREVIOUS storey — try THIS floor's own ceiling_height
+            const thisFloorH = floor.ceiling_height ?? floor.floor_to_floor_height ?? null;
+            const thisH = thisFloorH != null ? (toMetres(thisFloorH, 'dimension') ?? Number(thisFloorH)) : null;
+            if (thisH && thisH > 0) {
+              storeyElevation = (prev.elevation as number) + thisH;
+              elevSource = 'derived_from_current_floor_height';
+            } else {
+              // No height data at all — keep at previous + RFI
+              storeyElevation = (prev.elevation as number);
+              elevSource = 'rfi_no_ceiling_height';
+            }
             elevRfi = true;
           } else {
             storeyElevation = 0;
@@ -846,8 +870,16 @@ MANDATORY EXTRACTION REQUIREMENTS:
           elevation: storeyElevation,
           elementCount: 0,
           // Pass through ceiling height so downstream creators can inherit it
-          // Normalise to metres — Claude returns REAL_CEILING_MM
-          ...(floor.ceiling_height !== undefined ? { ceiling_height: toMetres(floor.ceiling_height, 'dimension') ?? Number(floor.ceiling_height) } : {}),
+          // Normalise to metres — Claude returns mm or m depending on context
+          // Try ceiling_height first, then floor_to_floor_height as fallback
+          ...((() => {
+            const rawH = floor.ceiling_height ?? floor.floor_to_floor_height ?? floor.floorToFloorHeight;
+            if (rawH !== undefined && rawH !== null) {
+              const h = toMetres(rawH, 'dimension') ?? Number(rawH);
+              return h > 0 ? { ceiling_height: h, floorToFloorHeight_m: h } : {};
+            }
+            return {};
+          })()),
           ...(elevRfi ? { rfi_flag: true, elevation_source: elevSource } : { elevation_source: elevSource }),
         } as StoreyData;
         storeys.push(storey);
@@ -1489,7 +1521,7 @@ MANDATORY EXTRACTION REQUIREMENTS:
           discoveredBy: 'createWallElement',
         });
       } catch { /* non-fatal */ }
-      thickness = null; // Keeps the wall in the model with null thickness
+      thickness = 0.01; // Minimal render thickness — RFI tracks the missing value
     }
     
     // Calculate wall center and dimensions
@@ -1526,7 +1558,7 @@ MANDATORY EXTRACTION REQUIREMENTS:
         });
       } catch { /* non-fatal */ }
       const rawStoreyH = (storey as any).floorToFloorHeight_m ?? (storey as any).ceiling_height;
-      actualWallHeight = rawStoreyH != null ? (toMetres(rawStoreyH, 'dimension') ?? Number(rawStoreyH)) : 3.0;
+      actualWallHeight = rawStoreyH != null ? (toMetres(rawStoreyH, 'dimension') ?? Number(rawStoreyH)) : 0;
       wallHeightSource = 'estimated_from_storey';
     } else {
       actualWallHeight = wallHeight;
@@ -1656,17 +1688,26 @@ MANDATORY EXTRACTION REQUIREMENTS:
     } else {
       // Single value — square column: "400" → 400x400
       const dim = parseFloat(sizeStr);
-      if (isNaN(dim)) {
-        logger.warn(`Unparseable column size '${size}' — column excluded, RFI registered`);
-        return null;
+      if (isNaN(dim) || dim <= 0) {
+        // Include as RFI placeholder with minimal geometry so it's visible
+        width = 0.01;
+        depth = 0.01;
+        try {
+          registerMissingData({
+            category: 'dimension', csiDivision: '03 30 00', impact: 'high',
+            description: `Column '${colData.id || 'UNKNOWN'}' on storey '${storey.name}' has unparseable size '${size}'. Column included as RFI placeholder.`,
+            drawingRef: `Structural schedule — Column ${colData.id || 'UNKNOWN'}`,
+            costImpactLow: 0, costImpactHigh: 0, assumptionUsed: 'column_size_rfi',
+            discoveredBy: 'createColumnElement' }); } catch { /* non-fatal */ }
+      } else {
+        width = dim / 1000;
+        depth = dim / 1000;
       }
-      width = dim / 1000;
-      depth = dim / 1000;
     }
 
     if (width <= 0 || depth <= 0) {
-      logger.warn(`Column size '${size}' produced zero/negative dimensions — column excluded, RFI registered`);
-      return null;
+      width = 0.01;
+      depth = 0.01;
     }
     
     // Column height: prefer structural schedule, fall back to storey height with RFI
@@ -1692,7 +1733,7 @@ MANDATORY EXTRACTION REQUIREMENTS:
         });
       } catch { /* rfi-generator unavailable — non-fatal */ }
       // Estimate: typical residential/commercial = 3.0m, use storey data if available
-      actualColumnHeight = (storey as any).floorToFloorHeight_m ?? 3.0;
+      actualColumnHeight = (storey as any).floorToFloorHeight_m ?? 0;
       heightSource = 'estimated_from_storey_height';
     } else {
       actualColumnHeight = columnHeight;
@@ -1869,11 +1910,11 @@ MANDATORY EXTRACTION REQUIREMENTS:
       geometry: {
         location: { realLocation: { x, y, z: storey.elevation } },
         dimensions: {
-          length: width,
-          width:  thicknessM ?? null,
-          height: heightRaw,                 // null propagates — viewer renders as point marker
-          area:   (heightRaw != null && width != null) ? width * heightRaw : null,
-          volume: null,                      // never calculated when any dimension is missing
+          length: width ?? 0,
+          width:  thicknessM ?? 0,
+          height: heightRaw ?? (toMetres((storey as any).ceiling_height ?? (storey as any).floorToFloorHeight_m, 'dimension') ?? 0),
+          area:   (heightRaw != null && width != null) ? width * heightRaw : 0,
+          volume: 0,
         },
       },
       quantities: {
@@ -2021,11 +2062,11 @@ MANDATORY EXTRACTION REQUIREMENTS:
       geometry: {
         location: { realLocation: { x, y, z: storey.elevation + (sillHeight ?? 0) } },
         dimensions: {
-          length: width,
-          width:  frameDepth ?? null,
-          height: heightRaw,              // null propagates — viewer renders as point marker
-          area:   (heightRaw != null && width != null) ? width * heightRaw : null,
-          volume: null,                   // never calculated when any dimension is missing
+          length: width ?? 0,
+          width:  frameDepth ?? 0,
+          height: heightRaw ?? (toMetres((storey as any).ceiling_height ?? (storey as any).floorToFloorHeight_m, 'dimension') ?? 0),
+          area:   (heightRaw != null && width != null) ? width * heightRaw : 0,
+          volume: 0,
         },
       },
       quantities: {
@@ -2097,18 +2138,18 @@ MANDATORY EXTRACTION REQUIREMENTS:
         source: isRfiFlagged ? 'rfi_placeholder' : 'ai_extracted',
       },
       geometry: {
-        type: 'box',
-        position: { x: centroidX, y: centroidY, z: storey.elevation },
         dimensions: {
-          width: areaM2 ? Math.sqrt(areaM2) : null,
-          height: ceilingH,
-          depth: areaM2 ? Math.sqrt(areaM2) : null,
+          length: areaM2 ? Math.sqrt(areaM2) : 0,
+          width: areaM2 ? Math.sqrt(areaM2) : 0,
+          height: ceilingH ?? 0,
+          area: areaM2 ?? 0,
+          volume: areaM2 && ceilingH ? areaM2 * ceilingH : 0,
         },
         location: { realLocation: { x: centroidX, y: centroidY, z: storey.elevation } },
       },
-      location: storey.name,
-      material: null,
-      quantity: areaM2,
+      level: storey.name,
+      material: '',
+      quantity: areaM2 ?? 0,
       quantities: {
         metric: [{ type: 'area', value: areaM2 ?? 0, unit: 'm²', name: 'Floor Area',
                    source: isRfiFlagged ? 'rfi_placeholder' : 'ai_extracted' }],
@@ -2116,7 +2157,7 @@ MANDATORY EXTRACTION REQUIREMENTS:
                      source: isRfiFlagged ? 'rfi_placeholder' : 'ai_extracted' }],
       },
       storey: { name: storey.name, elevation: storey.elevation },
-    };
+    } as any as RealBIMElement;
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -2132,9 +2173,23 @@ MANDATORY EXTRACTION REQUIREMENTS:
     if (!boundary || boundary.length < 3) return null;
 
     const thicknessMm = slabData.thickness;
-    if (thicknessMm === null || thicknessMm === undefined) return null;
-    const thicknessM = toMetres(thicknessMm, 'dimension') ?? (Number(thicknessMm) / 1000);
-    if (!thicknessM || thicknessM <= 0) return null;
+    let thicknessM: number;
+    let slabRfi = false;
+    if (thicknessMm !== null && thicknessMm !== undefined) {
+      const parsed = toMetres(thicknessMm, 'dimension') ?? (Number(thicknessMm) / 1000);
+      thicknessM = (parsed && parsed > 0) ? parsed : 0.01; // minimal render thickness
+      if (!parsed || parsed <= 0) slabRfi = true;
+    } else {
+      thicknessM = 0.01; // minimal render thickness — RFI will track
+      slabRfi = true;
+      try {
+        registerMissingData({
+          category: 'dimension', csiDivision: '03 30 00', impact: 'high',
+          description: `Slab '${slabData.id || 'UNKNOWN'}' on storey '${storey.name}' has no thickness. Required: structural sections. Slab included as RFI placeholder.`,
+          drawingRef: `Structural sections — Slab ${slabData.id || 'UNKNOWN'}`,
+          costImpactLow: 0, costImpactHigh: 0, assumptionUsed: 'slab_thickness_rfi',
+          discoveredBy: 'createSlabElement' }); } catch { /* non-fatal */ }
+    }
 
     // Compute slab area using shoelace formula
     let area = 0;
@@ -2533,7 +2588,7 @@ MANDATORY EXTRACTION REQUIREMENTS:
       },
       geometry: {
         location: { realLocation: { x: mepData.x, y: mepData.y, z: mountH } },
-        dimensions: { length: 0.3, width: 0.3, height: 0.1, area: 0.09, volume: 0.009 },
+        dimensions: { length: 0, width: 0, height: 0, area: 0, volume: 0 }, // RFI: MEP fixture size not extracted — count-only element
       },
       quantities: {
         metric:   [{ type: 'count', value: 1, unit: 'ea', name: `${type} Count`, source: 'ai_extracted' }],
@@ -2555,18 +2610,21 @@ MANDATORY EXTRACTION REQUIREMENTS:
     const volume = q.volume || q.volume_m3 || 0;
     const count  = q.count  || q.quantity  || 1;
 
+    // Derive storey height from extracted data — no hardcoded fallback
+    const storeyH = (storey as any).ceiling_height ?? (storey as any).floorToFloorHeight_m ?? 0;
+
     if (area > 0) {
       const side = Math.sqrt(area);
       return {
         location: { realLocation: { x: 0, y: 0, z: storey.elevation } },
-        dimensions: { length: side, width: side, height: 1, area, volume: volume || area * 0.2 },
+        dimensions: { length: side, width: side, height: storeyH, area, volume: volume || (storeyH > 0 ? area * storeyH : 0) },
         source: 'derived_from_area',
       };
     }
     if (length > 0) {
       return {
         location: { realLocation: { x: 0, y: 0, z: storey.elevation } },
-        dimensions: { length, width: 0.2, height: 2.7, area: length * 2.7, volume: length * 0.2 * 2.7 },
+        dimensions: { length, width: 0, height: storeyH, area: storeyH > 0 ? length * storeyH : 0, volume: 0 },
         source: 'derived_from_length',
       };
     }
@@ -2695,7 +2753,7 @@ MANDATORY EXTRACTION REQUIREMENTS:
       if (!storeyMap.has(storeyName)) {
         storeyMap.set(storeyName, {
           name: storeyName,
-          elevation,
+          elevation: elevation ?? 0,
           guid: randomUUID(),
           elementCount: 0
         });
@@ -2705,10 +2763,10 @@ MANDATORY EXTRACTION REQUIREMENTS:
 
     // If nothing built from elements, fall back to inferStoreysIfMissing
     if (storeyMap.size === 0) {
-      return inferStoreysIfMissing(undefined, elements, {});
+      return inferStoreysIfMissing(undefined, elements, {}) as StoreyData[];
     }
     
-    return Array.from(storeyMap.values()).sort((a, b) => a.elevation - b.elevation);
+    return Array.from(storeyMap.values()).sort((a, b) => a.elevation - b.elevation) as StoreyData[];
   }
   
   private extractStoreysFromCAD(_filePath: string): StoreyData[] {

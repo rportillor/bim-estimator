@@ -1,20 +1,20 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useParams , Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import BimViewer from "@/components/bim/bim-viewer";
 import { FloorGenerationButton } from "@/components/bim/FloorGenerationButton";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Progress } from "@/components/ui/progress";
-import { Layers, Eye, Download, ArrowLeft, Building, Zap, AlertTriangle, Loader2 } from "lucide-react";
+import { Layers, Eye, Download, ArrowLeft, Building, Zap, AlertTriangle, Grid } from "lucide-react";
 import { MissingDataDialog } from "@/components/dialogs/MissingDataDialog";
+import { GridConfirmationDialog } from "@/components/bim/GridConfirmationDialog";
 
 export default function BIM() {
   const params = useParams();
   const projectId = params.projectId;
   const modelId = params.modelId;
   const [showMissingData, setShowMissingData] = useState(false);
-  const [liveProgress, setLiveProgress] = useState<Record<string, { percent: number; message: string; currentChunk?: number; totalChunks?: number }>>({});
+  const [showGridConfig, setShowGridConfig] = useState(false);
 
   // Fetch project details if projectId is provided
   const { data: project, isLoading: projectLoading } = useQuery({
@@ -28,64 +28,17 @@ export default function BIM() {
     enabled: !projectId
   });
 
-  // Fetch BIM models — poll every 5s while any model is generating
+  // Fetch BIM models for the project
   const { data: bimModels = [], isLoading: modelsLoading } = useQuery<any[]>({
     queryKey: ['/api/projects', projectId, 'bim-models'],
-    enabled: !!projectId,
-    refetchInterval: (query) => {
-      const models = query.state.data as any[] | undefined;
-      const anyGenerating = models?.some((m: any) => m.status === 'generating' || m.status === 'processing');
-      return anyGenerating ? 5000 : false;
-    }
+    enabled: !!projectId
   });
-
-  // Connect to SSE progress stream for any generating model
-  useEffect(() => {
-    if (!bimModels || bimModels.length === 0) return;
-    const generatingModels = bimModels.filter((m: any) => m.status === 'generating' || m.status === 'processing');
-    if (generatingModels.length === 0) return;
-
-    const sources: EventSource[] = [];
-    const token = localStorage.getItem('auth_token');
-
-    generatingModels.forEach((model: any) => {
-      try {
-        const url = `/api/progress/${model.id}/stream${token ? `?token=${encodeURIComponent(token)}` : ''}`;
-        const es = new EventSource(url);
-        es.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            setLiveProgress(prev => ({
-              ...prev,
-              [model.id]: {
-                percent: data.progress ?? 0,
-                message: data.message ?? '',
-                currentChunk: data.details?.currentChunk,
-                totalChunks: data.details?.totalChunks
-              }
-            }));
-          } catch {}
-        };
-        es.onerror = () => es.close();
-        sources.push(es);
-      } catch {}
-    });
-
-    return () => sources.forEach(es => es.close());
-  }, [bimModels]);
 
   const activeModel = modelId 
     ? bimModels?.find((model: any) => model.id === modelId)
     : bimModels?.find((model: any) => (model.status === 'ready' || model.status === 'completed') && model.elementCount > 0) 
       || bimModels?.filter((m: any) => m.status === 'completed')?.sort((a: any, b: any) => (b.elementCount || 0) - (a.elementCount || 0))?.[0] 
       || bimModels?.[0]; // Prioritize largest completed model
-
-  // Auto-redirect: if no modelId in URL but we have a completed model with elements, go straight to viewer
-  useEffect(() => {
-    if (!modelId && projectId && activeModel && (activeModel.status === 'ready' || activeModel.status === 'completed') && activeModel.elementCount > 0) {
-      window.location.replace(`/projects/${projectId}/bim/${activeModel.id}`);
-    }
-  }, [modelId, projectId, activeModel]);
 
   // Debug logging
   if (modelId && bimModels?.length > 0) {
@@ -237,8 +190,19 @@ export default function BIM() {
                     <>⟳ Regen</>
                   )}
                 </Button>
-                <Button 
-                  variant="outline" 
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowGridConfig(true)}
+                  className="text-xs px-2 py-1 h-6 hover:bg-blue-100 border-blue-300 text-blue-700"
+                  data-testid="button-grid-config"
+                  title="Configure grid coordinate system"
+                >
+                  <Grid className="h-3 w-3 mr-1" />
+                  Grid
+                </Button>
+                <Button
+                  variant="outline"
                   size="sm"
                   onClick={() => {
                     const event = new CustomEvent('toggleLayers', { detail: { modelId: activeModel?.id } });
@@ -433,55 +397,38 @@ export default function BIM() {
                               {model.status === 'failed' && (
                                 <span className="bg-red-100 text-red-700 px-1 rounded text-xs">Failed</span>
                               )}
-                              {model.status === 'generating' && (() => {
-                                const live = liveProgress[model.id];
-                                const geo = model.geometryData && typeof model.geometryData === 'object' ? model.geometryData : null;
-                                const pct = live?.percent ?? geo?.progressPercent ?? 0;
-                                const curChunk = live?.currentChunk ?? geo?.currentChunk;
-                                const totChunk = live?.totalChunks ?? geo?.totalChunks;
-                                return (
-                                  <div className="w-full mt-1 space-y-1">
-                                    <div className="flex items-center justify-between">
-                                      <div className="flex items-center gap-1">
-                                        <Loader2 className="h-3 w-3 animate-spin text-yellow-600" />
-                                        <span className="text-yellow-700 font-medium text-xs">
-                                          Analyzing{curChunk && totChunk ? ` chunk ${curChunk}/${totChunk}` : '…'}
-                                        </span>
-                                      </div>
-                                      <div className="flex items-center gap-1">
-                                        <span className="text-yellow-700 text-xs font-semibold">{pct}%</span>
-                                        <Button
-                                          variant="outline"
-                                          size="sm"
-                                          onClick={async (e) => {
-                                            e.stopPropagation();
-                                            e.preventDefault();
-                                            if (confirm('Stop generating this model?')) {
-                                              try {
-                                                const token = localStorage.getItem('auth_token');
-                                                const response = await fetch(`/api/bim/models/${model.id}/stop-processing`, {
-                                                  method: 'POST',
-                                                  headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
-                                                  credentials: 'include'
-                                                });
-                                                if (response.ok) window.location.reload();
-                                              } catch (error) {
-                                                console.error('Failed to stop generation:', error);
-                                              }
-                                            }
-                                          }}
-                                          className="text-xs px-1.5 py-0 h-4 bg-red-50 border-red-300 text-red-700 hover:bg-red-100"
-                                          title="Stop generation"
-                                        >✕</Button>
-                                      </div>
-                                    </div>
-                                    <Progress value={pct} className="h-1.5 bg-yellow-100" />
-                                    {live?.message && (
-                                      <p className="text-xs text-gray-500 truncate">{live.message}</p>
-                                    )}
-                                  </div>
-                                );
-                              })()}
+                              {model.status === 'generating' && (
+                                <>
+                                  <span className="bg-yellow-100 text-yellow-700 px-1 rounded text-xs">Generating</span>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={async (e) => {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      if (confirm('Stop generating this model?')) {
+                                        try {
+                                          const token = localStorage.getItem('auth_token');
+                                          const response = await fetch(`/api/bim/models/${model.id}/stop-processing`, {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
+                                            credentials: 'include'
+                                          });
+                                          if (response.ok) {
+                                            window.location.reload();
+                                          }
+                                        } catch (error) {
+                                          console.error('Failed to stop generation:', error);
+                                        }
+                                      }
+                                    }}
+                                    className="text-xs px-2 py-1 h-5 bg-red-50 border-red-300 text-red-700 hover:bg-red-100 ml-1"
+                                    title="Stop generation"
+                                  >
+                                    Stop
+                                  </Button>
+                                </>
+                              )}
                               {(model.status === 'ready' || model.status === 'completed') && model.elementCount > 0 && (
                                 <span className="bg-green-100 text-green-700 px-1 rounded text-xs">Ready</span>
                               )}
@@ -692,6 +639,18 @@ export default function BIM() {
           onClose={() => setShowMissingData(false)}
           onResolved={() => {
             // Refresh BIM model data after user provides missing dimensions
+            window.location.reload();
+          }}
+        />
+      )}
+
+      {/* Grid Confirmation Dialog */}
+      {projectId && (
+        <GridConfirmationDialog
+          projectId={projectId}
+          open={showGridConfig}
+          onOpenChange={setShowGridConfig}
+          onConfirmed={() => {
             window.location.reload();
           }}
         />

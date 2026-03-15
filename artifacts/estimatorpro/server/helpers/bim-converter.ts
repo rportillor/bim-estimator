@@ -1,4 +1,5 @@
 // server/helpers/bim-converter.ts
+import path from 'path';
 import { computePositionForElement, type BuildingAnalysis, type PositioningMode } from "./positioning";
 import { parseDimensionString } from "./parse-dimensions";
 import { inferStoreyElevation } from "./storeys";
@@ -45,10 +46,11 @@ function coerceDims(real: RealBIMElement){
   if(!Number.isFinite(h)&&Number.isFinite(P.height))h=Number(P.height);
   if(!Number.isFinite(d)&&Number.isFinite(P.depth)) d=Number(P.depth);
   if(!Number.isFinite(d)&&Number.isFinite(P.thickness)) d=Number(P.thickness);
-  if(!Number.isFinite(w)) w=Number(real.size?.x ?? 1);
-  if(!Number.isFinite(h)) h=Number(real.size?.y ?? 1);
-  if(!Number.isFinite(d)) d=Number(real.size?.z ?? 1);
-  return { width: Math.max(.01,w||1), height: Math.max(.01,h||1), depth: Math.max(.01,d||1) };
+  if(!Number.isFinite(w)) w=Number(real.size?.x ?? 0);
+  if(!Number.isFinite(h)) h=Number(real.size?.y ?? 0);
+  if(!Number.isFinite(d)) d=Number(real.size?.z ?? 0);
+  // No hardcoded fallbacks — 0 dimensions = RFI placeholder element
+  return { width: Math.max(0, w||0), height: Math.max(0, h||0), depth: Math.max(0, d||0) };
 }
 
 export function convertRealElementToLegacyFormat(
@@ -105,7 +107,6 @@ export function getDocumentPath(document: any): string | undefined {
 
   if (document.filename) {
     // Last resort: uploads/<basename> — matches loadFileBuffer candidate list
-    const path = require('path');
     return `uploads/${path.basename(document.filename)}`;
   }
 

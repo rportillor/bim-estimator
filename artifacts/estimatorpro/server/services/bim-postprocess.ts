@@ -10,7 +10,8 @@ import { detectRoundSymbolsFromRasters } from "./raster-legend-assoc";
 import { placeDetectedSymbolsAsElements, placeDetectedSymbolsAsElements_LEGACY } from "../helpers/site-symbols";
 import crypto from "crypto";
 import { detectRasterSymbolsForModel } from "./raster-glyph-locator";
-import { FLOOR_DATUMS } from "./moorings-project-data";
+// FLOOR_DATUMS import removed — storey elevations come from Claude's drawing extraction only
+// import { FLOOR_DATUMS } from "./moorings-project-data";
 // ── Human-modeler workflow enhancements (v15.31) ─────────────────────────
 import { establishRelationships } from "./relationship-engine";
 import { upgradeGeometry } from "./geometry-upgrade";
@@ -38,35 +39,10 @@ function familyOf(e: any): keyof typeof COLOR_BY_FAMILY {
 }
 
 // ---------------------------------------------------------------------------
-// Moorings confirmed floor datums (mASL, C1 confidence) used for absolute Z.
-// Populated from FLOOR_DATUMS in moorings-project-data.ts.
+// Storey elevations come exclusively from Claude's extraction of building
+// sections/elevations. No hardcoded project-specific datums.
+// All storey elevations come from Claude's extraction of building sections.
 // ---------------------------------------------------------------------------
-const MOORINGS_DATUM_MAP = new Map<string, number>(
-  FLOOR_DATUMS.map(d => [d.level.toLowerCase(), d.elevationM])
-);
-// Aliases that Claude's storey labels commonly use
-MOORINGS_DATUM_MAP.set("underground", 257.60);
-MOORINGS_DATUM_MAP.set("parking",     257.60);
-MOORINGS_DATUM_MAP.set("ground",      262.25);
-MOORINGS_DATUM_MAP.set("grade",       262.25);
-MOORINGS_DATUM_MAP.set("main",        262.25);
-MOORINGS_DATUM_MAP.set("second",      266.25);
-MOORINGS_DATUM_MAP.set("floor 2",     266.25);
-MOORINGS_DATUM_MAP.set("level 2",     266.25);
-MOORINGS_DATUM_MAP.set("third",       269.85);
-MOORINGS_DATUM_MAP.set("floor 3",     269.85);
-MOORINGS_DATUM_MAP.set("level 3",     269.85);
-MOORINGS_DATUM_MAP.set("penthouse",   273.95);
-MOORINGS_DATUM_MAP.set("mechanical",  273.95);
-
-/** Resolve a storey label to a Moorings absolute mASL elevation; null if no match. */
-function resolveMooringsDatum(storeyLabel: string): number | null {
-  const s = storeyLabel.toLowerCase().trim();
-  for (const [key, elev] of MOORINGS_DATUM_MAP.entries()) {
-    if (s.includes(key)) return elev;
-  }
-  return null;
-}
 
 export async function postprocessAndSave(modelId: string, elements: any[], metadata: any = {}) {
   console.log("🔧 POSTPROCESS: start", modelId, "elements:", elements?.length || 0);
@@ -196,19 +172,16 @@ export async function postprocessAndSaveBIM_LEGACY(opts: PostOpts) {
   }
   work = sanitized;
 
-  // 🏢 STOREY ELEVATIONS: absolute Z from Moorings confirmed datums.
-  // Architecture law: no invented values — only C1-confidence confirmed datums
-  // from FLOOR_DATUMS (moorings-project-data.ts), or Claude's extracted
-  // elevation annotation. Ground floor (262.25 mASL) is the reference datum.
+  // 🏢 STOREY ELEVATIONS: Use ONLY Claude's extracted elevations from building sections.
+  // No hardcoded project-specific datums — all Z values come from the drawings.
   const storeys = mergedAnalysis.storeys || [];
   if (storeys.length > 0) {
-    console.log(`🏢 Applying storey elevations to ${work.length} elements across ${storeys.length} levels`);
+    console.log(`🏢 Applying Claude-extracted storey elevations to ${work.length} elements across ${storeys.length} levels`);
 
     const storeyMap = new Map<string, number>();
     for (const s of storeys) {
       const name = String(s?.name || `Z${s?.elevation??0}`);
-      const mooringsDatum = resolveMooringsDatum(name);
-      const elev = mooringsDatum !== null ? mooringsDatum : Number(s?.elevation ?? 0);
+      const elev = Number(s?.elevation ?? 0);
       storeyMap.set(name, elev);
     }
 
@@ -216,36 +189,17 @@ export async function postprocessAndSaveBIM_LEGACY(opts: PostOpts) {
       let g: any;
       try { g = typeof e?.geometry === 'string' ? JSON.parse(e.geometry) : (e?.geometry || {}); } catch { g = {}; }
       const p = g.location?.realLocation || {x:0,y:0,z:0};
-      const levelName = e.storey?.name || e.properties?.level || e.storeyName || "Ground Floor";
-      const mooringsDatum = resolveMooringsDatum(levelName);
-      const elev = mooringsDatum !== null ? mooringsDatum : (storeyMap.get(levelName) ?? 0);
-      p.z = elev; // absolute mASL — do not add to existing z (avoids double-counting)
+      const levelName = e.storey?.name || e.properties?.level || e.storeyName || '';
+      const elev = storeyMap.get(levelName) ?? p.z ?? 0;
+      p.z = elev;
       g.location = { ...(g.location||{}), realLocation: p };
       e.geometry = g;
       e.storey = { ...(e.storey||{}), name: levelName, elevation: elev };
     }
 
-    console.log(`✅ Applied elevations: ${Array.from(storeyMap.entries()).map(([n,e]) => `${n}=${e}m`).join(", ")}`);
+    console.log(`✅ Applied elevations from drawings: ${Array.from(storeyMap.entries()).map(([n,e]) => `${n}=${e}m`).join(", ")}`);
   } else {
-    // No storey array from Claude — apply Moorings datums directly from element labels
-    let applied = 0;
-    for (const e of work) {
-      const levelName = e.storey?.name || e.properties?.level || e.storeyName || "";
-      if (!levelName) continue;
-      const datum = resolveMooringsDatum(levelName);
-      if (datum === null) continue;
-      let g: any;
-      try { g = typeof e?.geometry === 'string' ? JSON.parse(e.geometry) : (e?.geometry || {}); } catch { g = {}; }
-      const p = g.location?.realLocation || {x:0,y:0,z:0};
-      p.z = datum;
-      g.location = { ...(g.location||{}), realLocation: p };
-      e.geometry = g;
-      e.storey = { ...(e.storey||{}), elevation: datum };
-      applied++;
-    }
-    if (applied > 0) {
-      console.log(`🏢 Applied Moorings absolute datums to ${applied} labelled elements (no storey array from Claude)`);
-    }
+    console.log(`⚠️ No storey data from Claude — elements keep their existing Z coordinates. RFI: building sections needed for floor elevations.`);
   }
 
   // 3) Site symbol detection (optional)

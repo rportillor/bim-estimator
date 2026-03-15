@@ -1,6 +1,5 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import Anthropic from "@anthropic-ai/sdk";
 import { storage } from "./storage";
 import { extractProjectFacts } from "./compliance/extract-project-facts";
 import { EnhancedErrorHandler } from "./helpers/enhanced-error-handler";
@@ -60,7 +59,9 @@ export function normalizeDocumentForApi(doc: any) {
     estimateImpact: doc?.estimateImpact ?? doc?.estimate_impact ?? "unknown",
   };
 }
-import { insertProjectSchema, insertDocumentSchema, insertBoqItemSchema, insertReportSchema, insertAiConfigurationSchema, insertProcessingJobSchema, insertBimModelSchema } from "@shared/schema";
+import { insertProjectSchema, insertDocumentSchema, insertBoqItemSchema, insertReportSchema, insertAiConfigurationSchema, insertProcessingJobSchema, insertBimModelSchema, boqItems, bimElements, bimModels, documentImages } from "@shared/schema";
+import { db } from "./db";
+import { eq } from "drizzle-orm";
 // [*] REMOVED: RealQTOProcessor - using ConstructionWorkflowProcessor for all processing
 // import { RealQTOProcessor } from "./real-qto-processor";
 import { smartAnalysisService } from "./smart-analysis-service";
@@ -812,37 +813,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/projects/:projectId/similarity/run", authenticateToken, async (req, res) => {
     try {
       const projectId = req.params.projectId;
-      let { pairs, documentMetadata } = req.body || {};
-      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-      // Auto-build pairs from project documents when none provided
-      if (!pairs || pairs.length === 0) {
-        const docs = await storage.getDocumentsByProject(projectId);
-        const readyDocs = docs.filter((d: any) => d.textContent && d.textContent.trim().length > 0);
-        pairs = [];
-        const meta: Record<string, any> = {};
-        for (let i = 0; i < readyDocs.length; i++) {
-          meta[readyDocs[i].id] = { name: readyDocs[i].originalName || readyDocs[i].filename || readyDocs[i].id };
-          for (let j = i + 1; j < readyDocs.length; j++) {
-            pairs.push({
-              a: { id: readyDocs[i].id, text: readyDocs[i].textContent, filename: readyDocs[i].originalName || readyDocs[i].filename },
-              b: { id: readyDocs[j].id, text: readyDocs[j].textContent, filename: readyDocs[j].originalName || readyDocs[j].filename },
-            });
-          }
-        }
-        if (!documentMetadata || Object.keys(documentMetadata).length === 0) {
-          documentMetadata = meta;
-        }
-        logger.info(`[doc-sim] auto-built ${pairs.length} pairs from ${readyDocs.length} ready docs for project ${projectId}`);
-      }
-
-      if (pairs.length === 0) {
-        return res.status(400).json({ error: "No documents with extracted text found. Upload and process documents first." });
-      }
-
-      similarityAnalyzer.start(projectId, anthropic, pairs, documentMetadata || {})
+      const { pairs, documentMetadata } = req.body || {};
+      // Use the anthropic client from our existing system
+      const anthropic = req.app.get("anthropic");
+      similarityAnalyzer.start(projectId, anthropic, pairs || [], documentMetadata || {})
         .catch((e: any) => logger.warn("[doc-sim] background error:", e?.message || e));
-      res.json({ ok: true, status: "started", pairCount: pairs.length });
+      res.json({ ok: true, status: "started" });
     } catch (error) {
       logger.error("Document similarity run error:", error as any);
       res.status(500).json({ error: "Failed to start similarity analysis" });
@@ -1553,8 +1529,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/projects", authenticateToken, requireActiveSubscription, async (req, res) => {
     try {
       const projectData = insertProjectSchema.parse({
-        country: "canada",
-        federalCode: "NBC",
         ...req.body,
         userId: req.user!.id
       });
@@ -1725,11 +1699,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const documentData = insertDocumentSchema.parse({
           projectId: req.params.projectId,
           filename: file.filename,
-          storageKey: file.filename,
           originalName: file.originalname,
           fileType: path.extname(file.originalname).toLowerCase(),
           fileSize: file.size,
-          analysisStatus: "Processing",
+          analysisStatus: "Processing", // Will be updated after extraction
         });
 
         const document = await storage.createDocument(documentData);
@@ -1754,38 +1727,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             
             console.log(`[*] REAL CONTENT EXTRACTED: ${extracted.pageCount} pages, ${extracted.textContent.length} characters`);
             console.log(`🎯 Claude will now receive REAL content instead of fallback strings!`);
-
-            // 🔄 CACHE INVALIDATION: New document uploaded — clear any previously cached BIM analysis
-            // so the next BIM generation re-runs Claude with the updated document set
-            try {
-              const existingDocs = await storage.getDocumentsByProject(req.params.projectId);
-              for (const existingDoc of existingDocs) {
-                const ar = (existingDoc as any).analysisResult;
-                if (ar && (typeof ar === 'object' ? ar.building_analysis : (ar as string).includes('building_analysis'))) {
-                  await storage.updateDocument(existingDoc.id, { analysisResult: null });
-                  console.log(`🔄 CACHE CLEARED: Removed stale BIM analysis from doc ${existingDoc.id} — new doc triggers re-analysis`);
-                  break; // only one doc holds the cache
-                }
-              }
-            } catch (clearErr: any) {
-              console.warn(`⚠️ Non-fatal: could not clear analysis cache — ${clearErr.message}`);
-            }
-
-            // 🔄 SIMILARITY CACHE INVALIDATION: New document means new pairs need analysis
-            try {
-              const { deleteSimilarityCache } = await import('./services/similarity-cache');
-              await deleteSimilarityCache(req.params.projectId);
-              console.log(`🔄 SIMILARITY CACHE CLEARED: New document triggers fresh similarity analysis`);
-            } catch (simErr: any) {
-              console.warn(`⚠️ Non-fatal: could not clear similarity cache — ${simErr.message}`);
-            }
-
+            
           } catch (error) {
-            const errMsg = error instanceof Error ? error.message : String(error);
-            console.error(`[*] PDF content extraction failed for ${file.originalname}: ${errMsg}`);
+            console.error(`[*] PDF content extraction failed for ${file.originalname}:`, error);
             await storage.updateDocument(document.id, {
               analysisStatus: "Failed",
-              textContent: `PDF extraction failed: ${errMsg}`
+              textContent: `PDF extraction failed: ${error instanceof Error ? error.message : 'Unknown error'}`
             });
           }
         } else {
@@ -1873,8 +1820,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 analysisStatus: "Ready",
               });
             } catch (importError) {
-              const importErrMsg = importError instanceof Error ? importError.message : String(importError);
-              console.error(`[3D] CAD import failed for ${file.originalname}: ${importErrMsg}`);
+              console.error(`[3D] CAD import failed for ${file.originalname}:`, importError);
               await storage.updateDocument(document.id, {
                 analysisStatus: "Ready",
               });
@@ -1893,8 +1839,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.status(201).json(documents);
     } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      console.error(`Error uploading documents: ${errMsg}`);
+      console.error("Error uploading documents:", error);
       res.status(400).json({ message: "Error uploading files" });
     }
   });
@@ -2720,50 +2665,57 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ error: 'Access denied' });
       }
 
-      // PRIMARY: Derive storeys directly from elements in DB — always accurate,
-      // never stale, never dependent on geometryData blob format.
-      const elements = await storage.getBimElements(modelId);
+      // Extract storey information from model data
       let storeys: any[] = [];
-      
-      if (elements.length > 0) {
-        const storeyMap = new Map<string, { name: string; elevation: number; elementCount: number; guid: string | null }>();
-        elements.forEach((e: any) => {
-          const name = e.storeyName || 'Unknown';
-          const elev = e.elevation !== null && e.elevation !== undefined ? Number(e.elevation) : 0;
-          if (!storeyMap.has(name)) {
-            storeyMap.set(name, { name, elevation: elev, elementCount: 0, guid: null });
+      if (model.geometryData && typeof model.geometryData === 'string') {
+        try {
+          const modelData = safeJsonParse(model.geometryData, 10 * 1024 * 1024); // 10MB limit
+          if (!modelData) {
+            logger.warn('Failed to parse BIM model geometry data for storey extraction', { modelId: model.id });
+            return res.json([]);
           }
-          const entry = storeyMap.get(name)!;
-          entry.elementCount++;
-          // Use the smallest (lowest) elevation seen for this storey name
-          if (elev < entry.elevation) entry.elevation = elev;
-        });
-        storeys = Array.from(storeyMap.values()).sort((a, b) => a.elevation - b.elevation);
-      }
-
-      // SECONDARY: Fall back to bim_storeys table if elements gave nothing
-      if (storeys.length === 0) {
-        const dbStoreys = await storage.getBimStoreys(modelId);
-        if (dbStoreys.length > 0) {
-          storeys = dbStoreys.map((s: any) => ({
-            name: s.name,
-            elevation: Number(s.elevation ?? 0),
-            elementCount: Number(s.elementCount ?? 0),
-            guid: s.guid ?? null,
-          }));
+          
+          // Phase 2: Extract real storey data from QTO processing
+          if (modelData.statistics?.realQTOData?.storeys) {
+            storeys = modelData.statistics.realQTOData.storeys;
+          } else if (modelData.elements) {
+            // Fallback: Extract storeys from elements
+            const storeyMap = new Map();
+            
+            modelData.elements.forEach((element: any) => {
+              if (element.properties?.storey) {
+                const storey = element.properties.storey;
+                if (!storeyMap.has(storey.name)) {
+                  storeyMap.set(storey.name, {
+                    name: storey.name,
+                    elevation: storey.elevation || 0,
+                    guid: storey.guid,
+                    elementCount: 0
+                  });
+                }
+                storeyMap.get(storey.name).elementCount++;
+              }
+            });
+            
+            storeys = Array.from(storeyMap.values()).sort((a, b) => a.elevation - b.elevation);
+          }
+        } catch (error) {
+          logger.warn('Error parsing model geometry data for storey extraction', { error: error instanceof Error ? error.message : String(error), modelId: model.id });
         }
       }
 
-      // No data at all — return empty array rather than a misleading default
+      // Default storeys if none found
       if (storeys.length === 0) {
-        logger.warn('No storey data found for model', { modelId });
+        storeys = [
+          { name: 'Ground Floor', elevation: 0, elementCount: 0, guid: null }
+        ];
       }
 
       res.json({
         modelId,
         storeys,
         totalStoreys: storeys.length,
-        totalElements: elements.length,
+        totalElements: storeys.reduce((sum, s) => sum + (s.elementCount || 0), 0)
       });
 
     } catch (error) {
@@ -2866,11 +2818,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           id: element.id,
           name: element.name,
           type: element.elementType,
-          elementType: element.elementType,
           category: element.category,
           material: element.material,
-          elevation: element.elevation,
-          storeyName: element.storeyName || null,
           geometry: typeof element.geometry === 'string' ? JSON.parse(element.geometry) : element.geometry,
           properties: typeof element.properties === 'string' ? JSON.parse(element.properties) : element.properties,
           location: typeof element.location === 'string' ? JSON.parse(element.location) : element.location
@@ -3118,65 +3067,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching cost analysis:", error);
       res.status(500).json({ error: "Failed to fetch cost analysis" });
-    }
-  });
-
-  // AI Insights: returns Claude's cached analysis for a project
-  app.get('/api/projects/:projectId/ai-insights', authenticateToken, async (req, res) => {
-    try {
-      const { projectId } = req.params;
-      const docs = await storage.getDocumentsByProject(projectId);
-
-      // Find any document that holds the cached BIM/Claude analysis
-      const docWithAnalysis = docs.find((d: any) => {
-        const ar = d.analysisResult;
-        if (!ar) return false;
-        if (typeof ar === 'object') return !!(ar as any).building_analysis;
-        try { return JSON.parse(ar as string)?.building_analysis; } catch { return false; }
-      });
-
-      const analysis = docWithAnalysis
-        ? (typeof docWithAnalysis.analysisResult === 'object'
-            ? docWithAnalysis.analysisResult
-            : JSON.parse(docWithAnalysis.analysisResult as string))
-        : null;
-
-      // Also pull Smart Analysis cache
-      let smartAnalysis: any = null;
-      try {
-        const { smartAnalysisService } = await import('./smart-analysis-service');
-        smartAnalysis = await (smartAnalysisService as any).getPreviousAnalysis?.(projectId, 'document_analysis');
-      } catch { /* optional */ }
-
-      // Build per-document summaries (text preview only — no Claude call)
-      const docSummaries = docs.map((d: any) => ({
-        id: d.id,
-        filename: d.originalName || d.filename,
-        analysisStatus: d.analysisStatus ?? d.analysis_status ?? 'Unknown',
-        pageCount: d.pageCount ?? null,
-        fileType: d.fileType ?? d.file_type ?? '',
-        hasText: !!(d.textContent && (d.textContent as string).length > 50),
-        textPreview: d.textContent
-          ? (d.textContent as string).replace(/\s+/g, ' ').trim().slice(0, 300)
-          : null,
-      }));
-
-      res.json({
-        hasAnalysis: !!analysis,
-        cachedAt: analysis?.cachedAt ?? null,
-        documentCount: docs.length,
-        docsWithText: docSummaries.filter(d => d.hasText).length,
-        buildingAnalysis: analysis?.building_analysis ?? null,
-        componentTypes: analysis?.componentTypes ?? null,
-        standardsRequired: analysis?.standardsRequired ?? null,
-        buildingHierarchy: analysis?.buildingHierarchy ?? null,
-        aiUnderstanding: analysis?.ai_understanding ?? null,
-        smartAnalysis: smartAnalysis?.analysisData ?? null,
-        documents: docSummaries,
-      });
-    } catch (err: any) {
-      console.error('AI insights error:', err);
-      res.status(500).json({ error: err.message });
     }
   });
 
@@ -3578,20 +3468,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put('/api/documents/:documentId', authenticateToken, async (req, res) => {
     try {
       const { documentId } = req.params;
-      const { reviewStatus, assignedReviewerId, assignedReviewerNote } = req.body;
-      const doc = await storage.getDocument(documentId);
-      if (!doc) return res.status(404).json({ error: 'Document not found' });
-      const isReviewAction = reviewStatus === 'approved' || reviewStatus === 'rejected';
-      const updated = await storage.updateDocument(documentId, {
-        ...(reviewStatus !== undefined ? { reviewStatus } : {}),
-        ...(isReviewAction ? { reviewedAt: new Date() } : {}),
-        ...(assignedReviewerId !== undefined ? { assignedReviewerId: assignedReviewerId || null } : {}),
-        ...(assignedReviewerNote !== undefined ? { assignedReviewerNote: assignedReviewerNote || null } : {}),
-        updatedAt: new Date(),
-      });
-      res.json(updated);
-    } catch (err) {
-      console.error('PUT /api/documents error:', err);
+      const updates = req.body;
+      res.json({ message: `Document ${documentId} updated`, updates });
+    } catch (_error) {
       res.status(500).json({ error: "Failed to update document" });
     }
   });
@@ -3599,63 +3478,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete('/api/documents/:documentId', authenticateToken, async (req, res) => {
     try {
       const { documentId } = req.params;
-      const doc = await storage.getDocument(documentId);
-      if (!doc) return res.status(404).json({ error: 'Document not found' });
-      const success = await storage.deleteDocument(documentId);
-      if (!success) return res.status(500).json({ error: 'Failed to delete document' });
-      res.json({ message: 'Document deleted successfully', documentId });
+      res.json({ message: `Document ${documentId} deleted` });
     } catch (_error) {
       res.status(500).json({ error: "Failed to delete document" });
-    }
-  });
-
-  // Document Comments
-  app.get('/api/documents/:documentId/comments', authenticateToken, async (req, res) => {
-    try {
-      const { documentId } = req.params;
-      const doc = await storage.getDocument(documentId);
-      if (!doc) return res.status(404).json({ error: 'Document not found' });
-      const comments = await storage.getDocumentComments(documentId);
-      res.json(comments);
-    } catch (err) {
-      console.error('GET document comments error:', err);
-      res.status(500).json({ error: 'Failed to fetch comments' });
-    }
-  });
-
-  app.post('/api/documents/:documentId/comments', authenticateToken, async (req, res) => {
-    try {
-      const { documentId } = req.params;
-      const { body, commentType } = req.body;
-      if (!body?.trim()) return res.status(400).json({ error: 'Comment body is required' });
-      const doc = await storage.getDocument(documentId);
-      if (!doc) return res.status(404).json({ error: 'Document not found' });
-      const user = req.user?.id ? await storage.getUser(req.user.id) : null;
-      const comment = await storage.createDocumentComment({
-        documentId,
-        authorId: req.user?.id || null,
-        authorName: user?.name || user?.username || req.user?.username || 'Unknown',
-        body: body.trim(),
-        commentType: commentType || 'comment',
-      });
-      res.status(201).json(comment);
-    } catch (err) {
-      console.error('POST document comment error:', err);
-      res.status(500).json({ error: 'Failed to save comment' });
-    }
-  });
-
-  app.patch('/api/documents/:documentId/comments/:commentId/resolve', authenticateToken, async (req, res) => {
-    try {
-      const { commentId } = req.params;
-      const user = req.user?.id ? await storage.getUser(req.user.id) : null;
-      const resolverName = user?.name || user?.username || req.user?.username || 'Unknown';
-      const updated = await storage.resolveDocumentComment(commentId, resolverName);
-      if (!updated) return res.status(404).json({ error: 'Comment not found' });
-      res.json(updated);
-    } catch (err) {
-      console.error('PATCH resolve comment error:', err);
-      res.status(500).json({ error: 'Failed to resolve comment' });
     }
   });
 
@@ -3676,38 +3501,142 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Return extracted text content for a document so users can verify what was read
-  app.get('/api/documents/:documentId/extracted-text', authenticateToken, async (req, res) => {
+  app.get('/api/documents/:documentId/analysis', authenticateToken, async (req, res) => {
     try {
       const { documentId } = req.params;
       const doc = await storage.getDocument(documentId);
       if (!doc) return res.status(404).json({ error: 'Document not found' });
-      const text = (doc as any).textContent ?? (doc as any).text_content ?? null;
-      const words = text ? text.trim().split(/\s+/).filter(Boolean).length : 0;
-      res.json({
-        documentId: doc.id,
-        fileName: (doc as any).originalName ?? (doc as any).original_name ?? (doc as any).filename ?? 'Unknown',
-        analysisStatus: (doc as any).analysisStatus ?? (doc as any).analysis_status ?? 'Unknown',
-        pageCount: (doc as any).pageCount ?? (doc as any).page_count ?? null,
-        characterCount: text ? text.length : 0,
-        wordCount: words,
-        textContent: text ?? '',
-      });
-    } catch (err) {
-      console.error('GET /api/documents/:documentId/extracted-text error:', err);
-      res.status(500).json({ error: 'Failed to fetch extracted text' });
-    }
-  });
 
-  app.get('/api/documents/:documentId/analysis', authenticateToken, async (req, res) => {
-    try {
-      const { documentId: _documentId2 } = req.params;
-      res.json({ 
-        analysis: { confidence: 0.95, extractedElements: [] },
-        processingTime: 1250,
-        status: 'completed'
+      // Extract word count from text content
+      const textContent = doc.textContent || '';
+      const wordCount = textContent.trim() ? textContent.trim().split(/\s+/).length : 0;
+
+      // Detect CSI divisions from text content and analysis result
+      const csiDivisions: { code: string; name: string; itemCount: number }[] = [];
+      const csiDivisionMap: Record<string, string> = {
+        '01': 'General Requirements', '02': 'Existing Conditions', '03': 'Concrete',
+        '04': 'Masonry', '05': 'Metals', '06': 'Wood, Plastics & Composites',
+        '07': 'Thermal & Moisture Protection', '08': 'Openings', '09': 'Finishes',
+        '10': 'Specialties', '11': 'Equipment', '12': 'Furnishings',
+        '13': 'Special Construction', '14': 'Conveying Equipment',
+        '21': 'Fire Suppression', '22': 'Plumbing', '23': 'HVAC',
+        '25': 'Integrated Automation', '26': 'Electrical',
+        '27': 'Communications', '28': 'Electronic Safety & Security',
+        '31': 'Earthwork', '32': 'Exterior Improvements', '33': 'Utilities',
+      };
+
+      // Count CSI references in text
+      const csiCounts: Record<string, number> = {};
+      const csiPattern = /\b(0[1-9]|[12]\d|3[0-3])\s?\d{2}\s?\d{2}/g;
+      let match;
+      while ((match = csiPattern.exec(textContent)) !== null) {
+        const div = match[1];
+        csiCounts[div] = (csiCounts[div] || 0) + 1;
+      }
+
+      // Also check BOQ items for this project's CSI divisions
+      const boqResult = await db.select({
+        category: boqItems.category,
+        itemCode: boqItems.itemCode,
+      }).from(boqItems).where(eq(boqItems.projectId, doc.projectId));
+
+      for (const item of boqResult) {
+        const divMatch = item.itemCode?.match(/^(\d{2})/);
+        if (divMatch) {
+          csiCounts[divMatch[1]] = (csiCounts[divMatch[1]] || 0) + 1;
+        }
+      }
+
+      for (const [code, count] of Object.entries(csiCounts)) {
+        if (csiDivisionMap[code]) {
+          csiDivisions.push({ code, name: csiDivisionMap[code], itemCount: count });
+        }
+      }
+      csiDivisions.sort((a, b) => a.code.localeCompare(b.code));
+
+      // Get extracted products/specs from analysis result
+      const analysisResult = doc.analysisResult as Record<string, unknown> | null;
+      const extractedItems: { name: string; csiCode: string; category: string; quantity?: string }[] = [];
+
+      if (analysisResult) {
+        // Parse elements/items from Claude's analysis output
+        const elements = (analysisResult as Record<string, unknown>).elements ||
+                         (analysisResult as Record<string, unknown>).items ||
+                         (analysisResult as Record<string, unknown>).products || [];
+        if (Array.isArray(elements)) {
+          for (const el of elements.slice(0, 100)) {
+            extractedItems.push({
+              name: (el as Record<string, unknown>).name as string || (el as Record<string, unknown>).description as string || 'Unknown',
+              csiCode: (el as Record<string, unknown>).csiCode as string || (el as Record<string, unknown>).itemCode as string || '',
+              category: (el as Record<string, unknown>).category as string || (el as Record<string, unknown>).type as string || 'General',
+              quantity: (el as Record<string, unknown>).quantity as string || undefined,
+            });
+          }
+        }
+      }
+
+      // Also include BOQ items as extracted specs
+      for (const item of boqResult.slice(0, 100)) {
+        extractedItems.push({
+          name: item.category || 'Unknown',
+          csiCode: item.itemCode || '',
+          category: item.category || 'General',
+        });
+      }
+
+      // Get linked BIM elements
+      const bimElementsResult = await db.select({
+        id: bimElements.id,
+        elementType: bimElements.elementType,
+        name: bimElements.name,
+        category: bimElements.category,
+        material: bimElements.material,
+        storeyName: bimElements.storeyName,
+      }).from(bimElements)
+        .innerJoin(bimModels, eq(bimElements.modelId, bimModels.id))
+        .where(eq(bimModels.projectId, doc.projectId))
+        .limit(200);
+
+      // Get page/sheet info
+      const sheets = await db.select().from(documentImages)
+        .where(eq(documentImages.documentId, documentId))
+        .orderBy(documentImages.pageNumber);
+
+      // Text preview (first 2000 chars)
+      const textPreview = textContent.substring(0, 2000);
+
+      res.json({
+        documentId,
+        filename: doc.originalName || doc.filename,
+        fileType: doc.fileType,
+        fileSize: doc.fileSize,
+        analysisStatus: doc.analysisStatus,
+        uploadedAt: doc.createdAt,
+        summary: {
+          pageCount: doc.pageCount || 0,
+          wordCount,
+          csiDivisions,
+          sheetCount: sheets.length,
+        },
+        extractedItems,
+        textPreview,
+        sheets: sheets.map(s => ({
+          pageNumber: s.pageNumber,
+          sheetNumber: s.sheetNumber,
+          sheetTitle: s.sheetTitle,
+        })),
+        linkedBimElements: bimElementsResult.map(el => ({
+          id: el.id,
+          type: el.elementType,
+          name: el.name,
+          category: el.category,
+          material: el.material,
+          storey: el.storeyName,
+        })),
+        hasAnalysisResult: !!analysisResult,
       });
-    } catch (_error) {
+    } catch (error) {
+      console.error('Document analysis fetch error:', error);
       res.status(500).json({ error: "Failed to fetch document analysis" });
     }
   });
@@ -4442,6 +4371,91 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // GET /api/projects/:projectId/grid-config — read saved grid configuration
+  app.get("/api/projects/:projectId/grid-config", authenticateToken, async (req: any, res) => {
+    try {
+      const { projectId } = req.params;
+      if (!req.user) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+
+      const project = await storage.getProject(projectId);
+      if (!project || project.userId !== req.user.id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const models = await storage.getBimModels(projectId);
+      if (!models || models.length === 0) {
+        return res.json({ gridConfig: null });
+      }
+
+      const latestModel = models[0];
+      const metadata = typeof latestModel.metadata === "string"
+        ? safeJsonParse(latestModel.metadata) || {}
+        : latestModel.metadata || {};
+
+      res.json({ gridConfig: (metadata as any).gridConfig || null });
+    } catch (error) {
+      logger.error("Error reading grid config", { error });
+      res.status(500).json({ error: "Failed to read grid configuration" });
+    }
+  });
+
+  // POST /api/projects/:projectId/grid-config — save grid configuration
+  app.post("/api/projects/:projectId/grid-config", authenticateToken, async (req: any, res) => {
+    try {
+      const { projectId } = req.params;
+      if (!req.user) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+
+      const project = await storage.getProject(projectId);
+      if (!project || project.userId !== req.user.id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const { lettersAxis, numbersAxis, originLetter, originNumber, groundFloorName, units } = req.body;
+
+      // Basic validation
+      if (!lettersAxis || !["x", "y"].includes(lettersAxis)) {
+        return res.status(400).json({ error: "lettersAxis must be 'x' or 'y'" });
+      }
+      if (!numbersAxis || !["x", "y"].includes(numbersAxis)) {
+        return res.status(400).json({ error: "numbersAxis must be 'x' or 'y'" });
+      }
+      if (lettersAxis === numbersAxis) {
+        return res.status(400).json({ error: "lettersAxis and numbersAxis must differ" });
+      }
+      if (!units || !["mm", "m", "ft-in"].includes(units)) {
+        return res.status(400).json({ error: "units must be 'mm', 'm', or 'ft-in'" });
+      }
+
+      const models = await storage.getBimModels(projectId);
+      if (!models || models.length === 0) {
+        return res.status(404).json({ error: "No BIM model found for this project" });
+      }
+
+      const latestModel = models[0];
+      const gridConfig = {
+        lettersAxis,
+        numbersAxis,
+        originLetter: (originLetter || "A").trim().toUpperCase(),
+        originNumber: (originNumber || "1").trim(),
+        groundFloorName: (groundFloorName || "Ground Floor").trim(),
+        units,
+        confirmedAt: new Date().toISOString(),
+      };
+
+      await storage.updateBimModelMetadata(latestModel.id, { gridConfig });
+
+      logger.info("Grid config saved", { projectId, modelId: latestModel.id, gridConfig });
+      res.json({ success: true, gridConfig });
+    } catch (error) {
+      logger.error("Error saving grid config", { error });
+      res.status(500).json({ error: "Failed to save grid configuration" });
+    }
+  });
+
   app.get("/api/bim-models/:id/ifc", authenticateToken, async (req, res) => {
     try {
       const model = await storage.getBimModel(req.params.id);
@@ -4750,18 +4764,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error('Error fetching documents:', error);
       res.status(500).json({ error: 'Failed to fetch documents' });
-    }
-  });
-
-  // List all users (for reviewer picker — returns only safe public fields)
-  app.get('/api/users', authenticateToken, async (req, res) => {
-    try {
-      const allUsers = await storage.getAllUsers();
-      const safeUsers = allUsers.map(u => ({ id: u.id, username: u.username, name: u.name, role: u.role }));
-      res.json(safeUsers);
-    } catch (err) {
-      console.error('GET /api/users error:', err);
-      res.status(500).json({ error: 'Failed to fetch users' });
     }
   });
 
@@ -5162,7 +5164,8 @@ async function _runComprehensiveAnalysis(documentId: string, projectId: string) 
         analysisResult: { 
           error: error instanceof Error ? error.message : "Unknown error occurred",
           timestamp: new Date().toISOString(),
-          stack: error instanceof Error ? error.stack : undefined
+          // INFO FIX: Don't expose stack traces in stored analysis results
+          stack: process.env.NODE_ENV === 'development' ? (error instanceof Error ? error.stack : undefined) : undefined
         }
       });
     } catch (updateError) {

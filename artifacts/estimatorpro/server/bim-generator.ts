@@ -581,14 +581,15 @@ export class BIMGenerator {
           try {
             const docToCache = documents.find((d: any) => d.textContent && d.textContent.length > 100) || documents[0];
             if (docToCache && analysisStrategy) {
+              const strat = analysisStrategy as any;
               const cachePayload = {
-                building_analysis: analysisStrategy.building_analysis,
-                ai_understanding: analysisStrategy.ai_understanding || analysisStrategy.strategy,
-                confidence: analysisStrategy.confidence,
-                overallConfidence: analysisStrategy.overallConfidence,
-                buildingHierarchy: analysisStrategy.buildingHierarchy,
-                componentTypes: analysisStrategy.componentTypes,
-                standardsRequired: analysisStrategy.standardsRequired,
+                building_analysis: strat.building_analysis,
+                ai_understanding: strat.ai_understanding || strat.strategy,
+                confidence: strat.confidence,
+                overallConfidence: strat.overallConfidence,
+                buildingHierarchy: strat.buildingHierarchy,
+                componentTypes: strat.componentTypes,
+                standardsRequired: strat.standardsRequired,
                 cachedAt: new Date().toISOString(),
                 documentCount: documents.length,
               };
@@ -716,7 +717,7 @@ export class BIMGenerator {
                 for (const page of pagesToScan) {
                   const base64 = typeof page === 'string' ? page : (page?.base64 || page?.data || null);
                   if (!base64) continue;
-                  const legendResp = await (this as any).anthropic.messages.create({
+                  const legendResp = await anthropic.messages.create({
                     model: 'claude-opus-4-5',
                     max_tokens: 1500,
                     temperature: 0,
@@ -1208,7 +1209,7 @@ export class BIMGenerator {
             elementCount: existingCount,
             status: 'completed',
             message: `Preserved ${existingCount} existing elements — new extraction yielded 0 placeable elements`,
-          };
+          } as any;
         }
       }
 
@@ -2897,9 +2898,9 @@ Return JSON with detailed compliance analysis:
     if (width > 0 && length > 0) {
       coordinates.push(
         { x: 0, y: 0, z: 0, element: "corner" },
-        { x: width * 1000, y: 0, z: 0, element: "building_corner" },
-        { x: width * 1000, y: length * 1000, z: 0, element: "building_corner" },
-        { x: 0, y: length * 1000, z: 0, element: "building_corner" }
+        { x: width, y: 0, z: 0, element: "building_corner" },
+        { x: width, y: length, z: 0, element: "building_corner" },
+        { x: 0, y: length, z: 0, element: "building_corner" }
       );
       console.log(`📍 Created ${coordinates.length} building corner coordinates`);
     }

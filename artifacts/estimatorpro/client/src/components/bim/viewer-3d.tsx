@@ -71,45 +71,41 @@ function getDims(e:any){
   const type = (e.elementType || e.type || "").toLowerCase();
   
   if(type.includes('wall') && e.properties?.start && e.properties?.end) {
-    // For walls: calculate length from start/end points (in millimeters), use properties for thickness/height
+    // For walls: calculate length from start/end points, use properties for thickness/height
     const start = e.properties.start;
     const end = e.properties.end;
     const length = Math.sqrt(Math.pow(end.x - start.x, 2) + Math.pow(end.y - start.y, 2));
-    // Convert from millimeters to meters for Three.js display
-    // Only use actual values from Claude's analysis, no defaults
-    const actualLength = length || geom.width;
-    const actualHeight = props.height || geom.height;
-    const actualDepth = props.width || geom.depth || geom.width;  // v15.8 BUG2: geom.width is where createWallElement stores thickness
-    
-    if (!actualLength || !actualHeight || !actualDepth) {
-      return null; // Don't render if dimensions are missing
-    }
-    
-    // BUG FIX (v15.4): coordinates and dimensions are already in METRES.
-    // real-qto-processor converts mm->m before storing. Do NOT divide by 1000.
+    // Dimensions are in metres from real-qto-processor (it converts mm→m)
+    const actualLength = coerceDimToMetres(length || geom.width || geom.length || 0);
+    const actualHeight = coerceDimToMetres(props.height || geom.height || 0);
+    const actualDepth = coerceDimToMetres(props.width || geom.depth || geom.width || 0);
+
+    // Render even with partial dimensions — RFI placeholders show as thin lines/planes
+    if (actualLength <= 0 && actualHeight <= 0) return null; // truly empty
     return {
-      width:  Math.max(0.001, Math.min(500, actualLength  || 1)),
-      height: Math.max(0.001, Math.min(50,  actualHeight  || 3)),
-      depth:  Math.max(0.001, Math.min(5,   actualDepth   || 0.2)),
+      width:  Math.max(0.01, Math.min(500, actualLength)),
+      height: Math.max(0.01, Math.min(50,  actualHeight)),
+      depth:  Math.max(0.01, Math.min(5,   actualDepth || 0.01)),
     };
   }
-  
-  // For other elements: dimensions are already in metres from real-qto-processor.
-  // NO DEFAULTS - only use actual values from Claude's analysis
-  let width  = Number(geom.width ?? props.width ?? geom.x);
-  let height = Number(geom.height ?? props.height ?? geom.y);
-  let depth  = Number(geom.depth ?? props.depth ?? geom.z ?? geom.length);
-  
-  // If any dimension is missing or invalid, don't render
-  if (!width || !height || !depth || !isFinite(width) || !isFinite(height) || !isFinite(depth)) {
-    return null;
+
+  // For other elements: coerce to metres (handles both mm and m values)
+  let width  = coerceDimToMetres(Number(geom.width ?? geom.length ?? props.width ?? geom.x ?? 0));
+  let height = coerceDimToMetres(Number(geom.height ?? props.height ?? geom.y ?? 0));
+  let depth  = coerceDimToMetres(Number(geom.depth ?? props.depth ?? geom.z ?? 0));
+
+  // Render even with partial dimensions — show what we have
+  if ((!width || !isFinite(width)) && (!height || !isFinite(height)) && (!depth || !isFinite(depth))) {
+    return null; // All three missing — truly empty element
   }
-  
-  // Coerce to metres (backward compat with pre-v15.4 mm dimensions)
+  width  = isFinite(width)  ? width  : 0;
+  height = isFinite(height) ? height : 0;
+  depth  = isFinite(depth)  ? depth  : 0;
+
   return {
-    width:  Math.max(0.001, Math.min(500, coerceDimToMetres(width))),
-    height: Math.max(0.001, Math.min(50,  coerceDimToMetres(height))),
-    depth:  Math.max(0.001, Math.min(500, coerceDimToMetres(depth))),
+    width:  Math.max(0.01, Math.min(500, width  || 0.01)),
+    height: Math.max(0.01, Math.min(50,  height || 0.01)),
+    depth:  Math.max(0.01, Math.min(500, depth  || 0.01)),
   };
 }
 
@@ -583,14 +579,13 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
   },[modelId]);
 
   useEffect(()=>{
-    if(!ready || !modelId || !three.current) return;
+    if(!ready || !modelId || !three.current || isLoading) return;
     
-    // Cancel any in-progress load — AbortController handles concurrent safety
+    // Cancel any previous load
     if(loadAbortController.current) {
       loadAbortController.current.abort();
     }
     loadAbortController.current = new AbortController();
-    setIsLoading(false); // Reset before the async body sets it true
     
     const {scene,camera,controls} = three.current;
     // clear previous (keep helpers)
@@ -732,10 +727,27 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         return cc;
       });
       
-      // Calculate Y offset to bring building to ground level (Y=0 in Three.js)
-      // Fix: Don't apply large offsets that push building way off screen
-      const yOffset = 0; // Keep building centered - no large coordinate offset
-      console.log(`🎯 Coordinate system transformation: Y offset = ${yOffset.toFixed(1)}m (Building: Y=${minBuildingY.toFixed(1)} to ${maxBuildingY.toFixed(1)}, Z=${minZ.toFixed(1)} to ${maxZ.toFixed(1)})`);
+      // Normalize Z: detect absolute datums (e.g. 257.6m mASL) and convert to relative heights.
+      // The offset is stored and applied to ALL coordinate reads throughout rendering.
+      const zDatumOffset = Number.isFinite(minZ) && minZ > 50 ? minZ : 0; // >50m suggests absolute datum
+      if (zDatumOffset !== 0) {
+        for (const cc of _rawCoords) {
+          cc.z -= zDatumOffset;
+        }
+        minZ -= zDatumOffset;
+        maxZ -= zDatumOffset;
+        console.log(`🏢 Z datum normalized: subtracted ${zDatumOffset.toFixed(2)}m (absolute datum → relative heights)`);
+      }
+
+      // Helper: coerce + apply datum offset (used for all mesh placements in this effect)
+      const coerceWithDatum = (x: number, y: number, z: number) => {
+        const cc = coerceCoordToMetres(x, y, z);
+        cc.z -= zDatumOffset;
+        return cc;
+      };
+
+      const yOffset = 0;
+      console.log(`🎯 Coordinate system: Y offset=${yOffset.toFixed(1)}m, Building: Y=${minBuildingY.toFixed(1)}→${maxBuildingY.toFixed(1)}, Z=${minZ.toFixed(1)}→${maxZ.toFixed(1)}`);
 
       // ═══════════════════════════════════════════════════════════════════
       // HELPER: Create Three.js geometry from serialized mesh data
@@ -868,12 +880,10 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
               || e?.properties?.realLocation
               || e?.geometry?.location?.coordinates
               || parsedLoc2 || e?.location || {x:0,y:0,z:0};
-            const cc3 = coerceCoordToMetres(
+            const cc3 = coerceWithDatum(
               Number(rawLoc2.x || 0), Number(rawLoc2.y || 0), Number(rawLoc2.z || 0)
             );
-            const elevM2 = (e.elevation !== null && e.elevation !== undefined)
-              ? Number(e.elevation) : cc3.z;
-            const pp = { x: cc3.x, y: elevM2, z: cc3.y }; // BIM Z-up → Three.js Y-up
+            const pp = { x: cc3.x, y: cc3.z, z: cc3.y }; // BIM Z-up → Three.js Y-up
             const elType2 = (e.elementType || e.type || e.category || '').toLowerCase();
             const yaw = e?.geometry?.orientation?.yawRad || 0;
 
@@ -1180,22 +1190,16 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
               || e?.location
               || {x:0,y:0,z:0};
 
-        // Coerce to metres (backward compat), then axis-swap for Three.js
-        const cc2 = coerceCoordToMetres(
+        // Coerce to metres + apply datum offset, then axis-swap for Three.js
+        const cc2 = coerceWithDatum(
           Number(rawLocation.x || 0),
           Number(rawLocation.y || 0),
           Number(rawLocation.z || 0)
         );
-        // ✅ FIX: Use the elevation column for height (already corrected to relative metres:
-        // 0, 4.65, 8.65, 12.25, 16.35m). The geometry z is an absolute datum (257.6m etc.)
-        // that compresses all floors to <1m after coercion. e.elevation is authoritative.
-        const elevationM = (e.elevation !== null && e.elevation !== undefined)
-          ? Number(e.elevation)
-          : cc2.z;
         const p = {
           x: cc2.x,
-          y: elevationM, // Relative floor height (Three.js Y = up)
-          z: cc2.y       // Building Y (depth/north-south) → Three.js Z (forward)
+          y: cc2.z,   // Building Z (height/elevation) → Three.js Y (up)
+          z: cc2.y    // Building Y (depth/north-south) → Three.js Z (forward)
         };
         const type = (e.elementType || e.type || e.category || "").toLowerCase();
 
@@ -1580,19 +1584,20 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         
         // 🏗️ REALISTIC BUILDING POSITIONING: Use actual extracted coordinates from Claude analysis
         if(isWall && e.properties?.start && e.properties?.end) {
-          // Walls: Position at midpoint and rotate to align with start/end
-          const start = e.properties.start;
-          const end = e.properties.end;
+          // Walls: coerce start/end to metres + datum offset, then position at midpoint
+          const rawStart = e.properties.start;
+          const rawEnd = e.properties.end;
+          const csStart = coerceWithDatum(Number(rawStart.x||0), Number(rawStart.y||0), 0);
+          const csEnd = coerceWithDatum(Number(rawEnd.x||0), Number(rawEnd.y||0), 0);
+          const start = { x: csStart.x, y: csStart.y };
+          const end = { x: csEnd.x, y: csEnd.y };
           const midX = (start.x + end.x) / 2;
           const midY = (start.y + end.y) / 2;
           const rotation = getWallRotation(e);
-          
-          // Use actual wall dimensions from Claude analysis
+
           const wallLength = Math.sqrt(Math.pow(end.x - start.x, 2) + Math.pow(end.y - start.y, 2));
-          // Only use actual dimensions from Claude's analysis
-          if (!dims || !dims.height || !dims.width) {
-            console.warn('Missing wall dimensions, skipping visualization');
-            continue;
+          if (!dims || (dims.height <= 0.01 && wallLength <= 0.01)) {
+            continue; // Truly empty — skip
           }
           const wallHeight = dims.height;
           const wallThickness = dims.width;
@@ -1818,7 +1823,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       });
       setIsLoading(false);
     })().catch(err => {
-      console.error('BIM load error:', err?.message || err?.stack || String(err), err);
+      console.error('BIM load error:', err);
       setIsLoading(false);
     });
     
@@ -1826,6 +1831,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       if(loadAbortController.current) {
         loadAbortController.current.abort();
       }
+      setIsLoading(false); // Reset so re-runs aren't blocked by stale isLoading=true
     };
   },[ready, modelId, visibleStoreys]); // visibleStoreys: re-render scene on floor toggle
 
