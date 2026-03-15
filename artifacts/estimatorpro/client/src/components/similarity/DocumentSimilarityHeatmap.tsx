@@ -579,7 +579,7 @@ export function DocumentSimilarityHeatmap({ projectId }: DocumentSimilarityHeatm
                           (s.overlapTypes && s.overlapTypes.includes(type as any)) || 
                           s.overlapType === type
                         ) || [];
-                        const avgScore = conflicts.length > 0 ? (conflicts.reduce((acc, s) => acc + s.similarityScore, 0) / conflicts.length) : 0;
+                        const avgScore = conflicts.length > 0 ? (conflicts.reduce((acc, s) => acc + (s.similarityScore ?? 0), 0) / conflicts.length) : 0;
                         const criticalCount = conflicts.filter(c => c.criticalLevel === 'high' || c.criticalLevel === 'critical').length;
                         
                         const typeDescriptions: Record<string, string> = {
@@ -703,7 +703,9 @@ export function DocumentSimilarityHeatmap({ projectId }: DocumentSimilarityHeatm
               </CardHeader>
               <CardContent>
                 <div className="space-y-4 max-h-96 overflow-y-auto">
-                  {matrix.similarities.slice(0, 15).map((sim) => (
+                  {matrix.similarities.slice(0, 15).map((sim) => {
+                    const simScore = sim.similarityScore ?? 0;
+                    return (
                     <div key={sim.id} className={`border rounded-lg p-4 ${
                       sim.criticalLevel === 'critical' ? 'border-red-300 bg-red-50' :
                       sim.criticalLevel === 'high' ? 'border-orange-300 bg-orange-50' :
@@ -720,7 +722,7 @@ export function DocumentSimilarityHeatmap({ projectId }: DocumentSimilarityHeatm
                         </div>
                         <div className="flex items-center gap-2 ml-4">
                           <Badge variant={sim.criticalLevel === 'high' || sim.criticalLevel === 'critical' ? 'destructive' : 'secondary'}>
-                            {sim.similarityScore.toFixed(1)}% overlap
+                            {simScore.toFixed(1)}% overlap
                           </Badge>
                           <Badge variant="outline" className="capitalize">
                             {sim.criticalLevel}
@@ -732,16 +734,16 @@ export function DocumentSimilarityHeatmap({ projectId }: DocumentSimilarityHeatm
                       <div className="mb-3">
                         <div className="bg-blue-50 border border-blue-200 rounded p-2">
                           <p className="text-xs text-blue-800 font-medium mb-1">
-                            📊 What {sim.similarityScore.toFixed(1)}% means for your project:
+                            📊 What {simScore.toFixed(1)}% means for your project:
                           </p>
                           <p className="text-xs text-blue-700">
-                            {sim.similarityScore < 5 
-                              ? `These documents have minimal overlap (${sim.similarityScore.toFixed(1)}%). This usually means they cover different aspects of construction - which is good for project organization.`
-                              : sim.similarityScore < 15
-                              ? `Low overlap (${sim.similarityScore.toFixed(1)}%) indicates these documents complement each other with some shared elements like dimensions or materials.`
-                              : sim.similarityScore < 35
-                              ? `Moderate overlap (${sim.similarityScore.toFixed(1)}%) suggests these documents address similar building components. Check for any conflicting specifications.`
-                              : `High overlap (${sim.similarityScore.toFixed(1)}%) means significant content duplication. This could indicate conflicting requirements or redundant information.`
+                            {simScore < 5 
+                              ? `These documents have minimal overlap (${simScore.toFixed(1)}%). This usually means they cover different aspects of construction - which is good for project organization.`
+                              : simScore < 15
+                              ? `Low overlap (${simScore.toFixed(1)}%) indicates these documents complement each other with some shared elements like dimensions or materials.`
+                              : simScore < 35
+                              ? `Moderate overlap (${simScore.toFixed(1)}%) suggests these documents address similar building components. Check for any conflicting specifications.`
+                              : `High overlap (${simScore.toFixed(1)}%) means significant content duplication. This could indicate conflicting requirements or redundant information.`
                             }
                           </p>
                         </div>
@@ -787,7 +789,7 @@ export function DocumentSimilarityHeatmap({ projectId }: DocumentSimilarityHeatm
                         </div>
                       )}
                     </div>
-                  ))}
+                  ); })}
                   
                   {matrix.similarities.length > 15 && (
                     <div className="text-center p-4 text-gray-500 text-sm">
