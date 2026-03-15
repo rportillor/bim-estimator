@@ -25,10 +25,14 @@ export default function BIM() {
     enabled: !!projectId,
   });
 
-  async function runBatch(batch: 'batch1' | 'batch2') {
+  async function runBatch(batch: 'batch1' | 'batch2' | 'batch_specs') {
     const activeModelId = activeModel?.id;
     if (!activeModelId) { alert('No active BIM model found.'); return; }
-    const label = batch === 'batch1' ? 'Batch 1 (20 support docs → Claude enrichment)' : 'Batch 2 (5 floor plans → grid + elements)';
+    const label = batch === 'batch1'
+      ? 'Batch 1 (20 support docs → Claude enrichment)'
+      : batch === 'batch2'
+      ? 'Batch 2 (5 floor plans → grid + elements)'
+      : 'Spec Batch (A004 Construction Assemblies — sent alone)';
     if (!confirm(`Run ${label}?\n\nThis will send documents to Claude and use API credits.`)) return;
     setBatchRunning(batch);
     setBatchRunResult(null);
@@ -349,6 +353,17 @@ export default function BIM() {
                   <Grid className="h-3 w-3 mr-1" />
                   {batchRunning === 'batch2' ? 'Running…' : 'Run B2'}
                 </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => runBatch('batch_specs')}
+                  disabled={batchRunning === 'batch_specs'}
+                  className="border-amber-400 text-amber-700 hover:bg-amber-50 flex-shrink-0 text-xs px-2 py-1 h-7"
+                  title="Run Spec Batch: A004 Construction Assemblies alone → Claude extracts assembly types, materials, specifications"
+                >
+                  <FileText className="h-3 w-3 mr-1" />
+                  {batchRunning === 'batch_specs' ? 'Running…' : 'Run Spec'}
+                </Button>
               </>
             )}
             <Button
@@ -384,7 +399,9 @@ export default function BIM() {
       {/* Batch run result notification */}
       {batchRunResult && (
         <div className={`px-6 py-2 text-sm flex items-center gap-2 ${batchRunResult.ok ? 'bg-emerald-50 border-b border-emerald-200 text-emerald-800' : 'bg-red-50 border-b border-red-200 text-red-800'}`}>
-          <span className="font-semibold">{batchRunResult.batch === 'batch1' ? 'Batch 1:' : 'Batch 2:'}</span>
+          <span className="font-semibold">
+            {batchRunResult.batch === 'batch1' ? 'Batch 1:' : batchRunResult.batch === 'batch2' ? 'Batch 2:' : 'Spec Batch:'}
+          </span>
           <span>{batchRunResult.message}</span>
           <button onClick={() => setBatchRunResult(null)} className="ml-auto text-gray-400 hover:text-gray-600">✕</button>
         </div>
@@ -404,8 +421,8 @@ export default function BIM() {
             {Object.entries(batchConfig.batches).map(([key, batch]: [string, any]) => (
               <div key={key} className="bg-white rounded-lg border border-blue-200 p-3">
                 <div className="flex items-center gap-2 mb-1">
-                  <Badge className={key === 'batch1' ? 'bg-blue-600 text-white text-xs' : 'bg-indigo-600 text-white text-xs'}>
-                    {key === 'batch1' ? 'Batch 1' : 'Batch 2'}
+                  <Badge className={key === 'batch1' ? 'bg-blue-600 text-white text-xs' : key === 'batch2' ? 'bg-indigo-600 text-white text-xs' : 'bg-amber-600 text-white text-xs'}>
+                    {key === 'batch1' ? 'Batch 1' : key === 'batch2' ? 'Batch 2' : 'Spec Batch'}
                   </Badge>
                   <span className="text-xs text-gray-500">{batch.documents?.length} drawings</span>
                 </div>

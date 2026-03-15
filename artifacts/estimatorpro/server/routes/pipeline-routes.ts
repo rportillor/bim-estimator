@@ -308,8 +308,9 @@ pipelineRouter.post('/api/bim/pipeline/:modelId/run-batch', async (req: Request,
   const { modelId } = req.params;
   const { batch } = req.body || {};
 
-  if (!batch || !['batch1', 'batch2'].includes(batch)) {
-    return res.status(400).json({ ok: false, message: 'Body must include { batch: "batch1" | "batch2" }' });
+  const validBatches = ['batch1', 'batch2', 'batch_specs'];
+  if (!batch || !validBatches.includes(batch)) {
+    return res.status(400).json({ ok: false, message: `Body must include { batch: "${validBatches.join('" | "')}" }` });
   }
 
   try {
@@ -380,22 +381,25 @@ pipelineRouter.post('/api/bim/pipeline/:modelId/run-batch', async (req: Request,
       });
     }
 
-    if (batch === 'batch1') {
-      // Batch 1: enrichment pass — stages 1-3 + element matching
+    if (batch === 'batch1' || batch === 'batch_specs') {
+      // Enrichment pass — stages 1-3 (schedules, wall sections, specs) + element matching
+      // batch1 = 20 support docs; batch_specs = A004 alone (Construction Assemblies)
       const elements = await storage.getBimElements(modelId);
       if (elements.length === 0) {
         return res.status(422).json({
           ok: false,
-          message: 'No existing elements to enrich. Batch 1 requires the 652 existing BIM elements.',
+          message: `No existing elements to enrich. "${batch}" requires existing BIM elements.`,
         });
       }
+
+      const batchLabel = batch === 'batch1' ? 'Batch 1' : 'Spec Batch';
 
       // Respond immediately
       res.json({
         ok: true,
         modelId,
-        batch: 'batch1',
-        message: `Batch 1 enrichment started: ${filteredDocs.length} documents → ${elements.length} elements. Poll /status for progress.`,
+        batch,
+        message: `${batchLabel} enrichment started: ${filteredDocs.length} document(s) → ${elements.length} elements. Poll /status for progress.`,
         documentCount: filteredDocs.length,
         existingElementCount: elements.length,
         documents: filteredDocs.map((d) => d.filename),
@@ -411,12 +415,12 @@ pipelineRouter.post('/api/bim/pipeline/:modelId/run-batch', async (req: Request,
             message,
           });
         } catch (err) {
-          logger.warn('Batch1 status update failed', { error: (err as Error).message });
+          logger.warn(`${batchLabel} status update failed`, { error: (err as Error).message });
         }
       };
 
       pipeline.enrichExistingElements(statusCallback, filteredDocs).catch((err) => {
-        logger.error('Batch 1 enrichment failed', { modelId, error: (err as Error).message });
+        logger.error(`${batchLabel} enrichment failed`, { modelId, error: (err as Error).message });
         updateModelStatus(storage, modelId, {
           status: 'failed',
           progress: 1.0,
