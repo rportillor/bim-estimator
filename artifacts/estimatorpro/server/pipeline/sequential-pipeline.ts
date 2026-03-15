@@ -278,12 +278,17 @@ export class SequentialPipeline {
    * Enrichment pass for existing elements (Path B -- The Moorings).
    * Runs stages 1-3 only, then matches existing elements to schedule/section data
    * and updates dimensions in DB.
+   *
+   * @param statusCallback  Optional progress callback
+   * @param overrideDocs    If provided, use these documents instead of loading all project docs.
+   *                        Pass the filtered Batch 1 documents here.
    */
   async enrichExistingElements(
     statusCallback?: StatusCallback,
+    overrideDocs?: Document[],
   ): Promise<{ updated: number; rfis: number }> {
     const notify = statusCallback || (async () => {});
-    this.documents = await storage.getDocuments(this.projectId);
+    this.documents = overrideDocs ?? await storage.getDocuments(this.projectId);
     let updated = 0;
     let rfis = 0;
 

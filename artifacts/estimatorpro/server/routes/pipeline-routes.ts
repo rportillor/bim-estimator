@@ -2,13 +2,15 @@
 // Express router for the sequential BIM extraction pipeline.
 //
 // Endpoints:
-//   POST /api/bim/pipeline/:projectId/start    - Start the sequential pipeline
-//   GET  /api/bim/pipeline/:modelId/status      - Get current stage + progress
+//   POST /api/bim/pipeline/:projectId/start      - Start the sequential pipeline
+//   GET  /api/bim/pipeline/:modelId/status       - Get current stage + progress
 //   POST /api/bim/pipeline/:modelId/confirm-grid - Confirm grid and resume
-//   POST /api/bim/pipeline/:modelId/enrich      - Run enrichment pass (Path B)
+//   POST /api/bim/pipeline/:modelId/enrich       - Run enrichment pass (Path B)
+//   POST /api/bim/pipeline/:modelId/run-batch    - Run a named batch from batch config
 
 import { Router, type Request, type Response } from 'express';
 import { storage } from '../storage';
+import { db } from '../db';
 import { logger } from '../utils/enterprise-logger';
 import { SequentialPipeline } from '../pipeline/sequential-pipeline';
 import type { GridData, PipelineState } from '../pipeline/stage-types';
@@ -288,6 +290,177 @@ pipelineRouter.post('/api/bim/pipeline/:modelId/enrich', async (req: Request, re
     });
   } catch (err) {
     logger.error('Enrichment start failed', { modelId, error: (err as Error).message });
+    res.status(500).json({ ok: false, message: (err as Error).message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/bim/pipeline/:modelId/run-batch
+// Run a specific batch from the saved batch config.
+// Body: { batch: 'batch1' | 'batch2' }
+//
+// batch1 (support docs): runs enrichExistingElements() with filtered docs
+//   → extracts schedules/sections/specs, updates existing 652 elements
+// batch2 (floor plans): runs full pipeline stages 4-5 with floor plan docs
+//   → grid extraction + element placement using confirmed gridlines
+// ---------------------------------------------------------------------------
+pipelineRouter.post('/api/bim/pipeline/:modelId/run-batch', async (req: Request, res: Response) => {
+  const { modelId } = req.params;
+  const { batch } = req.body || {};
+
+  if (!batch || !['batch1', 'batch2'].includes(batch)) {
+    return res.status(400).json({ ok: false, message: 'Body must include { batch: "batch1" | "batch2" }' });
+  }
+
+  try {
+    const model = await storage.getBimModel(modelId);
+    if (!model) {
+      return res.status(404).json({ ok: false, message: `Model not found: ${modelId}` });
+    }
+
+    // Load batch config from DB using the shared pool
+    const rows = await (db as any).$client.query(
+      "SELECT value FROM app_settings WHERE key = $1",
+      ['moorings_pipeline_batch_config']
+    );
+    let batchConfig: any = null;
+    if (rows?.rows?.[0]?.value) {
+      batchConfig = JSON.parse(rows.rows[0].value);
+    }
+
+    if (!batchConfig?.batches?.[batch]) {
+      return res.status(422).json({ ok: false, message: `Batch "${batch}" not found in saved batch config. Save the config first.` });
+    }
+
+    const batchDef = batchConfig.batches[batch];
+    const sheetNames: string[] = (batchDef.documents || []).map((d: any) => d.name as string);
+
+    // Load all project documents
+    const allDocs = await storage.getDocuments(model.projectId);
+
+    // Match documents to the batch's sheet list
+    function sheetMatchesFilename(sheetName: string, filename: string): boolean {
+      const fn = filename.toLowerCase();
+      const s = sheetName.toLowerCase();
+
+      // Try "a002 r1" → "_a002_r1_" in filename
+      const spaceToUnderscore = s.replace(/\s+/g, '_');
+      if (fn.includes('_' + spaceToUnderscore + '_')) return true;
+
+      // Try just the sheet number prefix (first token before space/hyphen)
+      const sheetNum = s.split(/[\s]/)[0]; // "a002" from "a002 r1"
+      if (sheetNum.length >= 3 && fn.includes('_' + sheetNum + '_')) return true;
+
+      // Handle special chars (LE-1.0 → look for "le" as prefix token)
+      const alphaPart = sheetNum.replace(/[^a-z0-9]/g, '_');
+      if (alphaPart.length >= 2 && fn.includes('_' + alphaPart.split('_')[0] + '_')) return true;
+
+      // Plain include for longer unique names like "landscape"
+      if (s.length >= 8 && fn.includes(s)) return true;
+
+      return false;
+    }
+
+    const filteredDocs = allDocs.filter((doc) =>
+      sheetNames.some((name) => sheetMatchesFilename(name, doc.filename))
+    );
+
+    logger.info(`Batch runner: batch="${batch}" sheets=${sheetNames.length} matched=${filteredDocs.length}`, {
+      modelId,
+      sheets: sheetNames,
+      matched: filteredDocs.map((d) => d.filename),
+    });
+
+    if (filteredDocs.length === 0) {
+      return res.status(422).json({
+        ok: false,
+        message: `No documents matched for ${batch}. Check that documents are uploaded and filenames match.`,
+        expectedSheets: sheetNames,
+        availableFilenames: allDocs.map((d) => d.filename),
+      });
+    }
+
+    if (batch === 'batch1') {
+      // Batch 1: enrichment pass — stages 1-3 + element matching
+      const elements = await storage.getBimElements(modelId);
+      if (elements.length === 0) {
+        return res.status(422).json({
+          ok: false,
+          message: 'No existing elements to enrich. Batch 1 requires the 652 existing BIM elements.',
+        });
+      }
+
+      // Respond immediately
+      res.json({
+        ok: true,
+        modelId,
+        batch: 'batch1',
+        message: `Batch 1 enrichment started: ${filteredDocs.length} documents → ${elements.length} elements. Poll /status for progress.`,
+        documentCount: filteredDocs.length,
+        existingElementCount: elements.length,
+        documents: filteredDocs.map((d) => d.filename),
+      });
+
+      // Run enrichment in background with filtered docs
+      const pipeline = new SequentialPipeline(model.projectId, modelId);
+      const statusCallback = async (progress: number, message: string) => {
+        try {
+          await updateModelStatus(storage, modelId, {
+            status: progress >= 1.0 ? 'completed' : 'generating',
+            progress,
+            message,
+          });
+        } catch (err) {
+          logger.warn('Batch1 status update failed', { error: (err as Error).message });
+        }
+      };
+
+      pipeline.enrichExistingElements(statusCallback, filteredDocs).catch((err) => {
+        logger.error('Batch 1 enrichment failed', { modelId, error: (err as Error).message });
+        updateModelStatus(storage, modelId, {
+          status: 'failed',
+          progress: 1.0,
+          error: (err as Error).message,
+        }).catch(() => {});
+      });
+    } else {
+      // Batch 2: floor plans — run full pipeline (stages 1-5) with floor plan docs
+      // These 5 docs (A101-A203) feed grid extraction + element placement
+      await storage.updateBimModel(modelId, { status: 'generating' });
+
+      res.json({
+        ok: true,
+        modelId,
+        batch: 'batch2',
+        message: `Batch 2 pipeline started: ${filteredDocs.length} floor plan documents. Poll /status for progress.`,
+        documentCount: filteredDocs.length,
+        documents: filteredDocs.map((d) => d.filename),
+      });
+
+      const pipeline = new SequentialPipeline(model.projectId, modelId);
+      const statusCallback = async (progress: number, message: string) => {
+        try {
+          await updateModelStatus(storage, modelId, {
+            status: progress >= 1.0 ? 'completed' : 'generating',
+            progress,
+            message,
+          });
+        } catch (err) {
+          logger.warn('Batch2 status update failed', { error: (err as Error).message });
+        }
+      };
+
+      pipeline.run(filteredDocs, statusCallback).catch((err) => {
+        logger.error('Batch 2 pipeline failed', { modelId, error: (err as Error).message });
+        updateModelStatus(storage, modelId, {
+          status: 'failed',
+          progress: 1.0,
+          error: (err as Error).message,
+        }).catch(() => {});
+      });
+    }
+  } catch (err) {
+    logger.error('run-batch failed', { modelId, batch, error: (err as Error).message });
     res.status(500).json({ ok: false, message: (err as Error).message });
   }
 });

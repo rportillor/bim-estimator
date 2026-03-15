@@ -2249,6 +2249,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // advancedBimRouter — Phase 1-6: BREP ops, parameter editing, clash resolution, sheets, refinement
   app.use('/api', authenticateToken, (await import('./routes/advanced-bim-routes')).advancedBimRouter);
 
+  // sequentialPipeline — 5-stage enrichment pipeline for The Moorings (batch1/batch2)
+  app.use('/', authenticateToken, (await import('./routes/pipeline-routes')).pipelineRouter);
+
   // BoQ Items endpoints
   // BoQ endpoint alias for consistency
   app.get("/api/projects/:projectId/boq", authenticateToken, async (req, res) => {

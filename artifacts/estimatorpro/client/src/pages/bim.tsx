@@ -17,11 +17,36 @@ export default function BIM() {
   const [showMissingData, setShowMissingData] = useState(false);
   const [showGridConfig, setShowGridConfig] = useState(false);
   const [showBatchConfig, setShowBatchConfig] = useState(false);
+  const [batchRunning, setBatchRunning] = useState<string | null>(null);
+  const [batchRunResult, setBatchRunResult] = useState<{ batch: string; message: string; ok: boolean } | null>(null);
 
   const { data: batchConfig } = useQuery<any>({
     queryKey: ['/api/projects', projectId, 'batch-config'],
     enabled: !!projectId,
   });
+
+  async function runBatch(batch: 'batch1' | 'batch2') {
+    const activeModelId = activeModel?.id;
+    if (!activeModelId) { alert('No active BIM model found.'); return; }
+    const label = batch === 'batch1' ? 'Batch 1 (20 support docs → Claude enrichment)' : 'Batch 2 (5 floor plans → grid + elements)';
+    if (!confirm(`Run ${label}?\n\nThis will send documents to Claude and use API credits.`)) return;
+    setBatchRunning(batch);
+    setBatchRunResult(null);
+    try {
+      const token = localStorage.getItem('auth_token');
+      const resp = await fetch(`/api/bim/pipeline/${activeModelId}/run-batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ batch }),
+      });
+      const data = await resp.json();
+      setBatchRunResult({ batch, message: data.message || (data.ok ? 'Started successfully.' : data.error || 'Unknown error'), ok: !!data.ok });
+    } catch (e: any) {
+      setBatchRunResult({ batch, message: e.message || 'Network error', ok: false });
+    } finally {
+      setBatchRunning(null);
+    }
+  }
 
   // Fetch project details if projectId is provided
   const { data: project, isLoading: projectLoading } = useQuery({
@@ -290,17 +315,41 @@ export default function BIM() {
               <span className="hidden sm:inline">Missing Data</span>
             </Button>
             {batchConfig?.batches && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowBatchConfig(v => !v)}
-                className="border-blue-300 text-blue-700 hover:bg-blue-50 flex-shrink-0"
-                title="View pipeline batch configuration"
-              >
-                <FileText className="h-4 w-4 sm:mr-2" />
-                <span className="hidden sm:inline">Batches</span>
-                {showBatchConfig ? <ChevronUp className="h-3 w-3 ml-1" /> : <ChevronDown className="h-3 w-3 ml-1" />}
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowBatchConfig(v => !v)}
+                  className="border-blue-300 text-blue-700 hover:bg-blue-50 flex-shrink-0"
+                  title="View pipeline batch configuration"
+                >
+                  <FileText className="h-4 w-4 sm:mr-2" />
+                  <span className="hidden sm:inline">Batches</span>
+                  {showBatchConfig ? <ChevronUp className="h-3 w-3 ml-1" /> : <ChevronDown className="h-3 w-3 ml-1" />}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => runBatch('batch1')}
+                  disabled={batchRunning === 'batch1'}
+                  className="border-emerald-400 text-emerald-700 hover:bg-emerald-50 flex-shrink-0 text-xs px-2 py-1 h-7"
+                  title="Run Batch 1: 20 support docs → Claude extracts schedules/assemblies/specs, enriches existing elements"
+                >
+                  <Zap className="h-3 w-3 mr-1" />
+                  {batchRunning === 'batch1' ? 'Running…' : 'Run B1'}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => runBatch('batch2')}
+                  disabled={batchRunning === 'batch2'}
+                  className="border-violet-400 text-violet-700 hover:bg-violet-50 flex-shrink-0 text-xs px-2 py-1 h-7"
+                  title="Run Batch 2: 5 floor plans → Claude extracts gridlines + places elements"
+                >
+                  <Grid className="h-3 w-3 mr-1" />
+                  {batchRunning === 'batch2' ? 'Running…' : 'Run B2'}
+                </Button>
+              </>
             )}
             <Button
               variant="outline"
@@ -331,6 +380,15 @@ export default function BIM() {
           </div>
         </div>
       </header>
+
+      {/* Batch run result notification */}
+      {batchRunResult && (
+        <div className={`px-6 py-2 text-sm flex items-center gap-2 ${batchRunResult.ok ? 'bg-emerald-50 border-b border-emerald-200 text-emerald-800' : 'bg-red-50 border-b border-red-200 text-red-800'}`}>
+          <span className="font-semibold">{batchRunResult.batch === 'batch1' ? 'Batch 1:' : 'Batch 2:'}</span>
+          <span>{batchRunResult.message}</span>
+          <button onClick={() => setBatchRunResult(null)} className="ml-auto text-gray-400 hover:text-gray-600">✕</button>
+        </div>
+      )}
 
       {/* Pipeline Batch Configuration Panel */}
       {showBatchConfig && batchConfig?.batches && (
