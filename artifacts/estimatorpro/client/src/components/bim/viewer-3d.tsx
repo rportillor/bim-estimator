@@ -870,7 +870,9 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
             const cc3 = coerceCoordToMetres(
               Number(rawLoc2.x || 0), Number(rawLoc2.y || 0), Number(rawLoc2.z || 0)
             );
-            const pp = { x: cc3.x, y: cc3.z, z: cc3.y }; // BIM Z-up → Three.js Y-up
+            const elevM2 = (e.elevation !== null && e.elevation !== undefined)
+              ? Number(e.elevation) : cc3.z;
+            const pp = { x: cc3.x, y: elevM2, z: cc3.y }; // BIM Z-up → Three.js Y-up
             const elType2 = (e.elementType || e.type || e.category || '').toLowerCase();
             const yaw = e?.geometry?.orientation?.yawRad || 0;
 
@@ -1183,10 +1185,16 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           Number(rawLocation.y || 0),
           Number(rawLocation.z || 0)
         );
+        // ✅ FIX: Use the elevation column for height (already corrected to relative metres:
+        // 0, 4.65, 8.65, 12.25, 16.35m). The geometry z is an absolute datum (257.6m etc.)
+        // that compresses all floors to <1m after coercion. e.elevation is authoritative.
+        const elevationM = (e.elevation !== null && e.elevation !== undefined)
+          ? Number(e.elevation)
+          : cc2.z;
         const p = {
           x: cc2.x,
-          y: cc2.z,   // Building Z (height/elevation) → Three.js Y (up)
-          z: cc2.y    // Building Y (depth/north-south) → Three.js Z (forward)
+          y: elevationM, // Relative floor height (Three.js Y = up)
+          z: cc2.y       // Building Y (depth/north-south) → Three.js Z (forward)
         };
         const type = (e.elementType || e.type || e.category || "").toLowerCase();
 
@@ -1809,7 +1817,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       });
       setIsLoading(false);
     })().catch(err => {
-      console.error('BIM load error:', err);
+      console.error('BIM load error:', err?.message || err?.stack || String(err), err);
       setIsLoading(false);
     });
     
@@ -1817,6 +1825,9 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       if(loadAbortController.current) {
         loadAbortController.current.abort();
       }
+      // ✅ FIX: Reset isLoading so the next effect run (e.g. triggered by visibleStoreys
+      // changing after storey fetch) is not blocked by stale isLoading=true.
+      setIsLoading(false);
     };
   },[ready, modelId, visibleStoreys]); // visibleStoreys: re-render scene on floor toggle
 
