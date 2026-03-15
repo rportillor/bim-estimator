@@ -5,7 +5,8 @@ import BimViewer from "@/components/bim/bim-viewer";
 import { FloorGenerationButton } from "@/components/bim/FloorGenerationButton";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Layers, Eye, Download, ArrowLeft, Building, Zap, AlertTriangle, Grid } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Layers, Eye, Download, ArrowLeft, Building, Zap, AlertTriangle, Grid, ChevronDown, ChevronUp, FileText } from "lucide-react";
 import { MissingDataDialog } from "@/components/dialogs/MissingDataDialog";
 import { GridConfirmationDialog } from "@/components/bim/GridConfirmationDialog";
 
@@ -15,6 +16,12 @@ export default function BIM() {
   const modelId = params.modelId;
   const [showMissingData, setShowMissingData] = useState(false);
   const [showGridConfig, setShowGridConfig] = useState(false);
+  const [showBatchConfig, setShowBatchConfig] = useState(false);
+
+  const { data: batchConfig } = useQuery<any>({
+    queryKey: ['/api/projects', projectId, 'batch-config'],
+    enabled: !!projectId,
+  });
 
   // Fetch project details if projectId is provided
   const { data: project, isLoading: projectLoading } = useQuery({
@@ -282,6 +289,19 @@ export default function BIM() {
               <AlertTriangle className="h-4 w-4 sm:mr-2" />
               <span className="hidden sm:inline">Missing Data</span>
             </Button>
+            {batchConfig?.batches && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowBatchConfig(v => !v)}
+                className="border-blue-300 text-blue-700 hover:bg-blue-50 flex-shrink-0"
+                title="View pipeline batch configuration"
+              >
+                <FileText className="h-4 w-4 sm:mr-2" />
+                <span className="hidden sm:inline">Batches</span>
+                {showBatchConfig ? <ChevronUp className="h-3 w-3 ml-1" /> : <ChevronDown className="h-3 w-3 ml-1" />}
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -311,6 +331,40 @@ export default function BIM() {
           </div>
         </div>
       </header>
+
+      {/* Pipeline Batch Configuration Panel */}
+      {showBatchConfig && batchConfig?.batches && (
+        <div className="bg-blue-50 border-b border-blue-200 px-6 py-4">
+          <div className="flex items-center gap-2 mb-3">
+            <FileText className="h-4 w-4 text-blue-700" />
+            <h3 className="font-semibold text-blue-900 text-sm">Claude Analysis — Pipeline Batch Configuration</h3>
+            <Badge variant="outline" className="text-xs border-blue-400 text-blue-700">
+              {Object.keys(batchConfig.batches).length} batches
+            </Badge>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {Object.entries(batchConfig.batches).map(([key, batch]: [string, any]) => (
+              <div key={key} className="bg-white rounded-lg border border-blue-200 p-3">
+                <div className="flex items-center gap-2 mb-1">
+                  <Badge className={key === 'batch1' ? 'bg-blue-600 text-white text-xs' : 'bg-indigo-600 text-white text-xs'}>
+                    {key === 'batch1' ? 'Batch 1' : 'Batch 2'}
+                  </Badge>
+                  <span className="text-xs text-gray-500">{batch.documents?.length} drawings</span>
+                </div>
+                <p className="text-xs text-gray-600 mb-2 italic">{batch.purpose}</p>
+                <div className="space-y-0.5">
+                  {batch.documents?.map((doc: any) => (
+                    <div key={doc.name} className="flex items-center gap-2 text-xs">
+                      <span className="font-mono font-semibold text-blue-700 w-20 flex-shrink-0">{doc.name}</span>
+                      <span className="text-gray-600">{doc.title}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="flex-1">
         {!projectId ? (

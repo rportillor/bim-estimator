@@ -4457,6 +4457,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // GET /api/projects/:projectId/batch-config — return pipeline batch configuration
+  app.get("/api/projects/:projectId/batch-config", authenticateToken, async (req: any, res) => {
+    try {
+      const result = await (db as any).$client.query(
+        "SELECT value FROM app_settings WHERE key = $1",
+        ['moorings_pipeline_batch_config']
+      );
+      if (!result.rows || result.rows.length === 0) {
+        return res.json({ batches: null, message: 'No batch configuration saved yet' });
+      }
+      const config = JSON.parse(result.rows[0].value);
+      res.json(config);
+    } catch (error) {
+      logger.error("Error fetching batch config", { error });
+      res.status(500).json({ error: "Failed to fetch batch configuration" });
+    }
+  });
+
   // POST /api/projects/:projectId/clear-analysis-cache — forces re-analysis with updated prompts
   app.post("/api/projects/:projectId/clear-analysis-cache", authenticateToken, async (req: any, res) => {
     try {
