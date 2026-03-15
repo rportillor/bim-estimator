@@ -912,6 +912,40 @@ export class ConstructionWorkflowProcessor {
         this.storeyElevations.set(rawName.trim().toLowerCase(), elevM);
       }
     }
+    // ── Sanity-check: drawing-coordinate contamination detection ─────────────
+    // Claude sometimes emits elevations derived from raw drawing coordinates
+    // (e.g. 0.2576 m) rather than real floor heights (e.g. 4.65 m).
+    // Heuristic: if we have 3+ storeys and max elevation < 2 m the values are
+    // implausible for a multi-storey building → discard and reload from DB.
+    if (this.storeyElevations.size >= 3) {
+      const maxElev = Math.max(...Array.from(this.storeyElevations.values()));
+      if (maxElev < 2) {
+        logger.warn(
+          `⚠️ Storey elevations look like drawing coordinates (max=${maxElev}m for ` +
+          `${this.storeyElevations.size} storeys). Discarding and loading from DB instead.`
+        );
+        this.storeyElevations.clear();
+        // Load correct elevations from the canonical bim_storeys table
+        try {
+          const dbStoreys = await storage.getBimStoreys(modelId);
+          for (const s of dbStoreys) {
+            const elev = parseFloat(String(s.elevation));
+            if (s.name && Number.isFinite(elev)) {
+              this.storeyElevations.set(s.name.trim().toLowerCase(), elev);
+            }
+          }
+          if (this.storeyElevations.size > 0) {
+            logger.info(
+              `🏢 Storey elevation map loaded from DB: ${Array.from(this.storeyElevations.entries())
+                .map(([n, e]) => `${n}=${e}m`).join(', ')}`
+            );
+          }
+        } catch (err) {
+          logger.warn(`⚠️ Could not load storey elevations from DB: ${err}`);
+        }
+      }
+    }
+
     if (this.storeyElevations.size > 0) {
       logger.info(
         `🏢 Storey elevation map built: ${Array.from(this.storeyElevations.entries())
