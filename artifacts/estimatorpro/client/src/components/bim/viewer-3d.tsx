@@ -583,13 +583,14 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
   },[modelId]);
 
   useEffect(()=>{
-    if(!ready || !modelId || !three.current || isLoading) return;
+    if(!ready || !modelId || !three.current) return;
     
-    // Cancel any previous load
+    // Cancel any in-progress load — AbortController handles concurrent safety
     if(loadAbortController.current) {
       loadAbortController.current.abort();
     }
     loadAbortController.current = new AbortController();
+    setIsLoading(false); // Reset before the async body sets it true
     
     const {scene,camera,controls} = three.current;
     // clear previous (keep helpers)
@@ -1825,9 +1826,6 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       if(loadAbortController.current) {
         loadAbortController.current.abort();
       }
-      // ✅ FIX: Reset isLoading so the next effect run (e.g. triggered by visibleStoreys
-      // changing after storey fetch) is not blocked by stale isLoading=true.
-      setIsLoading(false);
     };
   },[ready, modelId, visibleStoreys]); // visibleStoreys: re-render scene on floor toggle
 
