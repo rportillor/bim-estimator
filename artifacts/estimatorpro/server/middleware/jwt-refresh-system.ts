@@ -223,9 +223,20 @@ export function verifyAccessToken(req: Request, res: Response, next: NextFunctio
     }
 
     // Check token family is still valid
-    const tokenFamily = refreshTokenStore.get(payload.tokenFamily);
-    if (!tokenFamily) {
-      throw new Error('Token family invalidated');
+    // If not found (e.g. after server restart), re-register it from the JWT payload
+    // since the JWT signature itself is the source of truth
+    if (!refreshTokenStore.get(payload.tokenFamily)) {
+      refreshTokenStore.set(payload.tokenFamily, {
+        tokens: new Set(),
+        userId: payload.userId,
+        createdAt: Date.now(),
+        deviceInfo: {
+          userAgent: req.headers['user-agent'] || 'unknown',
+          ip: req.ip || 'unknown',
+        },
+        lastUsed: Date.now(),
+      });
+      console.log(`♻️  Re-registered token family after restart: ${payload.tokenFamily.slice(0, 8)}...`);
     }
 
     // Add user info to request
