@@ -67,10 +67,30 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
   const latestModel = bimModels?.[0];
   const dbStatus = latestModel?.status as string | undefined;
 
-  // If the DB already says "generating" on mount, track it
+  // ── Derived running state (computed early so SSE hook can use it) ──────────
+  const dbSaysRunning = dbStatus === 'generating' || dbStatus === 'processing';
+  const modelAge = latestModel
+    ? Date.now() - new Date(latestModel.updatedAt || latestModel.createdAt || 0).getTime()
+    : Infinity;
+  const isStuck = !generatingLocal && dbSaysRunning && modelAge > 15 * 60 * 1000;
+  const isGenerating = generatingLocal || (dbSaysRunning && !isStuck);
+
+  // If the DB already says "generating" or "processing" on mount, reconnect tracker.
+  // This fires on every navigation back to this page so the progress bar reappears.
   useEffect(() => {
-    if (dbStatus === 'generating' && !generatingLocal) {
+    if ((dbStatus === 'generating' || dbStatus === 'processing') && !generatingLocal) {
       setGeneratingLocal(true);
+
+      // Seed ssePercent from the last stored progress so the bar isn't frozen at 0%
+      const meta =
+        typeof latestModel?.metadata === 'string'
+          ? (() => { try { return JSON.parse(latestModel.metadata); } catch { return {}; } })()
+          : (latestModel?.metadata as Record<string, any> || {});
+      if (typeof meta.progress === 'number' && meta.progress > 0) {
+        setSsePercent(Math.round(meta.progress * 100));
+        setSseMsg(meta.message || 'Resuming…');
+      }
+
       // Use the earliest stage startedAt from the server's pipeline state so the
       // timer survives page refreshes and shows the true elapsed time.
       let ps = latestModel?.pipelineState as Record<string, any> | string | undefined;
@@ -98,10 +118,11 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
     return () => clearInterval(id);
   }, [generatingLocal]);
 
-  // SSE live progress
+  // SSE live progress — enabled whenever we're generating (not just when the button was
+  // clicked in this session), so navigating away and back still shows live progress.
   const { data: sseProgress } = useSSEProgress(
     latestModel?.id || null,
-    generatingLocal && !!latestModel?.id,
+    isGenerating && !!latestModel?.id,
   );
 
   const [docsProcessed, setDocsProcessed] = useState<number | null>(null);
@@ -285,19 +306,12 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
     document.body.removeChild(link);
   };
 
-  // ── Derived display state ──────────────────────────────────────────────────
-  // A generation is only "stuck" if the DB record hasn't been touched in 15 min
-  // (some phases — assembly building, coordinate extraction — run for several
-  // minutes without writing a chunk-level DB update, so 2 min was far too tight
-  // and caused false "generation failed" on every page refresh mid-run).
-  const dbSaysRunning = dbStatus === 'generating' || dbStatus === 'processing';
-  const modelAge = latestModel ? Date.now() - new Date(latestModel.updatedAt || latestModel.createdAt || 0).getTime() : Infinity;
-  const isStuck = !generatingLocal && dbSaysRunning && modelAge > 15 * 60 * 1000;
-
-  const isGenerating = generatingLocal || (dbSaysRunning && !isStuck);
-  const isFailed     = isStuck || (!isGenerating && (dbStatus === 'failed' || dbStatus === 'error'));
-  const isReady      = !isGenerating && !isFailed && dbStatus === 'completed';
-  const isPending    = !isGenerating && !isFailed && !isReady && !!latestModel;
+  // ── Remaining derived display state ───────────────────────────────────────
+  // (dbSaysRunning / modelAge / isStuck / isGenerating are computed earlier,
+  //  above the SSE hook, so it can use isGenerating as its enabled flag.)
+  const isFailed  = isStuck || (!isGenerating && (dbStatus === 'failed' || dbStatus === 'error'));
+  const isReady   = !isGenerating && !isFailed && dbStatus === 'completed';
+  const isPending = !isGenerating && !isFailed && !isReady && !!latestModel;
 
   if (isLoading) {
     return (
