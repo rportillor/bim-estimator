@@ -152,6 +152,7 @@ export interface CandidateSet {
     extractedAt: string;
     documentCount: number;
     totalCandidates: number;
+    drawingUnits?: 'mm' | 'm' | 'ft-in';
   };
 }
 

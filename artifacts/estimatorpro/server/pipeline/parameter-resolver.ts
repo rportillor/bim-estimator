@@ -28,6 +28,75 @@ import type {
 } from './candidate-types';
 
 // ---------------------------------------------------------------------------
+// Unit conversion: supports mm, m, and ft-in (imperial)
+// ---------------------------------------------------------------------------
+
+type DrawingUnit = 'mm' | 'm' | 'ft-in';
+
+const FEET_TO_METRES = 0.3048;
+const INCHES_TO_METRES = 0.0254;
+
+/**
+ * Convert a numeric value from the given unit system to metres.
+ * - mm: divide by 1000
+ * - m: no-op
+ * - ft-in: multiply by 0.3048
+ *
+ * For ft-in, this assumes the value is expressed as a decimal number of feet.
+ * Use `parseImperialToMetres` for string formats like "3'-6\"".
+ */
+export function convertToMetres(value: number, unit: DrawingUnit): number {
+  switch (unit) {
+    case 'mm': return value / 1000;
+    case 'm': return value;
+    case 'ft-in': return value * FEET_TO_METRES;
+  }
+}
+
+/**
+ * Parse common imperial string formats to metres.
+ * Supported formats:
+ *   "3'-6\""  => 3 ft 6 in => 1.0668 m
+ *   "42\""    => 42 in => 1.0668 m
+ *   "3'-6"    => 3 ft 6 in (missing trailing quote)
+ *   "3' 6\""  => 3 ft 6 in
+ *   "10'"     => 10 ft => 3.048 m
+ *   "3.5"     => 3.5 ft => 1.0668 m (plain number treated as feet)
+ */
+export function parseImperialToMetres(raw: string): number | null {
+  if (!raw || !raw.trim()) return null;
+  const s = raw.trim();
+
+  // Pattern: feet'-inches" (e.g. "3'-6\"", "3' 6\"", "3'-6")
+  const ftInMatch = s.match(/^(\d+(?:\.\d+)?)\s*['\u2032]\s*-?\s*(\d+(?:\.\d+)?)\s*(?:["\u2033]?)$/);
+  if (ftInMatch) {
+    const feet = parseFloat(ftInMatch[1]);
+    const inches = parseFloat(ftInMatch[2]);
+    return feet * FEET_TO_METRES + inches * INCHES_TO_METRES;
+  }
+
+  // Pattern: inches only (e.g. "42\"", "42"")
+  const inchOnly = s.match(/^(\d+(?:\.\d+)?)\s*["\u2033]$/);
+  if (inchOnly) {
+    return parseFloat(inchOnly[1]) * INCHES_TO_METRES;
+  }
+
+  // Pattern: feet only (e.g. "10'", "10\u2032")
+  const feetOnly = s.match(/^(\d+(?:\.\d+)?)\s*['\u2032]$/);
+  if (feetOnly) {
+    return parseFloat(feetOnly[1]) * FEET_TO_METRES;
+  }
+
+  // Plain number: treat as feet when unit context is ft-in
+  const plain = parseFloat(s);
+  if (!isNaN(plain)) {
+    return plain * FEET_TO_METRES;
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Internal types for lookup maps
 // ---------------------------------------------------------------------------
 
@@ -186,6 +255,37 @@ function resolveGridPosition(
   };
 }
 
+/**
+ * Apply a drawing scale factor to a coordinate pair.
+ * Grid positions extracted by Claude from a scaled drawing may already be
+ * in real-world metres (if Claude was told to convert). But if Claude
+ * reported drawing-space values, this multiplier converts them.
+ *
+ * The scale factor from computeScaleFactor is:
+ *   1 drawing mm -> factor real metres
+ *
+ * However, since the pipeline prompt already tells Claude to report
+ * positions in metres, this function only applies the scale if the
+ * factor indicates the grid was NOT already converted (i.e., positions
+ * appear to be in drawing-space mm rather than real-world metres).
+ *
+ * Heuristic: if all grid positions are < 1 m and scale > 0.01, the grid
+ * was likely read in drawing mm. We apply scale in that case.
+ * Otherwise the grid is already in real metres and we skip.
+ */
+function applyDrawingScaleToCoord(
+  coord: { x: number; y: number },
+  scaleFactor: number,
+): { x: number; y: number } {
+  return {
+    x: coord.x * scaleFactor,
+    y: coord.y * scaleFactor,
+  };
+}
+
+// shouldApplyScale has been removed. Scale is now applied when an explicit
+// drawing scale factor is provided (from Stage 4). No heuristic guessing.
+
 // ---------------------------------------------------------------------------
 // Evidence builder
 // ---------------------------------------------------------------------------
@@ -321,11 +421,24 @@ function computeMEPStatus(m: MEPCandidate): CandidateStatus {
 // Main resolver
 // ---------------------------------------------------------------------------
 
+/**
+ * Optional drawing scale factor. When Claude reads grid positions from a
+ * scaled drawing, the positions may be in drawing-space millimetres rather
+ * than real-world metres. The scale factor converts drawing mm to real m.
+ * For example, on a 1:100 drawing, 60 mm on paper = 6000 mm real = 6.0 m,
+ * so scaleFactor = 0.1 (i.e. 100/1000).
+ *
+ * If the grid positions are already in real-world metres (which is the
+ * normal case when Claude is told to report in metres), pass undefined or 0
+ * to skip scaling.
+ */
 export function resolveParameters(
   candidates: CandidateSet,
   schedules: ScheduleData,
   assemblies: AssemblyData,
   grid: GridData,
+  drawingScaleFactor?: number,
+  drawingUnits?: DrawingUnit,
 ): { candidates: CandidateSet; stats: ResolutionStats } {
   // Build lookup maps
   const doorSchedule = buildDoorScheduleMap(schedules);
@@ -335,24 +448,40 @@ export function resolveParameters(
   const gridNumeric = buildGridMap(grid.numericGridlines);
   const storeyMap = buildStoreyMap(candidates.storeys);
 
+  // Determine the drawing unit system — if not explicitly provided, use schedule units.
+  // Grid positions are already in metres (position_m). Schedule/assembly dimension
+  // values are in mm (Claude normalizes them during extraction). The unitSystem
+  // is stored in metadata for downstream consumers and verification.
+  const unitSystem: DrawingUnit = drawingUnits || schedules.units || 'mm';
+  candidates.metadata.drawingUnits = unitSystem;
+
+  // Determine if drawing scale needs to be applied to resolved coordinates.
+  // When a drawing scale is explicitly provided, always use it.
+  // When no scale is provided, do NOT guess — skip scaling entirely.
+  const applyScale = drawingScaleFactor != null && drawingScaleFactor > 0
+    && Math.abs(drawingScaleFactor - 0.001) >= 0.0001;
+  const effectiveScale = applyScale ? drawingScaleFactor! : 0;
+
   // Resolve walls
   for (const wall of candidates.walls) {
     // Grid -> absolute position
     if (wall.start_m == null && wall.gridStart) {
-      const resolved = resolveGridPosition(wall.gridStart, wall.offset_m, gridAlpha, gridNumeric);
+      let resolved = resolveGridPosition(wall.gridStart, wall.offset_m, gridAlpha, gridNumeric);
       if (resolved) {
+        if (effectiveScale > 0) resolved = applyDrawingScaleToCoord(resolved, effectiveScale);
         wall.start_m = resolved;
         wall.evidence_sources.push(
-          makeEvidence('grid', 'visual', 'high', `Start resolved from grid ${wall.gridStart.alpha}-${wall.gridStart.numeric}`),
+          makeEvidence('grid', 'visual', 'high', `Start resolved from grid ${wall.gridStart.alpha}-${wall.gridStart.numeric}${effectiveScale > 0 ? ' (scale applied)' : ''}`),
         );
       }
     }
     if (wall.end_m == null && wall.gridEnd) {
-      const resolved = resolveGridPosition(wall.gridEnd, { x: 0, y: 0 }, gridAlpha, gridNumeric);
+      let resolved = resolveGridPosition(wall.gridEnd, { x: 0, y: 0 }, gridAlpha, gridNumeric);
       if (resolved) {
+        if (effectiveScale > 0) resolved = applyDrawingScaleToCoord(resolved, effectiveScale);
         wall.end_m = resolved;
         wall.evidence_sources.push(
-          makeEvidence('grid', 'visual', 'high', `End resolved from grid ${wall.gridEnd.alpha}-${wall.gridEnd.numeric}`),
+          makeEvidence('grid', 'visual', 'high', `End resolved from grid ${wall.gridEnd.alpha}-${wall.gridEnd.numeric}${effectiveScale > 0 ? ' (scale applied)' : ''}`),
         );
       }
     }
@@ -405,11 +534,12 @@ export function resolveParameters(
   for (const door of candidates.doors) {
     // Grid -> position
     if (door.position_m == null && door.gridNearest) {
-      const resolved = resolveGridPosition(door.gridNearest, door.offset_m, gridAlpha, gridNumeric);
+      let resolved = resolveGridPosition(door.gridNearest, door.offset_m, gridAlpha, gridNumeric);
       if (resolved) {
+        if (effectiveScale > 0) resolved = applyDrawingScaleToCoord(resolved, effectiveScale);
         door.position_m = resolved;
         door.evidence_sources.push(
-          makeEvidence('grid', 'visual', 'high', `Position resolved from grid ${door.gridNearest.alpha}-${door.gridNearest.numeric}`),
+          makeEvidence('grid', 'visual', 'high', `Position resolved from grid ${door.gridNearest.alpha}-${door.gridNearest.numeric}${effectiveScale > 0 ? ' (scale applied)' : ''}`),
         );
       }
     }
@@ -449,11 +579,12 @@ export function resolveParameters(
   for (const win of candidates.windows) {
     // Grid -> position
     if (win.position_m == null && win.gridNearest) {
-      const resolved = resolveGridPosition(win.gridNearest, win.offset_m, gridAlpha, gridNumeric);
+      let resolved = resolveGridPosition(win.gridNearest, win.offset_m, gridAlpha, gridNumeric);
       if (resolved) {
+        if (effectiveScale > 0) resolved = applyDrawingScaleToCoord(resolved, effectiveScale);
         win.position_m = resolved;
         win.evidence_sources.push(
-          makeEvidence('grid', 'visual', 'high', `Position resolved from grid ${win.gridNearest.alpha}-${win.gridNearest.numeric}`),
+          makeEvidence('grid', 'visual', 'high', `Position resolved from grid ${win.gridNearest.alpha}-${win.gridNearest.numeric}${effectiveScale > 0 ? ' (scale applied)' : ''}`),
         );
       }
     }
@@ -493,11 +624,12 @@ export function resolveParameters(
   for (const col of candidates.columns) {
     // Grid -> position
     if (col.position_m == null && col.gridPosition) {
-      const resolved = resolveGridPosition(col.gridPosition, col.offset_m, gridAlpha, gridNumeric);
+      let resolved = resolveGridPosition(col.gridPosition, col.offset_m, gridAlpha, gridNumeric);
       if (resolved) {
+        if (effectiveScale > 0) resolved = applyDrawingScaleToCoord(resolved, effectiveScale);
         col.position_m = resolved;
         col.evidence_sources.push(
-          makeEvidence('grid', 'visual', 'high', `Position resolved from grid ${col.gridPosition.alpha}-${col.gridPosition.numeric}`),
+          makeEvidence('grid', 'visual', 'high', `Position resolved from grid ${col.gridPosition.alpha}-${col.gridPosition.numeric}${effectiveScale > 0 ? ' (scale applied)' : ''}`),
         );
       }
     }
@@ -533,20 +665,22 @@ export function resolveParameters(
   for (const beam of candidates.beams) {
     // Grid -> positions
     if (beam.start_m == null && beam.gridStart) {
-      const resolved = resolveGridPosition(beam.gridStart, { x: 0, y: 0 }, gridAlpha, gridNumeric);
+      let resolved = resolveGridPosition(beam.gridStart, { x: 0, y: 0 }, gridAlpha, gridNumeric);
       if (resolved) {
+        if (effectiveScale > 0) resolved = applyDrawingScaleToCoord(resolved, effectiveScale);
         beam.start_m = resolved;
         beam.evidence_sources.push(
-          makeEvidence('grid', 'visual', 'high', `Start resolved from grid ${beam.gridStart.alpha}-${beam.gridStart.numeric}`),
+          makeEvidence('grid', 'visual', 'high', `Start resolved from grid ${beam.gridStart.alpha}-${beam.gridStart.numeric}${effectiveScale > 0 ? ' (scale applied)' : ''}`),
         );
       }
     }
     if (beam.end_m == null && beam.gridEnd) {
-      const resolved = resolveGridPosition(beam.gridEnd, { x: 0, y: 0 }, gridAlpha, gridNumeric);
+      let resolved = resolveGridPosition(beam.gridEnd, { x: 0, y: 0 }, gridAlpha, gridNumeric);
       if (resolved) {
+        if (effectiveScale > 0) resolved = applyDrawingScaleToCoord(resolved, effectiveScale);
         beam.end_m = resolved;
         beam.evidence_sources.push(
-          makeEvidence('grid', 'visual', 'high', `End resolved from grid ${beam.gridEnd.alpha}-${beam.gridEnd.numeric}`),
+          makeEvidence('grid', 'visual', 'high', `End resolved from grid ${beam.gridEnd.alpha}-${beam.gridEnd.numeric}${effectiveScale > 0 ? ' (scale applied)' : ''}`),
         );
       }
     }

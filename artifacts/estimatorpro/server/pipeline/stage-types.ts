@@ -97,8 +97,20 @@ export type PipelineStage =
   | 'FLOOR_PLANS_5B'
   | 'FLOOR_PLANS_5C'
   | 'ENRICHMENT'
+  | 'REBUILD'
   | 'COMPLETE'
   | 'FAILED';
+
+export interface DrawingScaleInfo {
+  /** Scale ratio string, e.g. "1:100" */
+  ratio: string;
+  /** Multiplier: 1 drawing mm = factor real metres. E.g. 1:100 => 0.1 */
+  factor: number;
+  /** Where the scale was found */
+  source: string;
+  /** Confidence in the scale reading */
+  confidence: 'high' | 'medium' | 'low';
+}
 
 export interface PipelineState {
   version: 2;
@@ -108,6 +120,7 @@ export interface PipelineState {
     sections?: AssemblyData;
     specifications?: SpecificationData;
     grid?: GridData;
+    drawingScale?: DrawingScaleInfo;
     floorPlans?: { elementCount: number };
   };
   pausedAt?: string;

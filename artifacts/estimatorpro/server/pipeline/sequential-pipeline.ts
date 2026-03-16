@@ -16,7 +16,9 @@ import type {
   AssemblyData,
   SpecificationData,
   GridData,
+  DrawingScaleInfo,
 } from './stage-types';
+import { computeScaleFactor } from '../bim/drawing-scale-extractor';
 import {
   buildScheduleContext,
   buildAssemblyContext,
@@ -30,6 +32,7 @@ import { buildMeshes } from './mesh-builder';
 import { collectUnresolved, generateReviewItems, buildReviewSummary } from './candidate-review';
 import { computeAndStoreTransform } from './coordinate-transform';
 import { classifyDocuments } from './view-classifier';
+import { projectToPlan } from './view-projection';
 
 type StatusCallback = (progress: number, message: string) => Promise<void>;
 
@@ -1075,7 +1078,7 @@ ${chunk}`;
       return;
     }
 
-    const systemPrompt = `You are a structural engineer specializing in reading construction gridline systems from floor plans. Extract every gridline with precise positions and angles. Return valid JSON only.`;
+    const systemPrompt = `You are a structural engineer specializing in reading construction gridline systems from floor plans. Extract every gridline with precise positions and angles. Also identify the drawing scale. Return valid JSON only.`;
 
     const userPrompt = `Extract ALL gridlines from these structural floor plans. For each gridline report:
 - label (letter or number)
@@ -1087,6 +1090,10 @@ Also determine:
 - Which direction letters run (left_to_right or bottom_to_top)
 - Which direction numbers run (left_to_right or bottom_to_top)
 - The origin labels (first letter and first number)
+
+DRAWING SCALE: Find the drawing scale from the title block (e.g. "1:100", "1/4" = 1'-0"", "Scale 1:50").
+Report it as "drawing_scale_ratio" (e.g. "1:100") and where you found it ("drawing_scale_source").
+If the sheet says "NTS" or "Not to Scale" or you cannot find a scale, set drawing_scale_ratio to null.
 
 Return a JSON object with this exact structure:
 
@@ -1102,6 +1109,8 @@ Return a JSON object with this exact structure:
   "alphaDirection": "left_to_right",
   "numericDirection": "bottom_to_top",
   "originLabel": { "letter": "A", "number": "1" },
+  "drawing_scale_ratio": "1:100",
+  "drawing_scale_source": "title block bottom-right",
   "notes": ["Gridline C.1 is a centerline between C and D", "Wing B is angled 15 degrees"]
 }
 
@@ -1139,6 +1148,28 @@ ${text.substring(0, 300000)}`;
     };
 
     this.state.stageResults.grid = gridData;
+
+    // Extract drawing scale from Claude's response
+    const rawScaleRatio = parsed.drawing_scale_ratio || null;
+    if (rawScaleRatio && typeof rawScaleRatio === 'string') {
+      const factor = computeScaleFactor(rawScaleRatio);
+      if (factor !== null && factor > 0) {
+        const scaleInfo: DrawingScaleInfo = {
+          ratio: rawScaleRatio,
+          factor,
+          source: parsed.drawing_scale_source || 'title block',
+          confidence: 'medium',
+        };
+        this.state.stageResults.drawingScale = scaleInfo;
+        logger.info('Stage 4: Drawing scale extracted', {
+          modelId: this.modelId,
+          ratio: scaleInfo.ratio,
+          factor: scaleInfo.factor,
+          source: scaleInfo.source,
+        });
+      }
+    }
+
     this.setStage('GRID_CONFIRMATION');
     this.state.pausedAt = new Date().toISOString();
     this.endTiming('GRID_EXTRACTION');
@@ -1148,6 +1179,7 @@ ${text.substring(0, 300000)}`;
       modelId: this.modelId,
       alphaGrids: gridData.alphaGridlines.length,
       numericGrids: gridData.numericGridlines.length,
+      drawingScale: this.state.stageResults.drawingScale?.ratio || 'none',
     });
 
     await notify(0.70, `Grid extracted: ${gridData.alphaGridlines.length} alpha + ${gridData.numericGridlines.length} numeric gridlines. Awaiting confirmation.`);
@@ -1194,7 +1226,12 @@ For each element, report:
 
 POSITIONING RULES:
 - Use GRID REFERENCES (gridStart/gridEnd for walls/beams, gridNearest for doors/windows/columns)
-- Add offset_m (in metres) for elements not exactly on a grid line
+- Wall gridStart/gridEnd refer to the GRID LINES that the wall runs along or between
+- The offset_m field is the PERPENDICULAR OFFSET from the grid line to the wall CENTERLINE, in metres
+  Example: if a wall runs along grid line A but its centerline is 150mm to the right of grid A,
+  set gridStart.alpha = "A" and offset_m.x = 0.15
+  Example: if a wall runs exactly on grid line A, offset_m = {"x": 0, "y": 0}
+- For doors/windows/columns, offset_m is the offset from the nearest grid intersection to the element center
 - Wall START is one end, wall END is the other end — the code will compute length, midpoint, and rotation
 - The origin (0,0) is at the confirmed grid origin label shown in the grid data below
 
@@ -1390,8 +1427,11 @@ ${text.substring(0, 300000)}`;
       logger.warn('Stage 5B: Transform computation failed (non-fatal)', { error: (err as Error).message });
     }
 
-    // Run deterministic parameter resolution
-    const { candidates: resolved, stats } = resolveParameters(candidateSet, schedules, sections, grid);
+    // Run deterministic parameter resolution (pass drawing scale and units if available)
+    const drawingScaleFactor = this.state.stageResults.drawingScale?.factor;
+    // Determine drawing units from schedule data (populated by Stage 1 from actual drawings)
+    const drawingUnits = this.state.stageResults.schedules?.units;
+    const { candidates: resolved, stats } = resolveParameters(candidateSet, schedules, sections, grid, drawingScaleFactor, drawingUnits);
 
     (this.state.stageResults as any).candidates = resolved;
     (this.state.stageResults as any).resolutionStats = stats;
@@ -1458,6 +1498,28 @@ ${text.substring(0, 300000)}`;
       }
     }
 
+    // Verification pass: project elements to plan view for audit logging.
+    // This is non-blocking — purely for quality metrics.
+    try {
+      const storey0Elevation = candidateSet.storeys.length > 0
+        ? candidateSet.storeys[0].elevation_m + 1.2  // cut at 1.2m above floor (standard plan cut)
+        : 1.2;
+      const projected = projectToPlan(dbElements, storey0Elevation, 1.5);
+      const validProjections = projected.filter(p => p.outline.length >= 3).length;
+      logger.info('Stage 5C verification: 2D plan projection audit', {
+        modelId: this.modelId,
+        totalElements: dbElements.length,
+        validProjections,
+        projectionCoverage: dbElements.length > 0
+          ? `${Math.round((validProjections / dbElements.length) * 100)}%`
+          : '0%',
+      });
+    } catch (projErr) {
+      logger.warn('Stage 5C: Plan projection verification failed (non-fatal)', {
+        error: (projErr as Error).message,
+      });
+    }
+
     // Generate RFIs for unresolved candidates
     const unresolved = collectUnresolved(candidateSet);
     let rfiCount = 0;
@@ -1484,5 +1546,51 @@ ${text.substring(0, 300000)}`;
     });
 
     await notify(0.95, `5C complete: ${dbElements.length} 3D elements, ${unresolved.length} unresolved, ${rfiCount} RFIs`);
+  }
+
+  // ------------------------------------------------------------------
+  // Rebuild: re-run 5B + 5C from existing candidates (no AI calls)
+  // ------------------------------------------------------------------
+
+  /**
+   * Re-run parameter resolution (5B) and mesh generation (5C) from
+   * the existing candidate set. Used after manual candidate edits.
+   * Does NOT call Claude again -- purely deterministic rebuild.
+   */
+  async rebuildFromCandidates(
+    statusCallback?: StatusCallback,
+  ): Promise<PipelineState> {
+    const notify = statusCallback || (async () => {});
+
+    try {
+      const candidateSet = (this.state.stageResults as any)?.candidates as CandidateSet | undefined;
+      if (!candidateSet) {
+        throw new Error('No candidate data in pipeline state. Run the full pipeline first.');
+      }
+
+      // Re-run Stage 5B: parameter resolution
+      await notify(0.10, 'Rebuild: re-running parameter resolution (5B)');
+      this.state.currentStage = 'FLOOR_PLANS_5B' as PipelineStage;
+      await this.saveState();
+      await this.runStage5B_ParameterResolution(notify);
+
+      // Re-run Stage 5C: mesh generation
+      await notify(0.60, 'Rebuild: re-generating 3D meshes (5C)');
+      await this.runStage5C_MeshGeneration(notify);
+
+      if ((this.state.currentStage as string) !== 'FAILED') {
+        this.setStage('COMPLETE');
+        await this.saveState();
+        await notify(1.0, 'Rebuild complete');
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.setError('REBUILD', msg);
+      await this.saveState();
+      logger.error('Rebuild failed', { modelId: this.modelId, error: msg });
+      await notify(1.0, `Rebuild failed: ${msg}`);
+    }
+
+    return this.state;
   }
 }

@@ -487,7 +487,7 @@ pipelineRouter.post('/:modelId/rebuild', async (req: Request, res: Response) => 
       }
     };
 
-    (pipeline as any).rebuildFromCandidates(statusCallback).catch((err: any) => {
+    pipeline.rebuildFromCandidates(statusCallback).catch((err: any) => {
       logger.error('Pipeline rebuild failed', {
         modelId,
         error: (err as Error).message,
