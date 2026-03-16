@@ -1,0 +1,31 @@
+ This confirms everything we've been fixing. Let me map each problem to its cause and status:
+
+  ┌─────────────────────┬─────────────────────────────────────────────────────────────────────────────────┬───────────────────────────────────────────────────┐
+  │       Problem       │                                      Cause                                      │                        Fix                        │
+  ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────┤
+  │ Types "undefined"   │ Old extraction didn't set elementType field                                     │ Pipeline Stage 5 sets it from Claude's extraction │
+  ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────┤
+  │ Walls 0.01m thick   │ Our return null fix was reverted to 0.01 by Replit, or old elements never had   │ Pipeline Stage 2 extracts from sections → Stage 5 │
+  │                     │ real thickness                                                                  │  applies                                          │
+  ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────┤
+  │ All Y=0             │ Old extraction had no grid reference, no coordinate system defined              │ Pipeline Stage 4 (grid) + Stage 5 places on grid  │
+  │                     │                                                                                 │ coords                                            │
+  ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────┤
+  │ Penthouse empty     │ Old prompt didn't have "typical floor rule" — didn't copy elements per floor    │ New prompt has it, pipeline handles it            │
+  ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────┤
+  │ Inflated bounding   │ Wall mesh vertices span full length in wrong axis                               │ Viewer camera calculation issue                   │
+  │ box                 │                                                                                 │                                                   │
+  └─────────────────────┴─────────────────────────────────────────────────────────────────────────────────┴───────────────────────────────────────────────────┘
+
+  The bottom line: none of these can be fixed by patching the existing 886 elements. They were extracted by the old code with no grid, no sections cross-reference,
+   no type assignment, and no coordinate system. The enrichment pass can fix dimensions (thickness, height) but can't fix positions (Y=0) or missing types.
+
+  The fix is running the full sequential pipeline — which is built and ready. It will:
+  1. Extract real types from Claude (wall, door, column, etc.)
+  2. Get thicknesses from sections (Stage 2)
+  3. Get sizes from schedules (Stage 1)
+  4. Confirm grid with you (Stage 4)
+  5. Place elements at real x,y positions on the grid (Stage 5)
+
+  Has Replit tried clicking the Pipeline button yet? That's the path to replacing these broken elements with properly extracted ones. If there's an issue with the
+  button or the pipeline execution, paste the error and I'll fix it.
