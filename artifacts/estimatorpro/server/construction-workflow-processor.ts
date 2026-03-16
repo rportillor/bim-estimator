@@ -1600,7 +1600,13 @@ Return ONLY valid JSON.`;
     
     const allProducts: Product[] = [];
     let productCounter = this.products.size + 1;
-    
+
+    // Load per-chunk product cache so a restart can skip already-processed chunks
+    const chunkCache: Record<number, any[]> = (doc.analysisResult as any)?.chunkProductsCache ?? {};
+    if (Object.keys(chunkCache).length > 0) {
+      logger.info(`   📦 Chunk cache loaded for ${doc.filename}: ${Object.keys(chunkCache).length} chunks already processed`);
+    }
+
     // Process ALL chunks but with breaks between them, support resuming from specific chunk
     const startChunk = options?.startChunk || 1; // 1-based for user clarity
     const startIndex = Math.max(0, startChunk - 1); // Convert to 0-based for array
@@ -1801,6 +1807,19 @@ ${docText}
 
 Extract EVERY product mentioned, even if details are incomplete.`;
 
+      // Cache hit: reuse previously extracted products for this chunk, skip Claude
+      if (chunkCache[i]) {
+        const cached = chunkCache[i] as Product[];
+        productCounter += cached.length;
+        allProducts.push(...cached);
+        logger.info(`   ✅ Cache hit: chunk ${i+1}/${chunks.length} — ${cached.length} products (no Claude call)`);
+        if (options?.statusCallback && options?.modelId) {
+          const pct = this.calculateOverallProgress(i + 1, chunks.length, options.batch || 1, options.totalBatches || 1);
+          await options.statusCallback(pct / 100, `Batch ${options.batch || 1}/${options.totalBatches || 1}: Chunk ${i+1}/${chunks.length} (cached)`).catch(() => {});
+        }
+        continue;
+      }
+
       try {
         const response = await this.anthropic.messages.create({
           model: "claude-sonnet-4-20250514",
@@ -1834,6 +1853,18 @@ Extract EVERY product mentioned, even if details are incomplete.`;
           });
           productCounter += chunkProducts.length;
           allProducts.push(...chunkProducts);
+
+          // Persist this chunk's products so a restart can skip this Claude call next time
+          try {
+            const freshDoc = await storage.getDocument(doc.id);
+            const existingResult = (freshDoc?.analysisResult as any) ?? {};
+            const updatedCache = { ...(existingResult.chunkProductsCache ?? {}), [i]: chunkProducts };
+            await storage.updateDocument(doc.id, { analysisResult: { ...existingResult, chunkProductsCache: updatedCache } });
+            logger.info(`   💾 Chunk ${i+1} cached (${chunkProducts.length} products) — will skip Claude on retry`);
+          } catch (cacheErr: any) {
+            logger.warn(`   ⚠️ Non-fatal: chunk cache write failed — ${cacheErr.message}`);
+          }
+
           logger.info(`   Found ${chunkProducts.length} products in chunk ${i+1}`);
           
           // LOG FIRST FEW PRODUCTS FROM THIS CHUNK
