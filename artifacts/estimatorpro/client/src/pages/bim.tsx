@@ -184,6 +184,34 @@ export default function BIM() {
             {/* Model Actions */}
             {activeModel && (
               <div className="flex items-center gap-1 bg-gray-50 px-2 py-1 rounded border border-gray-200">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={activeModel?.status === 'generating' || activeModel?.status === 'processing'}
+                  onClick={async () => {
+                    if (!projectId) return;
+                    if (!confirm('Start full sequential pipeline?\n\nThis will:\n1. Extract schedules (door/window sizes)\n2. Extract sections (wall/slab assemblies)\n3. Extract specifications (materials)\n4. Extract grid (you will confirm)\n5. Place elements with real dimensions\n\nExisting elements will be replaced. Uses Claude API credits.')) return;
+                    try {
+                      const token = localStorage.getItem('auth_token');
+                      const resp = await fetch(`/api/bim/pipeline/${projectId}/start`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
+                      });
+                      if (resp.ok) {
+                        const data = await resp.json();
+                        alert(`Pipeline started (Model: ${data.modelId}). Check status in the console.\n\nThe pipeline will pause at grid confirmation — you will need to confirm the grid before elements are placed.`);
+                        window.location.reload();
+                      } else {
+                        const err = await resp.json().catch(() => ({ message: 'Unknown error' }));
+                        alert(`Failed to start pipeline: ${err.message}`);
+                      }
+                    } catch (e) { alert(`Failed: ${(e as Error).message}`); }
+                  }}
+                  className="text-xs px-2 py-1 h-6 bg-green-50 border-green-300 text-green-700 hover:bg-green-100"
+                  title="Run the full 5-stage sequential pipeline: Schedules → Sections → Specs → Grid → Floor Plans"
+                >
+                  Pipeline
+                </Button>
                 <Button 
                   variant="outline" 
                   size="sm"
