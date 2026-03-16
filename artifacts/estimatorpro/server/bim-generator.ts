@@ -842,6 +842,7 @@ export class BIMGenerator {
 
           for (let i = 0; i < batches.length; i++) {
             const batch = batches[i];
+            heartbeat(modelId); // reset watchdog at the start of every batch
             console.log(`\n📦 Processing batch ${i+1}/${batches.length}: ${batch.name} (${batch.docs.length} documents)`);
 
             // Emit live SSE progress so the client advances from 60% → 92% across all batches
@@ -854,6 +855,7 @@ export class BIMGenerator {
             // this clamp (62% → 64% → 62% → ...). highWaterMark is shared across all
             // batches so progress is always monotonically increasing end-to-end.
             const batchStatusCallback = async (internalProgress: number, message: string) => {
+              heartbeat(modelId); // keep watchdog alive during long chunk loops
               const candidate = 0.60 + internalProgress * 0.32;
               if (candidate > highWaterMark) {
                 highWaterMark = candidate;
