@@ -72,7 +72,7 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
   const modelAge = latestModel
     ? Date.now() - new Date(latestModel.updatedAt || latestModel.createdAt || 0).getTime()
     : Infinity;
-  const isStuck = !generatingLocal && dbSaysRunning && modelAge > 15 * 60 * 1000;
+  const isStuck = !generatingLocal && dbSaysRunning && modelAge > 60 * 60 * 1000;
   const isGenerating = generatingLocal || (dbSaysRunning && !isStuck);
 
   // If the DB already says "generating" or "processing" on mount, reconnect tracker.
