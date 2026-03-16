@@ -1074,16 +1074,31 @@ export class ConstructionWorkflowProcessor {
         
         logger.info(`   ðŸ” Extracted ${products.length} products from ${doc.filename}`);
         
-        // CODE-5: Tally door and window counts from schedule documents
+        // CODE-5: Tally door and window QUANTITIES from schedule documents.
+        // Only count if the product carries an explicit numeric quantity — counting
+        // product TYPE entries (e.g. "D01 Hollow Metal Door" = 1 entry) vs BIM element
+        // INSTANCES is an apples-to-oranges comparison that produces false positives.
         const isScheduleDoc = /schedule/i.test(doc.filename || '');
         if (isScheduleDoc) {
+          let doorsAdded = 0;
+          let windowsAdded = 0;
           for (const p of products) {
             const isDoor   = /^08\.1/i.test(p.csiCode || '') || /door/i.test(p.name || '') || /^DOOR_/.test(p.id || '');
             const isWindow = /^08\.[35]/i.test(p.csiCode || '') || /window|glazing/i.test(p.name || '') || /^WINDOW_/.test(p.id || '');
-            if (isDoor)   scheduleDoorCount.value++;
-            if (isWindow) scheduleWindowCount.value++;
+            // Only add to count if the product has an explicit quantity field > 0
+            const qty = typeof p.properties?.quantity === 'number'
+              ? p.properties.quantity
+              : typeof p.properties?.qty === 'number'
+              ? p.properties.qty
+              : 0;
+            if (isDoor   && qty > 0) { scheduleDoorCount.value   += qty; doorsAdded   += qty; }
+            if (isWindow && qty > 0) { scheduleWindowCount.value += qty; windowsAdded += qty; }
           }
-          logger.info(`   CODE-5: Schedule counts - doors: ${scheduleDoorCount.value}, windows: ${scheduleWindowCount.value}`);
+          if (doorsAdded > 0 || windowsAdded > 0) {
+            logger.info(`   CODE-5: Schedule quantities — doors: ${scheduleDoorCount.value}, windows: ${scheduleWindowCount.value}`);
+          } else {
+            logger.info(`   CODE-5: Schedule document "${doc.filename}" has no explicit door/window quantities — skipping count (${products.length} product types found)`);
+          }
         }
 
         // Add to Map
