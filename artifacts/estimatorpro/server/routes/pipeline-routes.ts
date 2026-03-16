@@ -13,7 +13,6 @@ import { logger } from '../utils/enterprise-logger';
 import { SequentialPipeline } from '../pipeline/sequential-pipeline';
 import type { GridData, PipelineState } from '../pipeline/stage-types';
 import { updateModelStatus } from '../services/model-status';
-
 export const pipelineRouter = Router();
 
 // ---------------------------------------------------------------------------
@@ -21,7 +20,7 @@ export const pipelineRouter = Router();
 // Start the sequential pipeline for a project.
 // Body: { modelName?: string }
 // ---------------------------------------------------------------------------
-pipelineRouter.post('/api/bim/pipeline/:projectId/start', async (req: Request, res: Response) => {
+pipelineRouter.post('/:projectId/start', async (req: Request, res: Response) => {
   const { projectId } = req.params;
   const { modelName } = req.body || {};
 
@@ -103,7 +102,7 @@ pipelineRouter.post('/api/bim/pipeline/:projectId/start', async (req: Request, r
 // GET /api/bim/pipeline/:modelId/status
 // Returns the current pipeline state: stage, results, timings, errors.
 // ---------------------------------------------------------------------------
-pipelineRouter.get('/api/bim/pipeline/:modelId/status', async (req: Request, res: Response) => {
+pipelineRouter.get('/:modelId/status', async (req: Request, res: Response) => {
   const { modelId } = req.params;
 
   try {
@@ -142,7 +141,7 @@ pipelineRouter.get('/api/bim/pipeline/:modelId/status', async (req: Request, res
 // Confirm (and optionally edit) the extracted grid, then resume the pipeline.
 // Body: GridData (with confirmed: true)
 // ---------------------------------------------------------------------------
-pipelineRouter.post('/api/bim/pipeline/:modelId/confirm-grid', async (req: Request, res: Response) => {
+pipelineRouter.post('/:modelId/confirm-grid', async (req: Request, res: Response) => {
   const { modelId } = req.params;
   const gridInput = req.body;
 
@@ -235,7 +234,7 @@ pipelineRouter.post('/api/bim/pipeline/:modelId/confirm-grid', async (req: Reque
 // Run enrichment pass on existing elements (Path B - The Moorings).
 // Extracts schedules/sections/specs, then matches to existing BIM elements.
 // ---------------------------------------------------------------------------
-pipelineRouter.post('/api/bim/pipeline/:modelId/enrich', async (req: Request, res: Response) => {
+pipelineRouter.post('/:modelId/enrich', async (req: Request, res: Response) => {
   const { modelId } = req.params;
 
   try {

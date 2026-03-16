@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
 
 interface User {
   id: string;
@@ -26,45 +26,62 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const isAuthenticated = !!user && !!token;
 
-  // Check for existing token on app load
-  useEffect(() => {
-    const checkAuth = async () => {
-      const storedToken = localStorage.getItem("auth_token");
-      if (!storedToken) {
-        setIsLoading(false);
-        return;
-      }
+  const checkAuth = useCallback(async () => {
+    const storedToken = localStorage.getItem("auth_token");
+    if (!storedToken) {
+      setUser(null);
+      setToken(null);
+      setIsLoading(false);
+      return;
+    }
 
-      try {
-        // Verify token with backend
-        const response = await fetch("/api/auth/user", {
-          headers: {
-            Authorization: `Bearer ${storedToken}`,
-          },
-        }).catch(err => {
-          console.error('Failed to fetch auth profile:', err);
-          throw err;
-        });
+    try {
+      const response = await fetch("/api/auth/user", {
+        headers: { Authorization: `Bearer ${storedToken}` },
+      });
 
-        if (response.ok) {
-          const data = await response.json();
-          // /api/auth/user returns the user object directly (not wrapped)
-          setUser(data.user ?? data);
-          setToken(storedToken);
-        } else {
-          // Token is invalid, remove it
-          localStorage.removeItem("auth_token");
-        }
-      } catch (error) {
-        console.error("Auth check failed:", error);
+      if (response.ok) {
+        const data = await response.json();
+        setUser(data.user ?? data);
+        setToken(storedToken);
+      } else {
         localStorage.removeItem("auth_token");
-      } finally {
-        setIsLoading(false);
+        setUser(null);
+        setToken(null);
+      }
+    } catch (error) {
+      console.error("Auth check failed:", error);
+      localStorage.removeItem("auth_token");
+      setUser(null);
+      setToken(null);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // Initial auth check on mount
+  useEffect(() => {
+    checkAuth();
+  }, [checkAuth]);
+
+  // Cross-iframe/tab sync: when another frame logs in or out, pick up the change
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key !== "auth_token") return;
+
+      if (!e.newValue) {
+        // Token was removed (logout in another tab/iframe)
+        setUser(null);
+        setToken(null);
+      } else if (e.newValue !== token) {
+        // New token written (login in another tab/iframe) — re-verify it
+        checkAuth();
       }
     };
 
-    checkAuth();
-  }, []);
+    window.addEventListener("storage", handleStorageChange);
+    return () => window.removeEventListener("storage", handleStorageChange);
+  }, [token, checkAuth]);
 
   const login = (userData: User, userToken: string) => {
     setUser(userData);
