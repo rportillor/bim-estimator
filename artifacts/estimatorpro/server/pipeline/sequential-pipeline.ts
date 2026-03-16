@@ -33,6 +33,7 @@ import { collectUnresolved, generateReviewItems, buildReviewSummary } from './ca
 import { computeAndStoreTransform } from './coordinate-transform';
 import { classifyDocuments } from './view-classifier';
 import { projectToPlan } from './view-projection';
+import { extractGridFromPdfVector } from './pdf-vector-parser';
 
 type StatusCallback = (progress: number, message: string) => Promise<void>;
 
@@ -1172,6 +1173,70 @@ ${chunk}`;
     const pdfBuffers = await loadPdfBuffers(docsToUse);
     logger.info(`Stage 4: ${docsToUse.length} docs, ${pdfBuffers.length} PDFs loaded for grid extraction`);
 
+    // Try PDF vector extraction first -- more reliable than Claude for grid positions
+    // when the PDF has embedded text (not raster-only drawings)
+    try {
+      for (const pdf of pdfBuffers) {
+        const vectorResult = await extractGridFromPdfVector(pdf.buffer);
+        if (vectorResult.confidence !== 'low' && vectorResult.alphaGridlines.length > 0) {
+          logger.info('Stage 4: PDF vector extraction succeeded', {
+            modelId: this.modelId,
+            method: 'pdf_vector',
+            alphaGrids: vectorResult.alphaGridlines.length,
+            numericGrids: vectorResult.numericGridlines.length,
+            confidence: vectorResult.confidence,
+            filename: pdf.filename,
+          });
+
+          const vectorGrid: GridData = {
+            alphaGridlines: vectorResult.alphaGridlines.map(g => ({
+              label: g.label,
+              position_m: g.position_m,
+              angle_deg: g.angle_deg,
+              family: 'alpha' as const,
+            })),
+            numericGridlines: vectorResult.numericGridlines.map(g => ({
+              label: g.label,
+              position_m: g.position_m,
+              angle_deg: g.angle_deg,
+              family: 'numeric' as const,
+            })),
+            alphaDirection: vectorResult.alphaDirection,
+            numericDirection: vectorResult.numericDirection,
+            originLabel: vectorResult.originLabel,
+            notes: [...vectorResult.notes, 'Grid extracted from PDF vector data (text positions)'],
+            confirmed: false,
+          };
+
+          this.state.stageResults.grid = vectorGrid;
+
+          // Also store drawing scale if found
+          if (vectorResult.drawingScale) {
+            this.state.stageResults.drawingScale = {
+              ratio: vectorResult.drawingScale.ratio,
+              factor: vectorResult.drawingScale.factor,
+              source: vectorResult.drawingScale.source,
+              confidence: 'medium',
+            };
+          }
+
+          this.setStage('GRID_CONFIRMATION');
+          this.state.pausedAt = new Date().toISOString();
+          this.endTiming('GRID_EXTRACTION');
+          await this.saveState();
+
+          await notify(0.70, `Grid extracted (PDF vector): ${vectorGrid.alphaGridlines.length} alpha + ${vectorGrid.numericGridlines.length} numeric gridlines. Awaiting confirmation.`);
+          return;
+        }
+      }
+    } catch (err) {
+      logger.warn('Stage 4: PDF vector extraction failed, falling back to Claude', {
+        modelId: this.modelId,
+        error: (err as Error).message,
+      });
+    }
+
+    // If PDF vector extraction did not produce a usable grid, continue with Claude
     if (!text.trim() && pdfBuffers.length === 0) {
       logger.warn('Stage 4: No content found for grid extraction', { modelId: this.modelId });
       // Set an empty unconfirmed grid so user can manually provide it
