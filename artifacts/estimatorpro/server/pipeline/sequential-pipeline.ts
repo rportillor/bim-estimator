@@ -1191,22 +1191,50 @@ ${chunk}`;
       return;
     }
 
-    const systemPrompt = `You are a structural engineer specializing in reading construction gridline systems from floor plans. Extract every gridline with precise positions and angles. Also identify the drawing scale. Return valid JSON only.`;
+    const systemPrompt = `You are a Quantity Surveyor reading the structural grid from construction floor plans.
 
-    const userPrompt = `Extract ALL gridlines from these structural floor plans. For each gridline report:
-- label (letter or number)
-- position in metres from the origin (bottom-left corner of the grid)
-- angle in degrees (0 for orthogonal gridlines, non-zero for angled wings/bays)
-- family: "alpha" for letter gridlines, "numeric" for number gridlines
+YOUR ONLY SOURCE FOR GRIDLINE POSITIONS IS THE DIMENSION TEXT WRITTEN ON THE DRAWINGS.
 
-Also determine:
-- Which direction letters run (left_to_right or bottom_to_top)
-- Which direction numbers run (left_to_right or bottom_to_top)
-- The origin labels (first letter and first number)
+DO NOT estimate, measure, or calculate positions from the image. DO NOT use PDF coordinates. DO NOT use pixel positions. ONLY read the dimension text strings that are already written on the drawing between gridlines.
 
-DRAWING SCALE: Find the drawing scale from the title block (e.g. "1:100", "1/4" = 1'-0"", "Scale 1:50").
-Report it as "drawing_scale_ratio" (e.g. "1:100") and where you found it ("drawing_scale_source").
-If the sheet says "NTS" or "Not to Scale" or you cannot find a scale, set drawing_scale_ratio to null.
+HOW TO DO IT:
+
+1. FIND ALL GRIDLINES — look for the bubbles/circles at the edges of the floor plan with letters (A, B, C...) and numbers (1, 2, 3...).
+
+2. READ THE DIMENSION TEXT BETWEEN GRIDLINES — on the drawing, between each pair of adjacent gridlines, there is a dimension line with a number. This number is the REAL-WORLD distance between those gridlines. Examples: "6,000", "8,500", "7,200", "19'-8"", "6000". This text is your ONLY source for positions.
+
+3. ACCUMULATE POSITIONS — start the first gridline at 0, then add each dimension to get the next:
+   - First gridline = 0
+   - Read dimension text to next gridline: "6,000" → next = 6,000 mm = 6.0 m
+   - Read dimension text to next: "7,200" → next = 6,000 + 7,200 = 13,200 mm = 13.2 m
+   - Continue for ALL gridlines
+
+4. DO THE SAME FOR THE OTHER DIRECTION — if letters are horizontal, do numbers vertically (or vice versa).
+
+5. ANGLED GRIDLINES — some gridlines are not parallel. Note the angle.
+
+6. DRAWING SCALE — read from the title block. Report it but DO NOT use it to calculate positions. The dimension text already gives real-world values.
+
+CONVERT TO METRES: if dimension text is in mm, divide by 1000. If in feet-inches, convert to metres (1' = 0.3048m, 1" = 0.0254m).
+
+Return valid JSON only.`;
+
+    const userPrompt = `Read the structural grid from these floor plans BY READING THE DIMENSION STRINGS.
+
+STEP BY STEP:
+1. Find every gridline bubble (letters and numbers at the edges of the plan)
+2. Read the DIMENSION TEXT between adjacent gridlines (written as "6,000" or "6000" or "19'-8"")
+3. Starting from the first gridline at position 0, ADD each dimension to get the next position
+4. Report each gridline with its ACCUMULATED position in metres
+5. Note which direction letters run and which direction numbers run
+6. Check if any gridlines are angled (not parallel to the main grid)
+7. Read the drawing scale from the title block
+
+EXAMPLE: If dimensions read A→B = 6000mm, B→C = 7200mm, C→D = 6000mm:
+  A = 0.0m, B = 6.0m, C = 13.2m, D = 19.2m
+
+DRAWING SCALE: Find from title block (e.g. "1:100"). Report as drawing_scale_ratio.
+If "NTS" or not found, set drawing_scale_ratio to null.
 
 Return a JSON object with this exact structure:
 
@@ -1326,31 +1354,32 @@ ${text.substring(0, 300000)}`;
 
     const fullContext = buildFullContext(this.state.stageResults);
 
-    const systemPrompt = `You are a senior Quantity Surveyor CLASSIFYING building elements from construction drawings.
+    const systemPrompt = `You are a Quantity Surveyor doing a MANUAL TAKEOFF from construction drawings. Work the way a human would — read text, follow references, use the grid.
 
-YOUR JOB: Identify every element on the floor plans — report its TYPE, GRID LOCATION, TYPE CODE/MARK, and STOREY. The code will resolve actual dimensions from schedules and assembly data. You do NOT need to resolve dimensions.
+DO THIS LIKE A HUMAN READING DRAWINGS AT A DESK:
 
-For each element, report:
-- TYPE: wall, door, window, column, beam, slab, stair, mep
-- GRID REFERENCE: which grid intersection(s) the element is at or between (use the confirmed grid labels)
-- TYPE CODE or MARK: wall assembly code (EW1, IW3D) or door/window mark (D101, W201) as shown on the plan
-- STOREY: which floor level
-- EVIDENCE: which document and what you observed
+1. LOOK AT THE FLOOR PLAN — find every wall, door, window, column on the plan
+2. READ THE GRID REFERENCE — each element is near specific gridlines. Read which gridlines it's between.
+   - Walls: "this wall runs along grid A from grid 2 to grid 5"
+   - Doors: "door D101 is near grid B between grids 3 and 4"
+   - Columns: "column at grid intersection C-3"
+3. READ THE TYPE CODE — each wall has a type code written on the plan (EW1, IW3D, etc.)
+   Each door has a mark (D101, D102). Each window has a mark (W201).
+4. READ THE FLOOR NAME — which floor is this plan for?
 
-POSITIONING RULES:
-- Use GRID REFERENCES (gridStart/gridEnd for walls/beams, gridNearest for doors/windows/columns)
-- Wall gridStart/gridEnd refer to the GRID LINES that the wall runs along or between
-- The offset_m field is the PERPENDICULAR OFFSET from the grid line to the wall CENTERLINE, in metres
-  Example: if a wall runs along grid line A but its centerline is 150mm to the right of grid A,
-  set gridStart.alpha = "A" and offset_m.x = 0.15
-  Example: if a wall runs exactly on grid line A, offset_m = {"x": 0, "y": 0}
-- For doors/windows/columns, offset_m is the offset from the nearest grid intersection to the element center
-- Wall START is one end, wall END is the other end — the code will compute length, midpoint, and rotation
-- The origin (0,0) is at the confirmed grid origin label shown in the grid data below
+YOU DO NOT NEED TO:
+- Calculate dimensions (the code will look them up from schedules and assemblies)
+- Measure distances (the code will use the grid positions)
+- Determine thicknesses (the code will read the assembly details)
 
-Leave dimension fields as null — the resolver will fill them from schedule/assembly data:
-- thickness_mm, height_m, width_mm, height_mm → all null
-- The code has the door schedule, window schedule, wall assemblies, and storey heights from prior stages
+Just tell me WHAT you see and WHERE you see it (by grid reference). The code does the rest.
+
+POSITIONING — USE GRID REFERENCES ONLY:
+- Walls: gridStart and gridEnd — the two grid intersections at each end of the wall
+  If the wall is offset from the grid, add offset_m in metres (e.g. wall 150mm right of grid A → offset_m.x = 0.15)
+- Doors/Windows: gridNearest — the closest grid intersection, plus offset_m
+- Columns: gridPosition — the grid intersection the column sits at
+- ALL dimension fields (thickness_mm, height_m, width_mm, height_mm) → set to null. The code fills them.
 
 Return valid JSON only.`;
 
