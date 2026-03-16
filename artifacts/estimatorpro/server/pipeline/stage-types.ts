@@ -4,9 +4,10 @@
 export interface ScheduleData {
   doors: Array<{
     mark: string;
+    door_type?: string;  // frame/assembly type code (A1, B1, C1) — different from instance mark
     width_mm: number;
     height_mm: number;
-    type: string;
+    type: string;        // material type (Hollow Metal, Wood, etc.)
     fire_rating?: string;
     hardware?: string;
     thickness_mm?: number;
@@ -30,7 +31,10 @@ export interface ScheduleData {
 }
 
 export interface AssemblyDefinition {
-  code: string;           // e.g. "EW1", "IW3D"
+  code: string;           // e.g. "EW1", "IW3D", "F1a", "R1A", "C1", "S1"
+  category: string;       // as labeled on the drawing: "Exterior Wall", "Interior Wall",
+                          // "Non-Loadbearing Steel Stud Wall", "Floor Type", "Roof Type",
+                          // "Ceiling Assembly", "Foundation Wall", "Exterior Soffit", etc.
   description: string;
   totalThickness_mm: number;
   layers: Array<{
@@ -44,6 +48,10 @@ export interface AssemblyDefinition {
 }
 
 export interface AssemblyData {
+  // All assembly types found in the drawings — keyed by the assembly code (EW1, IW3D, F1a, R1A, etc.)
+  // The 'category' field in each AssemblyDefinition identifies what kind of assembly it is
+  assemblies: Record<string, AssemblyDefinition>;
+  // Legacy fields for backward compatibility
   wallTypes: Record<string, AssemblyDefinition>;
   slabTypes: Record<string, AssemblyDefinition>;
   roofTypes: Record<string, AssemblyDefinition>;

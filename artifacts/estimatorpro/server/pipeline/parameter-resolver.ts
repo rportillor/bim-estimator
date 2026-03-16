@@ -148,8 +148,24 @@ function levenshtein(a: string, b: string): number {
 function buildDoorScheduleMap(schedules: ScheduleData): Map<string, DoorEntry> {
   const map = new Map<string, DoorEntry>();
   for (const d of schedules.doors) {
-    const key = d.mark.toUpperCase().replace(/\s+/g, '');
-    map.set(key, d);
+    // Key by MARK (D101, D102 — instance marks from floor plans)
+    const markKey = d.mark.toUpperCase().replace(/\s+/g, '');
+    map.set(markKey, d);
+    // ALSO key by DOOR TYPE CODE (A1, B1, C1 — frame types from door schedule)
+    // The floor plan shows D101, the schedule shows door_type A1 for that door
+    if ((d as any).door_type) {
+      const typeKey = (d as any).door_type.toUpperCase().replace(/\s+/g, '');
+      if (!map.has(typeKey)) {
+        map.set(typeKey, d);
+      }
+    }
+    // Also try the 'type' field if it looks like a code (short, alphanumeric)
+    if (d.type && d.type.length <= 5 && /^[A-Z0-9]+$/i.test(d.type.trim())) {
+      const typeKey = d.type.toUpperCase().replace(/\s+/g, '');
+      if (!map.has(typeKey)) {
+        map.set(typeKey, d);
+      }
+    }
   }
   return map;
 }
@@ -165,8 +181,19 @@ function buildWindowScheduleMap(schedules: ScheduleData): Map<string, WindowEntr
 
 function buildWallAssemblyMap(assemblies: AssemblyData): Map<string, AssemblyDefinition> {
   const map = new Map<string, AssemblyDefinition>();
-  for (const [code, def] of Object.entries(assemblies.wallTypes)) {
+  // Include legacy wallTypes
+  for (const [code, def] of Object.entries(assemblies.wallTypes || {})) {
     map.set(code.toUpperCase().replace(/\s+/g, ''), def);
+  }
+  // Also include ALL assemblies — any assembly code can be a wall type
+  // The wall candidate's wall_type_code will match against this
+  if (assemblies.assemblies) {
+    for (const [code, def] of Object.entries(assemblies.assemblies)) {
+      const key = code.toUpperCase().replace(/\s+/g, '');
+      if (!map.has(key)) {
+        map.set(key, def);
+      }
+    }
   }
   return map;
 }
@@ -455,15 +482,26 @@ export function resolveParameters(
   const unitSystem: DrawingUnit = drawingUnits || schedules.units || 'mm';
   candidates.metadata.drawingUnits = unitSystem;
 
-  // Determine if drawing scale needs to be applied to resolved coordinates.
-  // When a drawing scale is explicitly provided, always use it.
-  // When no scale is provided, do NOT guess — skip scaling entirely.
-  const applyScale = drawingScaleFactor != null && drawingScaleFactor > 0
-    && Math.abs(drawingScaleFactor - 0.001) >= 0.0001;
-  const effectiveScale = applyScale ? drawingScaleFactor! : 0;
+  // Per-candidate scale: each candidate may have source_scale from its drawing sheet.
+  // If not, fall back to the global drawingScaleFactor from Stage 4.
+  // Import computeScaleFactor to parse per-candidate scale strings.
+  const { computeScaleFactor } = require('../bim/drawing-scale-extractor');
+  const globalScale = (drawingScaleFactor != null && drawingScaleFactor > 0
+    && Math.abs(drawingScaleFactor - 0.001) >= 0.0001) ? drawingScaleFactor! : 0;
+
+  function getScaleForCandidate(candidate: any): number {
+    // Per-candidate scale from its source drawing sheet
+    if (candidate.source_scale && typeof candidate.source_scale === 'string') {
+      const factor = computeScaleFactor(candidate.source_scale);
+      if (factor !== null && factor > 0) return factor;
+    }
+    // Fall back to global scale from Stage 4
+    return globalScale;
+  }
 
   // Resolve walls
   for (const wall of candidates.walls) {
+    const effectiveScale = getScaleForCandidate(wall);
     // Grid -> absolute position
     if (wall.start_m == null && wall.gridStart) {
       let resolved = resolveGridPosition(wall.gridStart, wall.offset_m, gridAlpha, gridNumeric);
@@ -532,6 +570,7 @@ export function resolveParameters(
 
   // Resolve doors
   for (const door of candidates.doors) {
+    const effectiveScale = getScaleForCandidate(door);
     // Grid -> position
     if (door.position_m == null && door.gridNearest) {
       let resolved = resolveGridPosition(door.gridNearest, door.offset_m, gridAlpha, gridNumeric);
@@ -545,8 +584,17 @@ export function resolveParameters(
     }
 
     // Mark -> dimensions from door schedule
+    // Try multiple fields: mark (D101), then type code (A1), then name
     if ((door.width_mm == null || door.height_mm == null) && door.mark) {
-      const match = fuzzyLookup(doorSchedule, door.mark);
+      let match = fuzzyLookup(doorSchedule, door.mark);
+      // If mark didn't match, try the host_wall_type or other fields
+      if (!match && (door as any).door_type) {
+        match = fuzzyLookup(doorSchedule, (door as any).door_type);
+      }
+      if (!match && door.host_wall_type) {
+        // Sometimes the door type is stored in a different field
+        match = fuzzyLookup(doorSchedule, door.host_wall_type);
+      }
       if (match) {
         if (door.width_mm == null) {
           door.width_mm = match.value.width_mm;
@@ -577,6 +625,7 @@ export function resolveParameters(
 
   // Resolve windows
   for (const win of candidates.windows) {
+    const effectiveScale = getScaleForCandidate(win);
     // Grid -> position
     if (win.position_m == null && win.gridNearest) {
       let resolved = resolveGridPosition(win.gridNearest, win.offset_m, gridAlpha, gridNumeric);
@@ -622,6 +671,7 @@ export function resolveParameters(
 
   // Resolve columns
   for (const col of candidates.columns) {
+    const effectiveScale = getScaleForCandidate(col);
     // Grid -> position
     if (col.position_m == null && col.gridPosition) {
       let resolved = resolveGridPosition(col.gridPosition, col.offset_m, gridAlpha, gridNumeric);
@@ -663,6 +713,7 @@ export function resolveParameters(
 
   // Resolve beams
   for (const beam of candidates.beams) {
+    const effectiveScale = getScaleForCandidate(beam);
     // Grid -> positions
     if (beam.start_m == null && beam.gridStart) {
       let resolved = resolveGridPosition(beam.gridStart, { x: 0, y: 0 }, gridAlpha, gridNumeric);

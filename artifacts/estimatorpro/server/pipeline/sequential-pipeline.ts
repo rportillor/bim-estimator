@@ -691,11 +691,13 @@ export class SequentialPipeline {
     this.startTiming('SCHEDULES');
     await this.saveState();
 
-    const scheduleDocs = this.documents.filter(isScheduleDoc);
-    const docsToUse = scheduleDocs.length > 0 ? scheduleDocs : this.documents;
+    // Send ALL documents — schedules are often embedded on floor plan sheets
+    // (door schedule table in the corner of A101, window schedule on A102, etc.)
+    // Not just files named "schedule"
+    const docsToUse = this.documents;
     const text = collectText(docsToUse);
 
-    // Load actual PDFs — schedule tables are often graphical (drawn tables, not text)
+    // Load actual PDFs — schedule tables are graphical (drawn tables, not OCR text)
     const pdfBuffers = await loadPdfBuffers(docsToUse);
     logger.info(`Stage 1: ${docsToUse.length} docs, ${pdfBuffers.length} PDFs loaded for schedule reading`);
 
@@ -708,13 +710,29 @@ export class SequentialPipeline {
       return;
     }
 
-    const systemPrompt = `You are a construction document analyst specializing in reading schedule tables from architectural drawings. Extract data exactly as shown in the drawings. Do not invent or assume values. Return valid JSON only.`;
+    const systemPrompt = `You are a construction document analyst specializing in reading schedule tables from architectural drawings.
 
-    const userPrompt = `Extract ALL schedule tables from these construction drawings. Return a JSON object with this exact structure:
+IMPORTANT: Schedules can appear ANYWHERE in the drawing set:
+- Dedicated schedule sheets (A-800 series)
+- Tables embedded on floor plan sheets (corner of A101, A102, etc.)
+- Door/window schedules on elevation sheets
+- Finish schedules on interior design sheets
+- Equipment schedules on MEP sheets
+
+Search EVERY sheet for schedule tables. Extract data exactly as shown. Do not invent or assume values. Return valid JSON only.`;
+
+    const userPrompt = `Extract ALL schedule tables from these construction drawings.
+
+CRITICAL: Door schedules typically have TWO identifier columns:
+- DOOR MARK (D101, D102, D103) — the instance label shown on floor plans next to each door
+- DOOR TYPE (A1, B1, C1, K1) — the frame/assembly type code that groups similar doors
+Extract BOTH. The "mark" field is the instance mark, the "type" field is the type code.
+
+Return a JSON object with this exact structure:
 
 {
   "doors": [
-    { "mark": "D1", "width_mm": 914, "height_mm": 2134, "type": "Hollow Metal", "fire_rating": "1-hour", "hardware": "HW-1", "thickness_mm": 44 }
+    { "mark": "D101", "door_type": "A1", "width_mm": 914, "height_mm": 2134, "type": "Hollow Metal", "fire_rating": "1-hour", "hardware": "HW-1", "thickness_mm": 44 }
   ],
   "windows": [
     { "mark": "W1", "width_mm": 1500, "height_mm": 1200, "type": "Fixed", "glazing": "Double IGU", "sill_height_mm": 900 }
@@ -778,22 +796,18 @@ ${text.substring(0, 300000)}`;
     this.startTiming('SECTIONS');
     await this.saveState();
 
-    // Include section docs AND construction assembly docs — both contain wall/slab details
-    const sectionDocs = this.documents.filter(isSectionDoc);
-    const assemblyDocs = this.documents.filter(d =>
-      /assembl|detail|wall.*section|typical/i.test(d.filename)
-    );
-    const uniqueDocs = [...new Map([...sectionDocs, ...assemblyDocs].map(d => [d.id, d])).values()];
-    const docsToUse = uniqueDocs.length > 0 ? uniqueDocs : this.documents;
+    // Send ALL documents — construction assemblies and wall sections can appear on
+    // any sheet (detail sheets, wall sections, even floor plan margins with typical details)
+    const docsToUse = this.documents;
     const text = collectText(docsToUse);
 
     // Load actual PDF files so Claude can SEE the assembly detail drawings
     const pdfBuffers = await loadPdfBuffers(docsToUse);
-    logger.info(`Stage 2: ${docsToUse.length} docs, ${pdfBuffers.length} PDFs loaded for visual analysis`);
+    logger.info(`Stage 2: ${docsToUse.length} docs, ${pdfBuffers.length} PDFs loaded for assembly extraction`);
 
     if (!text.trim() && pdfBuffers.length === 0) {
       logger.warn('Stage 2: No content found for section extraction', { modelId: this.modelId });
-      this.state.stageResults.sections = { wallTypes: {}, slabTypes: {}, roofTypes: {}, units: 'mm' };
+      this.state.stageResults.sections = { assemblies: {}, wallTypes: {}, slabTypes: {}, roofTypes: {}, units: 'mm' };
       this.setStage('SPECIFICATIONS');
       this.endTiming('SECTIONS');
       await this.saveState();
@@ -805,21 +819,59 @@ ${text.substring(0, 300000)}`;
       ? buildScheduleContext(this.state.stageResults.schedules)
       : '';
 
-    const systemPrompt = `You are a construction document analyst specializing in reading wall sections, slab details, and roof assemblies from architectural and structural drawings. Extract data exactly as shown. Do not invent values. Return valid JSON only.`;
+    const systemPrompt = `You are a construction document analyst reading construction assembly detail drawings.
+
+HOW TO READ CONSTRUCTION ASSEMBLY DRAWINGS:
+These sheets show assemblies as VISUAL SECTION-CUT DRAWINGS with CALLOUT TEXT. You must read BOTH:
+
+1. LOOK AT THE DRAWING — each assembly is shown as a cross-section (a slice through the wall/floor/roof)
+   showing the layers stacked together. The drawing shows the physical relationship of the layers.
+
+2. READ THE CALLOUT TEXT — arrows or lines point from each layer in the drawing to text labels.
+   Each label shows the MATERIAL NAME and THICKNESS (e.g. "16mm Type X GWB", "92mm Steel Stud @ 400mm o.c.",
+   "50mm Rigid Insulation", "90mm Face Brick"). READ EVERY CALLOUT for every assembly.
+
+3. FIND THE ASSEMBLY CODE — each assembly has a code in a circle, bubble, or title
+   (e.g. "EW1", "IW3D", "F1a", "R1A"). This is the identifier that floor plans reference.
+
+4. FIND THE CATEGORY HEADING — assemblies are grouped under headings on the sheet
+   (e.g. "EXTERIOR WALL TYPES", "NON-LOADBEARING STEEL STUD WALLS", "FLOOR TYPES").
+   Read the heading EXACTLY as written.
+
+5. SUM THE THICKNESSES — add up every layer's thickness from the callout text to get totalThickness_mm.
+
+6. NOTE FIRE RATINGS — fire-rated assemblies will have fire rating noted (e.g. "1-hr Fire Rating").
+
+A SINGLE SHEET can contain 10+ different categories of assemblies. Read ALL of them.
+- Roof types
+- Exterior soffit types
+- General notes
+- Partition types
+- Curtain wall assemblies
+- Fire-rated assemblies
+
+Report EVERY assembly you find, with its EXACT code and the category heading it appears under on the drawing. Do not invent values. Return valid JSON only.`;
 
     const userPrompt = `Here are the door/window sizes from the schedules already extracted:
 
 ${scheduleContext}
 
-Now extract ALL wall/slab/roof assembly definitions from these section and detail drawings.
-For each assembly type (e.g. EW1, IW3D, SLAB-1, RF-1), list every layer with material and thickness.
+Now extract EVERY construction assembly definition from these drawings.
 
-Return a JSON object with this exact structure:
+For each assembly, report:
+- The EXACT code shown on the drawing (EW1, IW3D, F1a, R1A, C1, S1, etc.)
+- The CATEGORY HEADING it appears under on the drawing (exactly as written)
+- Every layer with material name, thickness in mm, and function
+- Fire rating and acoustic rating if shown
+- The source drawing sheet number
+
+Return a JSON object with this structure:
 
 {
-  "wallTypes": {
+  "assemblies": {
     "EW1": {
       "code": "EW1",
+      "category": "EXTERIOR WALL TYPES",
       "description": "Exterior Wall Type 1",
       "totalThickness_mm": 300,
       "layers": [
@@ -831,23 +883,23 @@ Return a JSON object with this exact structure:
       ],
       "fire_rating": "1-hour",
       "acoustic_rating": "STC 55",
-      "source_drawing": "A5.01"
-    }
-  },
-  "slabTypes": {
-    "SLAB-1": {
-      "code": "SLAB-1",
-      "description": "Typical Suspended Slab",
+      "source_drawing": "A004"
+    },
+    "F1a": {
+      "code": "F1a",
+      "category": "FLOOR TYPES",
+      "description": "Concrete Floor Slab",
       "totalThickness_mm": 200,
       "layers": [
         { "material": "Concrete", "thickness_mm": 200, "function": "structure" }
       ],
-      "source_drawing": "S3.01"
+      "source_drawing": "A004"
     }
   },
-  "roofTypes": {},
   "units": "mm"
 }
+
+IMPORTANT: Put ALL assemblies in the "assemblies" object — do not pre-sort into wallTypes/slabTypes/roofTypes. The code will sort them by category. Just report the category heading EXACTLY as it appears on the drawing.
 
 Rules:
 - Extract EVERY assembly type shown in sections and details.
@@ -872,11 +924,71 @@ ${text.substring(0, 300000)}`;
     );
     const parsed = parseFirstJsonObject(response);
 
+    // Collect ALL assemblies from Claude's response
+    const allAssemblies: Record<string, any> = {};
+    const wallTypes: Record<string, any> = {};
+    const slabTypes: Record<string, any> = {};
+    const roofTypes: Record<string, any> = {};
+
+    // Primary: flat "assemblies" object (new format)
+    if (parsed.assemblies && typeof parsed.assemblies === 'object' && !Array.isArray(parsed.assemblies)) {
+      Object.assign(allAssemblies, parsed.assemblies);
+    }
+
+    // Fallback: legacy wallTypes/slabTypes/roofTypes keys
+    if (parsed.wallTypes && typeof parsed.wallTypes === 'object') Object.assign(allAssemblies, parsed.wallTypes);
+    if (parsed.slabTypes && typeof parsed.slabTypes === 'object') Object.assign(allAssemblies, parsed.slabTypes);
+    if (parsed.roofTypes && typeof parsed.roofTypes === 'object') Object.assign(allAssemblies, parsed.roofTypes);
+
+    // Fallback: any other object keys
+    for (const key of Object.keys(parsed)) {
+      if (['assemblies', 'wallTypes', 'slabTypes', 'roofTypes', 'units'].includes(key)) continue;
+      if (parsed[key] && typeof parsed[key] === 'object' && !Array.isArray(parsed[key])) {
+        // Could be a category object — check if it has assembly-like entries
+        for (const [code, def] of Object.entries(parsed[key])) {
+          if (def && typeof def === 'object' && (def as any).layers) {
+            allAssemblies[code] = def;
+          }
+        }
+      }
+    }
+
+    // Sort all assemblies into legacy categories by reading the CATEGORY field from Claude
+    for (const [code, def] of Object.entries(allAssemblies)) {
+      const category = ((def as any)?.category || '').toLowerCase();
+      const desc = ((def as any)?.description || '').toLowerCase();
+      const combined = category + ' ' + desc + ' ' + code.toLowerCase();
+
+      if (combined.includes('wall') || combined.includes('partition') || combined.includes('stud') ||
+          combined.includes('masonry') || combined.includes('exterior') && !combined.includes('soffit')) {
+        wallTypes[code] = def;
+      } else if (combined.includes('roof') || combined.includes('soffit')) {
+        roofTypes[code] = def;
+      } else if (combined.includes('floor') || combined.includes('slab') || combined.includes('foundation')) {
+        slabTypes[code] = def;
+      } else if (combined.includes('ceiling')) {
+        // Ceiling assemblies affect wall height calculations — store with walls for now
+        wallTypes[code] = def;
+      } else {
+        // Unknown — store in allAssemblies, accessible by code lookup
+        wallTypes[code] = def;
+      }
+    }
+
+    logger.info('Stage 2: Assembly categorization', {
+      total: Object.keys(allAssemblies).length,
+      walls: Object.keys(wallTypes).length,
+      slabs: Object.keys(slabTypes).length,
+      roofs: Object.keys(roofTypes).length,
+      categories: [...new Set(Object.values(allAssemblies).map((d: any) => d?.category).filter(Boolean))],
+    });
+
     const assemblyData: AssemblyData = {
-      wallTypes: parsed.wallTypes && typeof parsed.wallTypes === 'object' ? parsed.wallTypes : {},
-      slabTypes: parsed.slabTypes && typeof parsed.slabTypes === 'object' ? parsed.slabTypes : {},
-      roofTypes: parsed.roofTypes && typeof parsed.roofTypes === 'object' ? parsed.roofTypes : {},
-      units: parsed.units || 'mm',
+      assemblies: allAssemblies,
+      wallTypes,
+      slabTypes,
+      roofTypes,
+      units: (parsed.units as any) || 'mm',
     };
 
     this.state.stageResults.sections = assemblyData;
@@ -907,8 +1019,9 @@ ${text.substring(0, 300000)}`;
     this.startTiming('SPECIFICATIONS');
     await this.saveState();
 
-    const specDocs = this.documents.filter(isSpecDoc);
-    const docsToUse = specDocs.length > 0 ? specDocs : this.documents;
+    // Send all documents — specifications may be embedded in drawing notes,
+    // general notes sheets, or referenced from other drawings
+    const docsToUse = this.documents;
     const text = collectText(docsToUse);
 
     // Specifications are text-heavy — skip PDF sending entirely and use extracted text.
@@ -1256,7 +1369,9 @@ Return JSON:
       "start_m": null, "end_m": null, "thickness_mm": null, "height_m": null,
       "base_elevation_m": null, "material": null, "fire_rating": null,
       "extension_above_ceiling_mm": null, "status": "unresolved",
-      "evidence_sources": [{"documentName":"SHEET","extractionMethod":"visual","confidence":"high","value_extracted":"WHAT_YOU_SAW"}],
+      "source_document": "SHEET_NAME_WHERE_YOU_SAW_THIS",
+      "source_scale": "SCALE_FROM_THAT_SHEETS_TITLE_BLOCK",
+      "evidence_sources": [{"documentName":"SHEET","extractionMethod":"visual","confidence":"high","value_extracted":"WHAT_YOU_SAW","drawing_scale":"1:100"}],
       "review_notes": [] }
   ],
   "doors": [
@@ -1266,6 +1381,7 @@ Return JSON:
       "width_mm": null, "height_mm": null, "thickness_mm": null,
       "host_wall_type": "WALL_CODE", "swing": "FROM_ARC",
       "fire_rating": null, "hardware_set": null, "status": "unresolved",
+      "source_document": "SHEET_NAME", "source_scale": "SCALE_FROM_TITLE_BLOCK",
       "evidence_sources": [], "review_notes": [] }
   ],
   "windows": [
@@ -1298,6 +1414,7 @@ RULES:
 - candidateId format: TYPE-FLOOR-NUMBER (W-F1-001, D-F2-003, etc.)
 - TYPICAL FLOOR: create separate entries per floor (W-F2-001, W-F3-001, etc.)
 - Be EXHAUSTIVE — hundreds of elements for a real building
+- DRAWING SCALE: Each sheet may have a DIFFERENT scale. Report source_document (the sheet name) and source_scale (the scale from THAT sheet's title block) for every element. Do NOT assume all sheets are the same scale. Common scales: 1:100 for plans, 1:50 for enlarged plans, 1:20 for sections, 1:10 or 1:5 for details, 1:200 or 1:500 for site plans.
 - Return ONLY JSON, no other text
 
 DOCUMENTS:
@@ -1352,7 +1469,34 @@ ${text.substring(0, 300000)}`;
       }
       if (Array.isArray(parsed.storeys)) {
         for (const s of parsed.storeys) {
-          if (!candidateSet.storeys.find(existing => existing.name === s.name)) {
+          // Normalize storey names for deduplication:
+          // "Ground Floor" = "Level 1" = "L1" = "First Floor" → same floor
+          const normName = (name: string) => name.toLowerCase().replace(/\s+/g, '').replace(/floor|level|storey/gi, '');
+          const sNorm = normName(s.name || '');
+          if (!candidateSet.storeys.find(existing => {
+            const eNorm = normName(existing.name || '');
+            // Exact match after normalization
+            if (eNorm === sNorm) return true;
+            // Elevation match (same floor at same height)
+            if (existing.elevation_m != null && s.elevation_m != null &&
+                Math.abs(existing.elevation_m - s.elevation_m) < 0.5) return true;
+            // Common aliases: ground/1/first, second/2, third/3, etc.
+            const aliases: Record<string, string[]> = {
+              'ground': ['1', 'first', 'main', 'grade', 'g'],
+              '1': ['ground', 'first', 'main', 'g'],
+              '2': ['second', '2nd'],
+              '3': ['third', '3rd'],
+              '4': ['fourth', '4th'],
+              '5': ['fifth', '5th'],
+              'basement': ['b1', 'underground', 'parking', 'p1'],
+              'penthouse': ['ph', 'mechanical', 'mph', 'roof'],
+            };
+            for (const [key, alts] of Object.entries(aliases)) {
+              if ((eNorm.includes(key) || alts.some(a => eNorm.includes(a))) &&
+                  (sNorm.includes(key) || alts.some(a => sNorm.includes(a)))) return true;
+            }
+            return false;
+          })) {
             candidateSet.storeys.push(s);
           }
         }
@@ -1408,7 +1552,7 @@ ${text.substring(0, 300000)}`;
     }
 
     const schedules = this.state.stageResults.schedules || { doors: [], windows: [], finishes: [], units: 'mm' as const };
-    const sections = this.state.stageResults.sections || { wallTypes: {}, slabTypes: {}, roofTypes: {}, units: 'mm' as const };
+    const sections = this.state.stageResults.sections || { assemblies: {}, wallTypes: {}, slabTypes: {}, roofTypes: {}, units: 'mm' as const };
     const grid = this.state.stageResults.grid || {
       alphaGridlines: [], numericGridlines: [],
       alphaDirection: 'left_to_right' as const, numericDirection: 'bottom_to_top' as const,

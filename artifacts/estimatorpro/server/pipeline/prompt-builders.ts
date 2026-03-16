@@ -82,9 +82,24 @@ export function buildAssemblyContext(data: AssemblyData): string {
     }
   };
 
-  formatAssembly('Wall Types', data.wallTypes);
-  formatAssembly('Slab Types', data.slabTypes);
-  formatAssembly('Roof Types', data.roofTypes);
+  // Show ALL assemblies grouped by category
+  if (data.assemblies && Object.keys(data.assemblies).length > 0) {
+    // Group by category
+    const byCategory = new Map<string, Array<[string, AssemblyDefinition]>>();
+    for (const [code, asm] of Object.entries(data.assemblies)) {
+      const cat = (asm as any).category || 'Uncategorized';
+      if (!byCategory.has(cat)) byCategory.set(cat, []);
+      byCategory.get(cat)!.push([code, asm as AssemblyDefinition]);
+    }
+    for (const [cat, entries] of byCategory) {
+      formatAssembly(cat, Object.fromEntries(entries));
+    }
+  } else {
+    // Legacy format
+    formatAssembly('Wall Types', data.wallTypes || {});
+    formatAssembly('Slab Types', data.slabTypes || {});
+    formatAssembly('Roof Types', data.roofTypes || {});
+  }
 
   lines.push('=== END ASSEMBLY DATA ===');
   return lines.join('\n');
