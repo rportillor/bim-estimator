@@ -63,6 +63,9 @@ process.on("uncaughtException", (err) => {
 
 const app = express();
 
+// Make storage available to all routers via req.app.locals.storage
+app.locals.storage = storage;
+
 // Trust proxy for rate limiting accuracy in production
 app.set("trust proxy", 1);
 
