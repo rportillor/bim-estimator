@@ -783,7 +783,7 @@ export default function BIM() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                     {bimModels.map((model: any, index: number) => {
                       const date = new Date(model.created_at || model.createdAt);
-                      const isWorking = model.status === 'ready' && model.elementCount > 0;
+                      const isWorking = (model.status === 'ready' || model.status === 'completed') && model.elementCount > 0;
                       return (
                         <div 
                           key={model.id} 
