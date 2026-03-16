@@ -491,9 +491,10 @@ pipelineRouter.post('/:modelId/apply-stage-data', async (req: Request, res: Resp
 
     const stageResults = meta?.pipelineState?.stageResults ?? {};
     const doors: any[] = stageResults?.schedules?.doors ?? [];
-    const wallTypes: any[] = stageResults?.sections?.wallTypes ?? [];
+    // wallTypes is a keyed object: { "EW1": { code, totalThickness_mm, layers, ... } }
+    const wallTypesObj: Record<string, any> = stageResults?.sections?.wallTypes ?? {};
 
-    if (doors.length === 0 && wallTypes.length === 0) {
+    if (doors.length === 0 && Object.keys(wallTypesObj).length === 0) {
       return res.status(422).json({ ok: false, message: 'No stage results found — run the pipeline first.' });
     }
 
@@ -504,11 +505,10 @@ pipelineRouter.post('/:modelId/apply-stage-data', async (req: Request, res: Resp
       if (mark) doorByMark.set(mark, d);
     }
 
-    // Build wall type lookup: name → wallType record
-    const wallTypeByName = new Map<string, any>();
-    for (const wt of wallTypes) {
-      const name = (wt.name || wt.type || wt.assembly || '').toString().trim().toUpperCase();
-      if (name) wallTypeByName.set(name, wt);
+    // Build wall type lookup: code → wallType record (key is the code like "EW1", "IW1a", etc.)
+    const wallTypeByCode = new Map<string, any>();
+    for (const [code, wt] of Object.entries(wallTypesObj)) {
+      wallTypeByCode.set(code.toString().trim().toUpperCase(), wt);
     }
 
     const elements = await storage.getBimElements(modelId);
@@ -554,31 +554,28 @@ pipelineRouter.post('/:modelId/apply-stage-data', async (req: Request, res: Resp
           doorsUpdated++;
         }
       } else if (elType === 'wall') {
-        // Match by assembly name in properties
+        // Match by assembly code in properties — strip " (extracted)" suffix
         const assemblyRaw = (existingProps.assembly || existingProps.material || '').toString();
-        // Strip " (extracted)" suffix and uppercase
-        const assemblyName = assemblyRaw.replace(/\s*\(extracted\)/i, '').trim().toUpperCase();
-        const wtRecord = wallTypeByName.get(assemblyName) || null;
+        const assemblyCode = assemblyRaw.replace(/\s*\(extracted\)/i, '').trim().toUpperCase();
+        const wtRecord = wallTypeByCode.get(assemblyCode) || null;
+        const thicknessMm = wtRecord?.totalThickness_mm ?? wtRecord?.thickness_mm ?? null;
 
-        if (wtRecord && wtRecord.thickness_mm) {
-          const thicknessM = wtRecord.thickness_mm / 1000;
+        if (thicknessMm && thicknessMm > 0) {
+          const thicknessM = thicknessMm / 1000;
           const updatedGeom = {
             ...existingGeom,
-            dimensions: {
-              ...existingGeom.dimensions,
-              depth: thicknessM,
-            },
+            dimensions: { ...existingGeom.dimensions, depth: thicknessM },
           };
           await storage.updateBimElement(el.id, { geometry: JSON.stringify(updatedGeom) as any });
           wallsUpdated++;
-        } else if (existingGeom?.dimensions?.depth <= 0.01) {
-          // Still a 1cm placeholder — apply a reasonable default from the wall type list
-          const firstWallType = wallTypes[0];
-          if (firstWallType?.thickness_mm) {
-            const thicknessM = firstWallType.thickness_mm / 1000;
+        } else if ((existingGeom?.dimensions?.depth ?? 0) <= 0.01) {
+          // Still a 1cm placeholder — apply the first available wall type as default
+          const firstWt = Object.values(wallTypesObj)[0] as any;
+          const defaultMm = firstWt?.totalThickness_mm ?? firstWt?.thickness_mm ?? 0;
+          if (defaultMm > 0) {
             const updatedGeom = {
               ...existingGeom,
-              dimensions: { ...existingGeom.dimensions, depth: thicknessM },
+              dimensions: { ...existingGeom.dimensions, depth: defaultMm / 1000 },
             };
             await storage.updateBimElement(el.id, { geometry: JSON.stringify(updatedGeom) as any });
             wallsUpdated++;
