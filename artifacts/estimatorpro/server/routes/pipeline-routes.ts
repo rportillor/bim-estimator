@@ -473,6 +473,130 @@ pipelineRouter.post('/:modelId/run-batch', async (req: Request, res: Response) =
 });
 
 // POST /api/bim/pipeline/:modelId/save-confirmed-gridlines
+// ---------------------------------------------------------------------------
+// POST /api/bim/pipeline/:modelId/apply-stage-data
+// Apply Stage 1 (door dims) + Stage 2 (wall thicknesses) results to existing
+// elements without re-running Claude. Reads stageResults from model metadata.
+// ---------------------------------------------------------------------------
+pipelineRouter.post('/:modelId/apply-stage-data', async (req: Request, res: Response) => {
+  const { modelId } = req.params;
+
+  try {
+    const model = await storage.getBimModel(modelId);
+    if (!model) return res.status(404).json({ ok: false, message: `Model ${modelId} not found` });
+
+    const meta = typeof model.metadata === 'string'
+      ? (() => { try { return JSON.parse(model.metadata as string); } catch { return {}; } })()
+      : (model.metadata as any) ?? {};
+
+    const stageResults = meta?.pipelineState?.stageResults ?? {};
+    const doors: any[] = stageResults?.schedules?.doors ?? [];
+    const wallTypes: any[] = stageResults?.sections?.wallTypes ?? [];
+
+    if (doors.length === 0 && wallTypes.length === 0) {
+      return res.status(422).json({ ok: false, message: 'No stage results found — run the pipeline first.' });
+    }
+
+    // Build door lookup: mark → door record
+    const doorByMark = new Map<string, any>();
+    for (const d of doors) {
+      const mark = (d.mark || '').toString().trim().toUpperCase();
+      if (mark) doorByMark.set(mark, d);
+    }
+
+    // Build wall type lookup: name → wallType record
+    const wallTypeByName = new Map<string, any>();
+    for (const wt of wallTypes) {
+      const name = (wt.name || wt.type || wt.assembly || '').toString().trim().toUpperCase();
+      if (name) wallTypeByName.set(name, wt);
+    }
+
+    const elements = await storage.getBimElements(modelId);
+    let doorsUpdated = 0;
+    let wallsUpdated = 0;
+
+    for (const el of elements) {
+      const elType = (el.elementType || '').toLowerCase();
+      const existingGeom: any = (() => {
+        try {
+          return typeof el.geometry === 'string' ? JSON.parse(el.geometry as string) : (el.geometry as any) || {};
+        } catch { return {}; }
+      })();
+      const existingProps: any = (() => {
+        try {
+          return typeof el.properties === 'string' ? JSON.parse(el.properties as string) : (el.properties as any) || {};
+        } catch { return {}; }
+      })();
+
+      if (elType === 'door') {
+        // Extract mark from elementId: "2F-D201" → "D201", "3F-WD302" → "WD302" then try "D302"
+        const rawId = (el.elementId || '').toString();
+        const afterPrefix = rawId.includes('-') ? rawId.split('-').slice(1).join('-') : rawId;
+        const candidate1 = afterPrefix.toUpperCase();
+        // Also try stripping leading non-digit alpha chars: "WD302" → "D302"
+        const candidate2 = candidate1.replace(/^[A-Z]{1}(?=[A-Z]D?\d)/, '');
+
+        const doorRecord = doorByMark.get(candidate1) || doorByMark.get(candidate2) || null;
+        if (doorRecord) {
+          const widthM = (doorRecord.width_mm ?? 965) / 1000;
+          const heightM = (doorRecord.height_mm ?? 2135) / 1000;
+          const depthM = (doorRecord.thickness_mm ?? 45) / 1000;
+          const updatedGeom = {
+            ...existingGeom,
+            dimensions: {
+              ...existingGeom.dimensions,
+              width: widthM,
+              height: heightM,
+              depth: depthM,
+            },
+          };
+          await storage.updateBimElement(el.id, { geometry: JSON.stringify(updatedGeom) as any });
+          doorsUpdated++;
+        }
+      } else if (elType === 'wall') {
+        // Match by assembly name in properties
+        const assemblyRaw = (existingProps.assembly || existingProps.material || '').toString();
+        // Strip " (extracted)" suffix and uppercase
+        const assemblyName = assemblyRaw.replace(/\s*\(extracted\)/i, '').trim().toUpperCase();
+        const wtRecord = wallTypeByName.get(assemblyName) || null;
+
+        if (wtRecord && wtRecord.thickness_mm) {
+          const thicknessM = wtRecord.thickness_mm / 1000;
+          const updatedGeom = {
+            ...existingGeom,
+            dimensions: {
+              ...existingGeom.dimensions,
+              depth: thicknessM,
+            },
+          };
+          await storage.updateBimElement(el.id, { geometry: JSON.stringify(updatedGeom) as any });
+          wallsUpdated++;
+        } else if (existingGeom?.dimensions?.depth <= 0.01) {
+          // Still a 1cm placeholder — apply a reasonable default from the wall type list
+          const firstWallType = wallTypes[0];
+          if (firstWallType?.thickness_mm) {
+            const thicknessM = firstWallType.thickness_mm / 1000;
+            const updatedGeom = {
+              ...existingGeom,
+              dimensions: { ...existingGeom.dimensions, depth: thicknessM },
+            };
+            await storage.updateBimElement(el.id, { geometry: JSON.stringify(updatedGeom) as any });
+            wallsUpdated++;
+          }
+        }
+      }
+    }
+
+    logger.info('apply-stage-data complete', { modelId, doorsUpdated, wallsUpdated, totalElements: elements.length });
+    res.json({ ok: true, doorsUpdated, wallsUpdated, totalElements: elements.length,
+      message: `Updated ${doorsUpdated} doors and ${wallsUpdated} walls with real dimensions from pipeline stage data.` });
+
+  } catch (err) {
+    logger.error('apply-stage-data failed', { modelId, error: (err as Error).message });
+    res.status(500).json({ ok: false, message: (err as Error).message });
+  }
+});
+
 // Inserts the 47 user-confirmed gridlines (28 alpha + 19 numeric) into the 10-table
 // grid hierarchy, using the BIM element bounding box to derive real-world coordinates.
 // Idempotent — deletes and rebuilds if called more than once on the same model.

@@ -217,6 +217,32 @@ export default function BIM() {
                 >
                   Pipeline
                 </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={activeModel?.status === 'generating' || activeModel?.status === 'processing'}
+                  onClick={async () => {
+                    if (!activeModel?.id) return;
+                    try {
+                      const token = localStorage.getItem('auth_token');
+                      const resp = await fetch(`/api/bim/pipeline/${activeModel.id}/apply-stage-data`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
+                      });
+                      const data = await resp.json();
+                      if (resp.ok) {
+                        alert(`Done! ${data.message}`);
+                        window.location.reload();
+                      } else {
+                        alert(`Failed: ${data.message}`);
+                      }
+                    } catch (e) { alert(`Failed: ${(e as Error).message}`); }
+                  }}
+                  className="text-xs px-2 py-1 h-6 bg-purple-50 border-purple-300 text-purple-700 hover:bg-purple-100"
+                  title="Apply Stage 1 (door dimensions) + Stage 2 (wall thicknesses) from pipeline results to existing elements"
+                >
+                  Apply Dims
+                </Button>
                 <Button 
                   variant="outline" 
                   size="sm"
