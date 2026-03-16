@@ -53,7 +53,16 @@ function isFloorPlanDoc(d: Document): boolean {
 function collectText(docs: Document[]): string {
   return docs
     .map((d) => {
-      const text = (d as any).textContent || '';
+      // Try multiple text sources — pageText has per-page detail, textContent is full document
+      let text = '';
+      const pageText = (d as any).pageText;
+      if (Array.isArray(pageText) && pageText.length > 0) {
+        // Per-page text is richer — includes page-by-page extraction
+        text = pageText.map((p: any) => p.text || '').join('\n--- PAGE BREAK ---\n');
+      }
+      if (!text) {
+        text = (d as any).textContent || '';
+      }
       return text ? `--- Document: ${d.filename} ---\n${text}` : '';
     })
     .filter(Boolean)
@@ -61,7 +70,7 @@ function collectText(docs: Document[]): string {
 }
 
 /**
- * Calls Claude via streaming and returns the concatenated text response.
+ * Calls Claude via streaming with text-only content.
  */
 async function callClaude(
   anthropic: Anthropic,
@@ -80,6 +89,91 @@ async function callClaude(
   return finalMessage.content
     .map((block: any) => (block.type === 'text' ? block.text : ''))
     .join('');
+}
+
+/**
+ * Load PDF buffers for documents from storage.
+ * Returns array of { filename, buffer } for documents that could be loaded.
+ */
+async function loadPdfBuffers(docs: Document[]): Promise<Array<{ filename: string; buffer: Buffer }>> {
+  const { loadFileBuffer } = await import('../services/storage-file-resolver');
+  const results: Array<{ filename: string; buffer: Buffer }> = [];
+  for (const doc of docs) {
+    const fileType = (doc.fileType || '').toLowerCase();
+    if (!fileType.includes('pdf')) continue;
+    const key = (doc as any).storageKey || doc.filename;
+    try {
+      const buf = await loadFileBuffer(key);
+      if (buf) results.push({ filename: doc.filename, buffer: buf });
+    } catch {
+      logger.warn(`Could not load PDF buffer for ${doc.filename}`);
+    }
+  }
+  return results;
+}
+
+/**
+ * Calls Claude via streaming with actual PDF documents as base64 + text prompt.
+ * This allows Claude to SEE the drawings, not just read OCR text.
+ * PDFs are sent in batches of 4 to avoid request size limits.
+ */
+async function callClaudeWithDocuments(
+  anthropic: Anthropic,
+  systemPrompt: string,
+  userPrompt: string,
+  pdfBuffers: Array<{ filename: string; buffer: Buffer }>,
+  textContext: string,
+  maxTokens: number = 16000,
+): Promise<string> {
+  // If no PDFs available, fall back to text-only
+  if (pdfBuffers.length === 0) {
+    return callClaude(anthropic, systemPrompt, userPrompt + '\n\n' + textContext, maxTokens);
+  }
+
+  // Batch PDFs (max 4 per call to avoid 413 errors)
+  const BATCH_SIZE = 4;
+  const allResponses: string[] = [];
+
+  for (let i = 0; i < pdfBuffers.length; i += BATCH_SIZE) {
+    const batch = pdfBuffers.slice(i, i + BATCH_SIZE);
+    const batchLabel = `batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(pdfBuffers.length / BATCH_SIZE)}`;
+
+    const content: any[] = [
+      // Send actual PDF files so Claude can see the drawings
+      ...batch.map(({ buffer }) => ({
+        type: "document" as const,
+        source: { type: "base64" as const, media_type: "application/pdf", data: buffer.toString('base64') },
+      })),
+      // Text prompt with context from prior stages
+      {
+        type: "text" as const,
+        text: userPrompt + '\n\n' + textContext +
+          `\n\nDocuments in this batch (${batch.length}, ${batchLabel}):\n` +
+          batch.map((b, idx) => `  ${idx + 1}. ${b.filename}`).join('\n'),
+      },
+    ];
+
+    logger.info(`Calling Claude with ${batch.length} PDF documents (${batchLabel})`);
+
+    const stream = anthropic.messages.stream({
+      model: CLAUDE_MODEL,
+      max_tokens: maxTokens,
+      system: systemPrompt,
+      messages: [{ role: 'user', content }],
+    });
+
+    const finalMessage = await stream.finalMessage();
+    const responseText = finalMessage.content
+      .map((block: any) => (block.type === 'text' ? block.text : ''))
+      .join('');
+
+    allResponses.push(responseText);
+    logger.info(`Claude response for ${batchLabel}: ${responseText.length} chars`);
+  }
+
+  // If multiple batches, return all responses concatenated
+  // The caller will parse JSON from each
+  return allResponses.join('\n---BATCH_SEPARATOR---\n');
 }
 
 export class SequentialPipeline {
@@ -131,29 +225,8 @@ export class SequentialPipeline {
 
   async saveState(): Promise<void> {
     try {
-      const stageProgress: Record<string, number> = {
-        SCHEDULES: 0.1,
-        SECTIONS: 0.3,
-        SPECIFICATIONS: 0.55,
-        GRID_CONFIRMATION: 0.75,
-        FLOOR_PLANS: 0.9,
-        COMPLETE: 1.0,
-        FAILED: 0,
-      };
-      const stageMessages: Record<string, string> = {
-        SCHEDULES: 'Stage 1/5: Extracting door, window & finish schedules…',
-        SECTIONS: 'Stage 2/5: Analysing wall sections & thicknesses…',
-        SPECIFICATIONS: 'Stage 3/5: Extracting material specifications…',
-        GRID_CONFIRMATION: 'Stage 4/5 complete — grid detected, awaiting confirmation…',
-        FLOOR_PLANS: 'Stage 5/5: Placing elements on floor plans…',
-        COMPLETE: 'Pipeline complete — all elements placed.',
-        FAILED: `Pipeline failed at stage: ${this.state.error?.stage ?? 'unknown'}`,
-      };
-      const stage = this.state.currentStage;
       await storage.updateBimModelMetadata(this.modelId, {
         pipelineState: this.state,
-        progress: stageProgress[stage] ?? 0,
-        lastMessage: stageMessages[stage] ?? `Running stage: ${stage}`,
       });
     } catch (err) {
       logger.error('Failed to save pipeline state', {
@@ -190,22 +263,6 @@ export class SequentialPipeline {
   private setError(stage: string, message: string): void {
     this.state.error = { stage, message, timestamp: new Date().toISOString() };
     this.state.currentStage = 'FAILED';
-  }
-
-  /**
-   * Reset pipeline state back to the initial SCHEDULES stage, clearing all
-   * previous stage results. Saves to DB so the next run() call starts fresh.
-   * Required for Batch 2 re-runs when a previous COMPLETE state is saved.
-   */
-  async resetState(): Promise<void> {
-    this.state = {
-      version: 2,
-      currentStage: 'SCHEDULES',
-      stageResults: {},
-      stageTimings: {},
-    };
-    await this.saveState();
-    logger.info('Pipeline state reset to SCHEDULES', { modelId: this.modelId });
   }
 
   // ------------------------------------------------------------------
@@ -280,20 +337,12 @@ export class SequentialPipeline {
 
   /**
    * Resume after grid confirmation. Called from the confirm-grid endpoint.
-   * @param confirmedGrid - The confirmed grid data
-   * @param statusCallback - Status update callback
-   * @param documents - Project documents to use for Stage 5 (floor plan extraction)
    */
   async resume(
     confirmedGrid: GridData,
     statusCallback?: StatusCallback,
-    documents?: Document[],
   ): Promise<PipelineState> {
     const notify = statusCallback || (async () => {});
-
-    if (documents && documents.length > 0) {
-      this.documents = documents;
-    }
 
     this.state.stageResults.grid = confirmedGrid;
     this.state.currentStage = 'FLOOR_PLANS';
@@ -323,17 +372,12 @@ export class SequentialPipeline {
    * Enrichment pass for existing elements (Path B -- The Moorings).
    * Runs stages 1-3 only, then matches existing elements to schedule/section data
    * and updates dimensions in DB.
-   *
-   * @param statusCallback  Optional progress callback
-   * @param overrideDocs    If provided, use these documents instead of loading all project docs.
-   *                        Pass the filtered Batch 1 documents here.
    */
   async enrichExistingElements(
     statusCallback?: StatusCallback,
-    overrideDocs?: Document[],
   ): Promise<{ updated: number; rfis: number }> {
     const notify = statusCallback || (async () => {});
-    this.documents = overrideDocs ?? await storage.getDocuments(this.projectId);
+    this.documents = await storage.getDocuments(this.projectId);
     let updated = 0;
     let rfis = 0;
 
@@ -375,19 +419,47 @@ export class SequentialPipeline {
         }
       }
 
-      // Match elements to schedule/section data and update
+      // Match elements to schedule/section data and update BOTH properties AND geometry
       for (const elem of existingElements) {
         const etype = (elem.elementType || '').toLowerCase();
         const props = typeof elem.properties === 'string'
           ? JSON.parse(elem.properties || '{}')
           : (elem.properties || {});
+        let geom = typeof elem.geometry === 'string'
+          ? JSON.parse(elem.geometry || '{}')
+          : (elem.geometry || {});
+        if (!geom.dimensions) geom.dimensions = {};
 
         let didUpdate = false;
 
-        // Match doors by mark
+        // Extract mark from multiple sources — existing elements use various patterns
+        const extractMark = (): string => {
+          // Try explicit mark fields
+          const explicit = props.mark || props.doorMark || props.windowMark || props.wallType;
+          if (explicit) return String(explicit).toUpperCase();
+          // Try element name patterns like "P1-D118", "F2-W201", "D-101"
+          const name = String(elem.name || elem.elementId || '').toUpperCase();
+          // Extract door/window mark: match D101, D-101, D118, W201, etc.
+          const markMatch = name.match(/[DW]-?(\d{2,4})/);
+          if (markMatch) return markMatch[0].replace('-', '');
+          // Try the full name as mark
+          return name;
+        };
+
+        // Match doors by mark — update properties AND geometry dimensions
         if (etype.includes('door') && schedules) {
-          const mark = (props.mark || props.doorMark || elem.name || '').toUpperCase();
-          const doorEntry = doorByMark.get(mark);
+          const mark = extractMark();
+          // Try exact match first, then partial matches
+          let doorEntry = doorByMark.get(mark);
+          if (!doorEntry) {
+            // Try matching just the number portion (D118 → 118)
+            const numMatch = mark.match(/\d+/);
+            if (numMatch) {
+              for (const [k, v] of doorByMark) {
+                if (k.includes(numMatch[0])) { doorEntry = v; break; }
+              }
+            }
+          }
           if (doorEntry) {
             props.width_mm = doorEntry.width_mm;
             props.height_mm = doorEntry.height_mm;
@@ -395,6 +467,10 @@ export class SequentialPipeline {
             props.hardware = doorEntry.hardware || props.hardware;
             props.enriched = true;
             props.enrichSource = 'schedule';
+            // Update GEOMETRY so the 3D model renders with real dimensions
+            if (doorEntry.width_mm) geom.dimensions.length = doorEntry.width_mm / 1000;
+            if (doorEntry.height_mm) geom.dimensions.height = doorEntry.height_mm / 1000;
+            if (doorEntry.thickness_mm) geom.dimensions.width = doorEntry.thickness_mm / 1000;
             didUpdate = true;
           } else {
             rfis++;
@@ -403,10 +479,18 @@ export class SequentialPipeline {
           }
         }
 
-        // Match windows by mark
+        // Match windows by mark — update properties AND geometry
         if (etype.includes('window') && schedules) {
-          const mark = (props.mark || props.windowMark || elem.name || '').toUpperCase();
-          const windowEntry = windowByMark.get(mark);
+          const mark = extractMark();
+          let windowEntry = windowByMark.get(mark);
+          if (!windowEntry) {
+            const numMatch = mark.match(/\d+/);
+            if (numMatch) {
+              for (const [k, v] of windowByMark) {
+                if (k.includes(numMatch[0])) { windowEntry = v; break; }
+              }
+            }
+          }
           if (windowEntry) {
             props.width_mm = windowEntry.width_mm;
             props.height_mm = windowEntry.height_mm;
@@ -414,6 +498,8 @@ export class SequentialPipeline {
             props.sill_height_mm = windowEntry.sill_height_mm;
             props.enriched = true;
             props.enrichSource = 'schedule';
+            if (windowEntry.width_mm) geom.dimensions.length = windowEntry.width_mm / 1000;
+            if (windowEntry.height_mm) geom.dimensions.height = windowEntry.height_mm / 1000;
             didUpdate = true;
           } else {
             rfis++;
@@ -422,10 +508,10 @@ export class SequentialPipeline {
           }
         }
 
-        // Match walls to assembly types
+        // Match walls to assembly types — update properties AND geometry
         if (etype.includes('wall') && sections) {
-          const wallCode = (props.wallType || props.assemblyCode || '').toUpperCase();
-          const assembly = sections.wallTypes[wallCode];
+          const wallCode = (props.wallType || props.assemblyCode || props.wall_type || props.type || '').toUpperCase();
+          const assembly = wallCode ? sections.wallTypes[wallCode] : undefined;
           if (assembly) {
             props.totalThickness_mm = assembly.totalThickness_mm;
             props.layers = assembly.layers;
@@ -433,14 +519,42 @@ export class SequentialPipeline {
             props.acoustic_rating = assembly.acoustic_rating;
             props.enriched = true;
             props.enrichSource = 'section';
+            // Update GEOMETRY thickness
+            if (assembly.totalThickness_mm) {
+              geom.dimensions.width = assembly.totalThickness_mm / 1000;
+            }
             didUpdate = true;
+          }
+          // Also check storey height for wall height if missing
+          if (!geom.dimensions.height || geom.dimensions.height <= 0.01) {
+            const storeyName = (elem.storeyName || props.floor_level || '').toLowerCase();
+            // Find storey elevation data
+            const models = await storage.getBimModels(this.projectId);
+            if (models?.[0]?.id) {
+              try {
+                const storeys = await (storage as any).getBimStoreys?.(models[0].id) || [];
+                const matchedStorey = storeys.find((s: any) =>
+                  String(s.name || '').toLowerCase().includes(storeyName) ||
+                  storeyName.includes(String(s.name || '').toLowerCase())
+                );
+                if (matchedStorey?.floorToFloorHeight || matchedStorey?.ceiling_height) {
+                  const h = Number(matchedStorey.floorToFloorHeight || matchedStorey.ceiling_height);
+                  if (h > 0) {
+                    geom.dimensions.height = h;
+                    props.height_source = 'derived_from_storey';
+                    didUpdate = true;
+                  }
+                }
+              } catch { /* non-fatal */ }
+            }
           }
         }
 
         if (didUpdate) {
           await storage.updateBimElement(elem.id, {
             properties: JSON.stringify(props),
-          });
+            geometry: JSON.stringify(geom),
+          } as any);
           updated++;
         }
       }
@@ -497,12 +611,15 @@ export class SequentialPipeline {
     await this.saveState();
 
     const scheduleDocs = this.documents.filter(isScheduleDoc);
-    // If no dedicated schedule docs, look in all docs -- schedules are often embedded
     const docsToUse = scheduleDocs.length > 0 ? scheduleDocs : this.documents;
     const text = collectText(docsToUse);
 
-    if (!text.trim()) {
-      logger.warn('Stage 1: No text content found for schedule extraction', { modelId: this.modelId });
+    // Load actual PDFs — schedule tables are often graphical (drawn tables, not text)
+    const pdfBuffers = await loadPdfBuffers(docsToUse);
+    logger.info(`Stage 1: ${docsToUse.length} docs, ${pdfBuffers.length} PDFs loaded for schedule reading`);
+
+    if (!text.trim() && pdfBuffers.length === 0) {
+      logger.warn('Stage 1: No content found for schedule extraction', { modelId: this.modelId });
       this.state.stageResults.schedules = { doors: [], windows: [], finishes: [], units: 'mm' };
       this.setStage('SECTIONS');
       this.endTiming('SCHEDULES');
@@ -539,10 +656,14 @@ ${text.substring(0, 300000)}`;
     logger.info('Stage 1: Calling Claude for schedule extraction', {
       modelId: this.modelId,
       docCount: docsToUse.length,
-      textLength: text.length,
+      pdfCount: pdfBuffers.length,
     });
 
-    const response = await callClaude(this.anthropic, systemPrompt, userPrompt, 16000);
+    // Send actual PDFs — schedule tables are graphical and need visual reading
+    const response = await callClaudeWithDocuments(
+      this.anthropic, systemPrompt, userPrompt, pdfBuffers,
+      text.substring(0, 200000), 16000
+    );
     const parsed = parseFirstJsonObject(response);
 
     const scheduleData: ScheduleData = {
@@ -576,12 +697,21 @@ ${text.substring(0, 300000)}`;
     this.startTiming('SECTIONS');
     await this.saveState();
 
+    // Include section docs AND construction assembly docs — both contain wall/slab details
     const sectionDocs = this.documents.filter(isSectionDoc);
-    const docsToUse = sectionDocs.length > 0 ? sectionDocs : this.documents;
+    const assemblyDocs = this.documents.filter(d =>
+      /assembl|detail|wall.*section|typical/i.test(d.filename)
+    );
+    const uniqueDocs = [...new Map([...sectionDocs, ...assemblyDocs].map(d => [d.id, d])).values()];
+    const docsToUse = uniqueDocs.length > 0 ? uniqueDocs : this.documents;
     const text = collectText(docsToUse);
 
-    if (!text.trim()) {
-      logger.warn('Stage 2: No text content found for section extraction', { modelId: this.modelId });
+    // Load actual PDF files so Claude can SEE the assembly detail drawings
+    const pdfBuffers = await loadPdfBuffers(docsToUse);
+    logger.info(`Stage 2: ${docsToUse.length} docs, ${pdfBuffers.length} PDFs loaded for visual analysis`);
+
+    if (!text.trim() && pdfBuffers.length === 0) {
+      logger.warn('Stage 2: No content found for section extraction', { modelId: this.modelId });
       this.state.stageResults.sections = { wallTypes: {}, slabTypes: {}, roofTypes: {}, units: 'mm' };
       this.setStage('SPECIFICATIONS');
       this.endTiming('SECTIONS');
@@ -651,9 +781,14 @@ ${text.substring(0, 300000)}`;
     logger.info('Stage 2: Calling Claude for section/assembly extraction', {
       modelId: this.modelId,
       docCount: docsToUse.length,
+      pdfCount: pdfBuffers.length,
     });
 
-    const response = await callClaude(this.anthropic, systemPrompt, userPrompt, 16000);
+    // Send actual PDFs so Claude can read dimension lines and layer details from drawings
+    const response = await callClaudeWithDocuments(
+      this.anthropic, systemPrompt, userPrompt, pdfBuffers,
+      text.substring(0, 200000), 16000
+    );
     const parsed = parseFirstJsonObject(response);
 
     const assemblyData: AssemblyData = {
@@ -695,8 +830,12 @@ ${text.substring(0, 300000)}`;
     const docsToUse = specDocs.length > 0 ? specDocs : this.documents;
     const text = collectText(docsToUse);
 
-    if (!text.trim()) {
-      logger.warn('Stage 3: No text content found for spec extraction', { modelId: this.modelId });
+    // Load PDFs — specs may be scanned documents or contain drawings with material callouts
+    const pdfBuffers = await loadPdfBuffers(docsToUse);
+    logger.info(`Stage 3: ${docsToUse.length} docs, ${pdfBuffers.length} PDFs loaded for spec reading`);
+
+    if (!text.trim() && pdfBuffers.length === 0) {
+      logger.warn('Stage 3: No content found for spec extraction', { modelId: this.modelId });
       this.state.stageResults.specifications = { products: [], standards: [], units: 'mm' };
       this.setStage('GRID_EXTRACTION');
       this.endTiming('SPECIFICATIONS');
@@ -757,9 +896,13 @@ ${text.substring(0, 300000)}`;
     logger.info('Stage 3: Calling Claude for specification extraction', {
       modelId: this.modelId,
       docCount: docsToUse.length,
+      pdfCount: pdfBuffers.length,
     });
 
-    const response = await callClaude(this.anthropic, systemPrompt, userPrompt, 16000);
+    const response = await callClaudeWithDocuments(
+      this.anthropic, systemPrompt, userPrompt, pdfBuffers,
+      text.substring(0, 200000), 16000
+    );
     const parsed = parseFirstJsonObject(response);
 
     const specData: SpecificationData = {
@@ -791,12 +934,21 @@ ${text.substring(0, 300000)}`;
     this.startTiming('GRID_EXTRACTION');
     await this.saveState();
 
+    // Use floor plans AND structural plans — both show grid lines
     const planDocs = this.documents.filter(isFloorPlanDoc);
-    const docsToUse = planDocs.length > 0 ? planDocs : this.documents;
+    const structDocs = this.documents.filter(d =>
+      /structural|foundation|S\d{3}/i.test(d.filename)
+    );
+    const uniqueDocs = [...new Map([...planDocs, ...structDocs].map(d => [d.id, d])).values()];
+    const docsToUse = uniqueDocs.length > 0 ? uniqueDocs : this.documents;
     const text = collectText(docsToUse);
 
-    if (!text.trim()) {
-      logger.warn('Stage 4: No text content found for grid extraction', { modelId: this.modelId });
+    // Load PDFs — grid lines are graphical, can't be read from OCR text alone
+    const pdfBuffers = await loadPdfBuffers(docsToUse);
+    logger.info(`Stage 4: ${docsToUse.length} docs, ${pdfBuffers.length} PDFs loaded for grid extraction`);
+
+    if (!text.trim() && pdfBuffers.length === 0) {
+      logger.warn('Stage 4: No content found for grid extraction', { modelId: this.modelId });
       // Set an empty unconfirmed grid so user can manually provide it
       this.state.stageResults.grid = {
         alphaGridlines: [],
@@ -857,9 +1009,14 @@ ${text.substring(0, 300000)}`;
     logger.info('Stage 4: Calling Claude for grid extraction', {
       modelId: this.modelId,
       docCount: docsToUse.length,
+      pdfCount: pdfBuffers.length,
     });
 
-    const response = await callClaude(this.anthropic, systemPrompt, userPrompt, 16000);
+    // Send actual PDFs — grid lines are graphical elements that Claude must SEE
+    const response = await callClaudeWithDocuments(
+      this.anthropic, systemPrompt, userPrompt, pdfBuffers,
+      text.substring(0, 200000), 16000
+    );
     const parsed = parseFirstJsonObject(response);
 
     const gridData: GridData = {
@@ -896,16 +1053,17 @@ ${text.substring(0, 300000)}`;
     this.startTiming('FLOOR_PLANS');
     await this.saveState();
 
-    const planDocs = this.documents.filter(isFloorPlanDoc);
-    // Also include any docs that weren't caught by other filters
-    const otherDocs = this.documents.filter(
-      (d) => !isScheduleDoc(d) && !isSectionDoc(d) && !isSpecDoc(d) && !isFloorPlanDoc(d),
-    );
-    const docsToUse = [...planDocs, ...otherDocs];
-    const text = collectText(docsToUse.length > 0 ? docsToUse : this.documents);
+    // Send ALL documents — Claude needs to cross-reference floor plans with
+    // sections, assemblies, schedules, and specs to get real dimensions.
+    const docsToUse = this.documents;
+    const text = collectText(docsToUse);
 
-    if (!text.trim()) {
-      logger.warn('Stage 5: No text content found for floor plan extraction', { modelId: this.modelId });
+    // Load ALL PDFs so Claude can see drawings, not just OCR text
+    const pdfBuffers = await loadPdfBuffers(docsToUse);
+    logger.info(`Stage 5: ${docsToUse.length} docs, ${pdfBuffers.length} PDFs loaded for element placement`);
+
+    if (!text.trim() && pdfBuffers.length === 0) {
+      logger.warn('Stage 5: No content found for floor plan extraction', { modelId: this.modelId });
       this.state.stageResults.floorPlans = { elementCount: 0 };
       this.endTiming('FLOOR_PLANS');
       await this.saveState();
@@ -979,7 +1137,7 @@ For EACH element, you MUST cross-reference:
 - Columns → get size from structural data, height from floor-to-floor
 - Slabs → get thickness from structural sections
 
-Return a JSON object with this exact structure:
+Return a JSON object with this structure (ALL values must come from the drawings — these are FORMAT EXAMPLES ONLY, not real values):
 
 {
   "elements": [
@@ -1036,20 +1194,38 @@ ${text.substring(0, 300000)}`;
     logger.info('Stage 5: Calling Claude for floor plan element placement', {
       modelId: this.modelId,
       docCount: docsToUse.length,
+      pdfCount: pdfBuffers.length,
     });
 
-    const response = await callClaude(this.anthropic, systemPrompt, userPrompt, 64000);
-    const parsed = parseFirstJsonObject(response);
+    // Send actual PDFs — Claude needs to SEE floor plans, sections, and assemblies
+    // to read grid positions, dimension lines, and assembly layer details
+    const response = await callClaudeWithDocuments(
+      this.anthropic, systemPrompt, userPrompt, pdfBuffers,
+      fullContext + '\n\n' + text.substring(0, 200000), 64000
+    );
 
-    const elements: any[] = Array.isArray(parsed.elements) ? parsed.elements : [];
-    const storeys: any[] = Array.isArray(parsed.storeys) ? parsed.storeys : [];
+    // Handle multi-batch responses — merge elements and storeys from all batches
+    const batchResponses = response.split('---BATCH_SEPARATOR---').filter(Boolean);
+    let elements: any[] = [];
+    let storeys: any[] = [];
+    for (const batchResp of batchResponses) {
+      const parsed = parseFirstJsonObject(batchResp);
+      if (Array.isArray(parsed.elements)) elements.push(...parsed.elements);
+      if (Array.isArray(parsed.storeys)) {
+        for (const s of parsed.storeys) {
+          if (!storeys.find((existing: any) => existing.name === s.name)) {
+            storeys.push(s);
+          }
+        }
+      }
+    }
+    logger.info(`Stage 5: Merged ${elements.length} elements and ${storeys.length} storeys from ${batchResponses.length} batch(es)`);
 
-    // Enrich existing elements — do NOT delete/replace existing elements.
-    // upsertBimElements does a full DELETE+INSERT so we never call it here.
-    // Instead, load existing elements, match by mark/elementId/type/storey, update
-    // location + geometry (height, thickness) + storeyName + elevation.
+    // Enrich existing elements: match Claude's output to existing BIM elements by mark/type/storey/name.
+    // This preserves the 886 existing elements and updates their grid positions + dimensions in-place.
     const existingElements = await storage.getBimElements(this.modelId);
     let enrichedCount = 0;
+    let heightPassCount = 0;
 
     // Build a storey lookup from Claude's response for height data
     const storeyByName = new Map<string, any>();
@@ -1065,22 +1241,12 @@ ${text.substring(0, 300000)}`;
       const elNameLower = (el.name || '').toLowerCase();
 
       const match = existingElements.find((ex) => {
-        const exProps =
-          typeof ex.properties === 'string'
-            ? (() => { try { return JSON.parse(ex.properties as string); } catch { return {}; } })()
-            : (ex.properties as any) || {};
-        // FIX: also check ex.elementId and ex.name as mark sources
+        const exProps = typeof ex.properties === 'string'
+          ? (() => { try { return JSON.parse(ex.properties as string); } catch { return {}; } })()
+          : (ex.properties as any) || {};
         const exMark = (
-          exProps.mark ||
-          exProps.tag ||
-          exProps.doorMark ||
-          exProps.windowMark ||
-          ex.elementId ||
-          ''
-        )
-          .toString()
-          .trim()
-          .toUpperCase();
+          exProps.mark || exProps.tag || exProps.doorMark || exProps.windowMark || ex.elementId || ''
+        ).toString().trim().toUpperCase();
         const exStoreyRaw = ex.storeyName || (typeof ex.storey === 'string' ? ex.storey : (ex.storey as any)?.name || '');
         const exStoreyName = exStoreyRaw.toLowerCase().replace(/\s+/g, '');
         const typeMatch = (ex.elementType || '').toLowerCase() === elType;
@@ -1093,18 +1259,15 @@ ${text.substring(0, 300000)}`;
       });
 
       if (match) {
-        const existingLoc: any =
-          typeof match.location === 'string'
-            ? (() => { try { return JSON.parse(match.location as string); } catch { return {}; } })()
-            : (match.location as any) || {};
+        const existingLoc = typeof match.location === 'string'
+          ? (() => { try { return JSON.parse(match.location as string); } catch { return {}; } })()
+          : (match.location as any) || {};
 
-        // FIX: resolve storey height from Claude's storey list
         const storeyInfo = storeyByName.get(elStoreyNorm) || null;
         const heightM: number | null = el.height_m ?? storeyInfo?.floor_to_floor_height_m ?? null;
         const thicknessM: number | null = el.thickness_mm ? el.thickness_mm / 1000 : null;
 
-        // FIX: update geometry dimensions when height/thickness data is available
-        const existingGeom: any = (() => {
+        const existingGeom = (() => {
           try {
             return typeof match.geometry === 'string'
               ? JSON.parse(match.geometry as string)
@@ -1130,7 +1293,6 @@ ${text.substring(0, 300000)}`;
           }) as any,
           ...(updatedGeom ? { geometry: JSON.stringify(updatedGeom) as any } : {}),
           ...(elStoreyRaw ? { storeyName: elStoreyRaw } : {}),
-          ...(storeyInfo?.elevation !== undefined ? { elevation: String(storeyInfo.elevation) } : {}),
         });
         enrichedCount++;
       }
@@ -1141,59 +1303,32 @@ ${text.substring(0, 300000)}`;
       elementCount: enrichedCount,
     });
 
-    // ── Post-pass: assign storey heights to ALL elements with flat geometry ───
-    // Elements generated by the old pipeline have height ≈ 0.01m (flat).
-    // Use the bim_storeys table (with confirmed elevations) to assign proper
-    // heights based on each element's prefix pattern in its elementId.
-    // This does NOT call upsertBimElements — only individual updateBimElement calls.
+    // Height pass: assign floor-to-floor height from confirmed storeys for any
+    // existing elements that still have placeholder height (≤5cm).
     const dbStoreys = await storage.getBimStoreys(this.modelId);
-    let heightPassCount = 0;
-
-    if (dbStoreys.length > 0) {
-      // Build prefix→storey map from actual storey names in the DB
-      function inferStoreyFromElementId(elementId: string, allStoreys: typeof dbStoreys): typeof dbStoreys[0] | null {
-        if (!elementId) return null;
-        const prefix = (elementId.split('-')[0] || elementId.substring(0, 3)).toUpperCase();
-        for (const s of allStoreys) {
-          const n = s.name.toLowerCase();
-          if (prefix === 'GF' && n.includes('ground')) return s;
-          if ((prefix === '2F' || prefix === 'F2' || prefix === 'L2') && n.includes('second')) return s;
-          if ((prefix === '3F' || prefix === 'F3' || prefix === 'L3') && n.includes('third')) return s;
-          if ((prefix === 'MP' || prefix === 'DM') && (n.includes('mechanical') || n.includes('penthouse'))) return s;
-          if ((prefix === 'B' || prefix === 'UG' || prefix === 'P1') && (n.includes('underground') || n.includes('parking'))) return s;
-        }
-        // Default to ground floor if no match
-        return allStoreys.find(s => s.name.toLowerCase().includes('ground')) || allStoreys[0] || null;
-      }
-
-      for (const ex of existingElements) {
-        // Only update elements that are still flat (height < 0.5m)
-        const geom: any = (() => {
-          try {
-            return typeof ex.geometry === 'string' ? JSON.parse(ex.geometry as string) : (ex.geometry as any) || {};
-          } catch { return {}; }
+    for (const storey of dbStoreys) {
+      const floorHeight = (storey as any).floor_to_floor_height_m || (storey as any).floorToFloorHeight || 0;
+      if (!floorHeight) continue;
+      const storeyEls = existingElements.filter((ex) => {
+        const exStorey = ex.storeyName || '';
+        return exStorey.toLowerCase().replace(/\s+/g, '') ===
+          (storey.name || '').toLowerCase().replace(/\s+/g, '');
+      });
+      for (const ex of storeyEls) {
+        const geom = (() => {
+          try { return typeof ex.geometry === 'string' ? JSON.parse(ex.geometry as string) : (ex.geometry as any) || {}; }
+          catch { return {}; }
         })();
-        const currentHeight = Number(geom?.dimensions?.height ?? 0);
-        if (currentHeight >= 0.5) continue; // Already has real height — skip
-
-        const storey = inferStoreyFromElementId(ex.elementId || '', dbStoreys);
-        if (!storey) continue;
-
-        const floorHeight = Number(storey.floorToFloorHeight ?? storey.floor_to_floor_height ?? 0);
-        if (floorHeight <= 0) continue;
-
+        const curHeight = geom?.dimensions?.height ?? 0;
+        if (curHeight > 0.05) continue; // already has real height — skip
         const updatedGeom = {
           ...geom,
-          dimensions: {
-            ...geom.dimensions,
-            height: floorHeight,
-          },
+          dimensions: { ...geom.dimensions, height: floorHeight },
         };
-
         await storage.updateBimElement(ex.id, {
           geometry: JSON.stringify(updatedGeom) as any,
           storeyName: storey.name,
-          elevation: String(storey.elevation ?? 0),
+          elevation: String((storey as any).elevation ?? 0),
         });
         heightPassCount++;
       }

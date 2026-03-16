@@ -883,9 +883,6 @@ export class ConstructionWorkflowProcessor {
       statusCallback?: (progress: number, message: string) => Promise<void>;
     }
   ): Promise<any> {
-    // Extract modelId early so it's available throughout the entire function
-    // (including the storey-elevation sanity check below that calls storage.getBimStoreys)
-    const modelId = options?.modelId;
     const batchInfo = options ? ` (Batch ${options.batch}/${options.totalBatches})` : '';
 
     // ── Populate storey elevation map from Claude's analysis ─────────────────
@@ -915,43 +912,50 @@ export class ConstructionWorkflowProcessor {
         this.storeyElevations.set(rawName.trim().toLowerCase(), elevM);
       }
     }
-    // ── Sanity-check: drawing-coordinate contamination detection ─────────────
-    // Claude sometimes emits elevations derived from raw drawing coordinates
-    // (e.g. 0.2576 m) rather than real floor heights (e.g. 4.65 m).
-    // Heuristic: if we have 3+ storeys and max elevation < 2 m the values are
-    // implausible for a multi-storey building → discard and reload from DB.
+    // ── Sanity check: detect drawing-coordinate contamination ──────────────
+    // If we have 3+ storeys but max elevation < 2m, the values are likely
+    // drawing-scale coordinates (e.g. 0.257m) not real floor heights (e.g. 4.65m).
+    // In that case, clear the map and try loading from the DB's bimStoreys table.
     if (this.storeyElevations.size >= 3) {
       const maxElev = Math.max(...Array.from(this.storeyElevations.values()));
-      if (maxElev < 2) {
+      if (maxElev < 2.0) {
         logger.warn(
-          `⚠️ Storey elevations look like drawing coordinates (max=${maxElev}m for ` +
-          `${this.storeyElevations.size} storeys). Discarding and loading from DB instead.`
+          `⚠️ Storey elevation sanity check FAILED: ${this.storeyElevations.size} storeys but max elevation=${maxElev.toFixed(4)}m — ` +
+          `likely drawing-coordinate contamination. Clearing and falling back to DB storeys.`
         );
         this.storeyElevations.clear();
-        // Load correct elevations from the canonical bim_storeys table
-        try {
-          const dbStoreys = await storage.getBimStoreys(modelId);
-          for (const s of dbStoreys) {
-            const elev = parseFloat(String(s.elevation));
-            if (s.name && Number.isFinite(elev)) {
-              this.storeyElevations.set(s.name.trim().toLowerCase(), elev);
+      }
+    }
+
+    // ── Fallback: load from bimStoreys table if map is empty ─────────────
+    if (this.storeyElevations.size === 0 && projectId) {
+      try {
+        const models = await storage.getBimModels(projectId);
+        const model = models?.[0];
+        if (model?.id && typeof (storage as any).getBimStoreys === 'function') {
+          const dbStoreys = await (storage as any).getBimStoreys(model.id);
+          if (Array.isArray(dbStoreys) && dbStoreys.length > 0) {
+            for (const s of dbStoreys) {
+              const name = String(s.name || '').trim().toLowerCase();
+              const elev = Number(s.elevation ?? 0);
+              if (name && Number.isFinite(elev)) {
+                this.storeyElevations.set(name, elev);
+              }
             }
-          }
-          if (this.storeyElevations.size > 0) {
             logger.info(
-              `🏢 Storey elevation map loaded from DB: ${Array.from(this.storeyElevations.entries())
+              `🏢 Storey elevations loaded from DB: ${Array.from(this.storeyElevations.entries())
                 .map(([n, e]) => `${n}=${e}m`).join(', ')}`
             );
           }
-        } catch (err) {
-          logger.warn(`⚠️ Could not load storey elevations from DB: ${err}`);
         }
+      } catch (err: any) {
+        logger.warn(`Failed to load DB storeys: ${err?.message}`);
       }
     }
 
     if (this.storeyElevations.size > 0) {
       logger.info(
-        `🏢 Storey elevation map built: ${Array.from(this.storeyElevations.entries())
+        `🏢 Storey elevation map: ${Array.from(this.storeyElevations.entries())
           .map(([n, e]) => `${n}=${e}m`).join(', ')}`
       );
     } else {
@@ -979,6 +983,8 @@ export class ConstructionWorkflowProcessor {
       this.clearState();
     }
     
+    // Use the modelId passed from the route (which already created the model)
+    const modelId = options?.modelId;
     if (!modelId) {
       throw new Error('Model ID is required for construction workflow processing');
     }

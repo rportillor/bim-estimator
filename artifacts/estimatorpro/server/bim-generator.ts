@@ -1333,37 +1333,12 @@ export class BIMGenerator {
         console.log(`✅ Postprocessor saved ${elementsPositioned.length} elements for model ${bimModel.id}`);
 
         // ── Persist storey data (first-class queryable entity) ────────────────
-        // GUARD: Never overwrite confirmed storeys (set by user or admin via direct DB write)
         const storeysToSave = realQTOResult?.storeys || [];
         if (storeysToSave.length > 0) {
           try {
-            const existingStoreys = await storage.getBimStoreys(bimModel.id);
-            const hasConfirmed = existingStoreys.some((s: any) => s.elevationSource === 'confirmed');
-            if (hasConfirmed) {
-              console.log(`⚠️ Confirmed storeys already exist (${existingStoreys.length}) — skipping AI-extracted storey overwrite to preserve correct elevations`);
-              await storage.updateBimStoreyElementCount(bimModel.id);
-            } else {
-              // Normalize aliases before saving so duplicate floor names don't create duplicate rows
-              const STOREY_ALIASES: Record<string, string> = {
-                'second floor': 'Floor2', 'floor 2': 'Floor2', '2nd floor': 'Floor2',
-                'third floor': 'Floor3', 'floor 3': 'Floor3', '3rd floor': 'Floor3',
-                'mechanical penthouse': 'MPH', 'mech penthouse': 'MPH', 'penthouse': 'MPH',
-                'ground floor': 'Ground', 'ground level': 'Ground', 'lobby': 'Ground',
-                'parking level 1': 'P1', 'p1 parking': 'P1', 'underground parking': 'P1',
-                'p-1': 'P1', 'b1': 'P1',
-                'roof level': 'Roof', 'rooftop': 'Roof',
-              };
-              const normalizeStoreyName = (raw: string) => STOREY_ALIASES[raw.toLowerCase().trim()] ?? raw;
-              const uniqueByName = new Map<string, any>();
-              for (const s of storeysToSave) {
-                const norm = normalizeStoreyName(String(s.name || s.level || 'Unknown'));
-                if (!uniqueByName.has(norm)) uniqueByName.set(norm, { ...s, name: norm });
-              }
-              const deduped = Array.from(uniqueByName.values());
-              await storage.upsertBimStoreys(bimModel.id, deduped);
-              await storage.updateBimStoreyElementCount(bimModel.id);
-              console.log(`✅ Persisted ${deduped.length} storeys to bimStoreys table (${storeysToSave.length} raw → ${deduped.length} after dedup)`);
-            }
+            await storage.upsertBimStoreys(bimModel.id, storeysToSave);
+            await storage.updateBimStoreyElementCount(bimModel.id);
+            console.log(`✅ Persisted ${storeysToSave.length} storeys to bimStoreys table`);
           } catch (storeyErr) {
             console.error('❌ Failed to persist storeys:', storeyErr);
           }

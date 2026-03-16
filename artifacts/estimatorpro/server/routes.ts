@@ -1699,7 +1699,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const documentData = insertDocumentSchema.parse({
           projectId: req.params.projectId,
           filename: file.filename,
-          storageKey: file.filename,
           originalName: file.originalname,
           fileType: path.extname(file.originalname).toLowerCase(),
           fileSize: file.size,
@@ -2248,9 +2247,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use('/api', authenticateToken, (await import('./routes/bim-3d-model')).bim3DRouter);
   // advancedBimRouter — Phase 1-6: BREP ops, parameter editing, clash resolution, sheets, refinement
   app.use('/api', authenticateToken, (await import('./routes/advanced-bim-routes')).advancedBimRouter);
-
-  // sequentialPipeline — 5-stage enrichment pipeline for The Moorings (batch1/batch2)
-  app.use('/api/bim/pipeline', authenticateToken, (await import('./routes/pipeline-routes')).pipelineRouter);
+  // pipelineRouter — Sequential BIM extraction pipeline: start, status, confirm-grid, enrich
+  app.use(authenticateToken, (await import('./routes/pipeline-routes')).pipelineRouter);
 
   // BoQ Items endpoints
   // BoQ endpoint alias for consistency
@@ -2669,45 +2667,74 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ error: 'Access denied' });
       }
 
-      // Read storeys from the bim_storeys table (canonical source of truth)
-      const dbStoreys = await storage.getBimStoreys(modelId);
-
+      // Extract storey information — prefer bim_storeys table, fallback to geometryData
       let storeys: any[] = [];
 
-      if (dbStoreys.length > 0) {
-        // Get element counts per storey from the elements table
-        const allElements = await storage.getBimElements(modelId);
-        const countByStorey = new Map<string, number>();
-        for (const el of allElements) {
-          const s = el.storeyName || 'none';
-          countByStorey.set(s, (countByStorey.get(s) || 0) + 1);
-        }
-
-        storeys = dbStoreys.map((s: any) => ({
-          name: s.name,
-          elevation: Number(s.elevation) || 0,
-          floorToFloorHeight: Number(s.floorToFloorHeight) || 0,
-          elementCount: countByStorey.get(s.name) || 0,
-          guid: null,
-        }));
-      } else {
-        // Fallback: derive storeys from element storeyName field
-        const allElements = await storage.getBimElements(modelId);
-        const storeyMap = new Map<string, { name: string; elevation: number; floorToFloorHeight: number; elementCount: number }>();
-        for (const el of allElements) {
-          const name = el.storeyName || 'Ground Floor';
-          const elevation = Number(el.elevation) || 0;
-          if (!storeyMap.has(name)) {
-            storeyMap.set(name, { name, elevation, floorToFloorHeight: 0, elementCount: 0 });
+      // Source 1: bim_storeys table (authoritative, written by pipeline)
+      try {
+        if (typeof (storage as any).getBimStoreys === 'function') {
+          const dbStoreys = await (storage as any).getBimStoreys(modelId);
+          if (Array.isArray(dbStoreys) && dbStoreys.length > 0) {
+            storeys = dbStoreys.map((s: any) => ({
+              id: s.id,
+              name: s.name,
+              elevation: Number(s.elevation ?? 0),
+              elementCount: s.elementCount ?? 0,
+              guid: s.guid ?? null,
+              elevationSource: s.elevation_source ?? 'unknown',
+            }));
           }
-          storeyMap.get(name)!.elementCount++;
         }
-        storeys = Array.from(storeyMap.values()).sort((a, b) => a.elevation - b.elevation);
+      } catch (e) {
+        logger.warn('Failed to read bim_storeys table', { error: (e as Error).message });
       }
 
-      // Default if still empty
+      // Source 2: geometryData JSON (legacy fallback)
+      if (storeys.length === 0 && model.geometryData && typeof model.geometryData === 'string') {
+        try {
+          const modelData = safeJsonParse(model.geometryData, 10 * 1024 * 1024);
+          if (modelData?.statistics?.realQTOData?.storeys) {
+            storeys = modelData.statistics.realQTOData.storeys;
+          } else if (modelData?.elements) {
+            const storeyMap = new Map();
+            modelData.elements.forEach((element: any) => {
+              if (element.properties?.storey) {
+                const storey = element.properties.storey;
+                if (!storeyMap.has(storey.name)) {
+                  storeyMap.set(storey.name, {
+                    name: storey.name,
+                    elevation: storey.elevation || 0,
+                    guid: storey.guid,
+                    elementCount: 0
+                  });
+                }
+                storeyMap.get(storey.name).elementCount++;
+              }
+            });
+            storeys = Array.from(storeyMap.values()).sort((a, b) => a.elevation - b.elevation);
+          }
+        } catch (error) {
+          logger.warn('Error parsing geometryData for storeys', { error: (error as Error).message, modelId });
+        }
+      }
+
+      // Source 3: derive from elements in DB if still empty
       if (storeys.length === 0) {
-        storeys = [{ name: 'Ground Floor', elevation: 0, floorToFloorHeight: 3.6, elementCount: 0, guid: null }];
+        try {
+          const elements = await storage.getBimElements(modelId);
+          const storeyMap = new Map<string, { name: string; elevation: number; count: number }>();
+          for (const el of elements) {
+            const sn = (el as any).storeyName || '';
+            if (!sn) continue;
+            if (!storeyMap.has(sn)) {
+              storeyMap.set(sn, { name: sn, elevation: Number((el as any).elevation ?? 0), count: 0 });
+            }
+            storeyMap.get(sn)!.count++;
+          }
+          storeys = Array.from(storeyMap.values())
+            .sort((a, b) => a.elevation - b.elevation)
+            .map(s => ({ name: s.name, elevation: s.elevation, elementCount: s.count, guid: null }));
+        } catch { /* non-fatal */ }
       }
 
       res.json({
@@ -4452,24 +4479,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       logger.error("Error saving grid config", { error });
       res.status(500).json({ error: "Failed to save grid configuration" });
-    }
-  });
-
-  // GET /api/projects/:projectId/batch-config — return pipeline batch configuration
-  app.get("/api/projects/:projectId/batch-config", authenticateToken, async (req: any, res) => {
-    try {
-      const result = await (db as any).$client.query(
-        "SELECT value FROM app_settings WHERE key = $1",
-        ['moorings_pipeline_batch_config']
-      );
-      if (!result.rows || result.rows.length === 0) {
-        return res.json({ batches: null, message: 'No batch configuration saved yet' });
-      }
-      const config = JSON.parse(result.rows[0].value);
-      res.json(config);
-    } catch (error) {
-      logger.error("Error fetching batch config", { error });
-      res.status(500).json({ error: "Failed to fetch batch configuration" });
     }
   });
 

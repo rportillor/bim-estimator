@@ -823,18 +823,15 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       for(const e of elements){
         // ═══════════════════════════════════════════════════════════════
         // PRIORITY 1: Try to render from real mesh data (geometry kernel)
-        // Before using the mesh, detect and fix placeholder heights:
-        // walls are stored with height=0.01 (1cm placeholder) but have
-        // the real floor-to-ceiling height in geometry.dimensions.height.
-        // We scale the mesh z-vertices to the correct height so walls
-        // render as solid 3D planes instead of invisible hairlines.
         // ═══════════════════════════════════════════════════════════════
         let meshData = e?.geometry?.mesh || e?.mesh;
 
+        // Fix placeholder mesh height for walls: mesh z-vertices were computed with
+        // height=0.01 (1cm) but geometry.dimensions.height holds the real storey height.
+        // Scale z-vertices so walls render as proper 3D planes, not hairlines.
         const elTypeStr = (e.type || e.elementType || '').toLowerCase();
         if (elTypeStr.includes('wall') && meshData?.vertices?.length) {
           const correctH = Number(e?.geometry?.dimensions?.height ?? 0);
-          // Find the actual z-extent of the mesh vertices
           let meshMinZ = Infinity;
           let meshMaxZ = -Infinity;
           for (let i = 2; i < meshData.vertices.length; i += 3) {
@@ -843,8 +840,6 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
             if (z > meshMaxZ) meshMaxZ = z;
           }
           const meshZExtent = meshMaxZ - meshMinZ;
-          // Only correct when the mesh height is a placeholder (≤2cm)
-          // and we have a real height to use (>0.5m)
           if (meshZExtent > 0 && meshZExtent <= 0.02 && correctH > 0.5) {
             const scale = correctH / meshZExtent;
             const fixedVerts = Array.from(meshData.vertices as number[]);

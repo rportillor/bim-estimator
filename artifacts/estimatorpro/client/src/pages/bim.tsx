@@ -5,8 +5,9 @@ import BimViewer from "@/components/bim/bim-viewer";
 import { FloorGenerationButton } from "@/components/bim/FloorGenerationButton";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { Layers, Eye, Download, ArrowLeft, Building, Zap, AlertTriangle, Grid, ChevronDown, ChevronUp, FileText, RefreshCw } from "lucide-react";
+import { Layers, Eye, Download, ArrowLeft, Building, Zap, AlertTriangle, Grid, RefreshCw, ChevronDown } from "lucide-react";
+import { MissingDataDialog } from "@/components/dialogs/MissingDataDialog";
+import { GridConfirmationDialog } from "@/components/bim/GridConfirmationDialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -15,8 +16,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { MissingDataDialog } from "@/components/dialogs/MissingDataDialog";
-import { GridConfirmationDialog } from "@/components/bim/GridConfirmationDialog";
 
 export default function BIM() {
   const params = useParams();
@@ -24,42 +23,6 @@ export default function BIM() {
   const modelId = params.modelId;
   const [showMissingData, setShowMissingData] = useState(false);
   const [showGridConfig, setShowGridConfig] = useState(false);
-  const [showBatchConfig, setShowBatchConfig] = useState(false);
-  const [batchRunning, setBatchRunning] = useState<string | null>(null);
-  const [batchRunResult, setBatchRunResult] = useState<{ batch: string; message: string; ok: boolean } | null>(null);
-  const [savingGridlines, setSavingGridlines] = useState(false);
-
-  const { data: batchConfig } = useQuery<any>({
-    queryKey: ['/api/projects', projectId, 'batch-config'],
-    enabled: !!projectId,
-  });
-
-  async function runBatch(batch: 'batch1' | 'batch2' | 'batch_specs') {
-    const activeModelId = activeModel?.id;
-    if (!activeModelId) { alert('No active BIM model found.'); return; }
-    const label = batch === 'batch1'
-      ? 'Batch 1 (20 support docs → Claude enrichment)'
-      : batch === 'batch2'
-      ? 'Batch 2 (5 floor plans → grid + elements)'
-      : 'Spec Batch (A004 Construction Assemblies — sent alone)';
-    if (!confirm(`Run ${label}?\n\nThis will send documents to Claude and use API credits.`)) return;
-    setBatchRunning(batch);
-    setBatchRunResult(null);
-    try {
-      const token = localStorage.getItem('auth_token');
-      const resp = await fetch(`/api/bim/pipeline/${activeModelId}/run-batch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ batch }),
-      });
-      const data = await resp.json();
-      setBatchRunResult({ batch, message: data.message || (data.ok ? 'Started successfully.' : data.error || 'Unknown error'), ok: !!data.ok });
-    } catch (e: any) {
-      setBatchRunResult({ batch, message: e.message || 'Network error', ok: false });
-    } finally {
-      setBatchRunning(null);
-    }
-  }
 
   // Fetch project details if projectId is provided
   const { data: project, isLoading: projectLoading } = useQuery({
@@ -73,15 +36,10 @@ export default function BIM() {
     enabled: !projectId
   });
 
-  // Fetch BIM models — polls every 3 seconds while pipeline is running
+  // Fetch BIM models for the project
   const { data: bimModels = [], isLoading: modelsLoading } = useQuery<any[]>({
     queryKey: ['/api/projects', projectId, 'bim-models'],
-    enabled: !!projectId,
-    refetchInterval: (query: any) => {
-      const models: any[] = query?.state?.data ?? [];
-      const anyGenerating = Array.isArray(models) && models.some((m: any) => m.status === 'generating' || m.status === 'processing');
-      return anyGenerating ? 3000 : false;
-    },
+    enabled: !!projectId
   });
 
   const activeModel = modelId 
@@ -197,6 +155,49 @@ export default function BIM() {
             {/* Model Actions */}
             {activeModel && (
               <div className="flex items-center gap-1 bg-gray-50 px-2 py-1 rounded border border-gray-200">
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  disabled={activeModel?.status === 'generating' || activeModel?.status === 'processing'}
+                  onClick={async () => {
+                    if (activeModel?.status === 'generating' || activeModel?.status === 'processing') {
+                      alert('Model is already being generated. Please wait for it to complete.');
+                      return;
+                    }
+                    if (activeModel?.id && confirm('Regenerate this BIM model with latest settings?')) {
+                      try {
+                        // Use proper construction methodology for regeneration
+                        const token = localStorage.getItem('auth_token');
+                        const response = await fetch(`/api/bim/models/${activeModel.id}/generate`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
+                          credentials: 'include',
+                          body: JSON.stringify({ 
+                            projectId: projectId || activeModel.projectId,
+                            positioningMode: 'preferClaude'
+                          })
+                        }).catch(err => {
+                          console.error('Failed to regenerate:', err);
+                          throw err;
+                        });
+                        if (response.ok) {
+                          alert('Regenerating using construction methodology: specs→products→assemblies→elements');
+                          window.location.reload();
+                        }
+                      } catch {
+                        alert('Regeneration must use construction methodology. Use the Generate button to create elements properly.');
+                      }
+                    }
+                  }}
+                  className="text-xs px-2 py-1 h-6 bg-orange-50 border-orange-300 text-orange-700 hover:bg-orange-100"
+                  title={activeModel?.status === 'generating' ? 'Model is currently generating...' : 'Regenerate current model'}
+                >
+                  {activeModel?.status === 'generating' ? (
+                    <><span className="animate-spin inline-block">⟳</span> Generating...</>
+                  ) : (
+                    <>⟳ Regen</>
+                  )}
+                </Button>
                 <Button
                   variant="outline"
                   size="sm"
@@ -231,6 +232,7 @@ export default function BIM() {
                   disabled={activeModel?.status === 'generating' || activeModel?.status === 'processing'}
                   onClick={async () => {
                     if (!activeModel?.id) return;
+                    if (!confirm('Apply Stage 1 (door dimensions) + Stage 2 (wall thicknesses) from pipeline results to existing elements?\n\nThis enriches the 886 existing BIM elements in-place without re-running the AI.')) return;
                     try {
                       const token = localStorage.getItem('auth_token');
                       const resp = await fetch(`/api/bim/pipeline/${activeModel.id}/apply-stage-data`, {
@@ -239,14 +241,14 @@ export default function BIM() {
                       });
                       const data = await resp.json();
                       if (resp.ok) {
-                        alert(`Done! ${data.message}`);
+                        alert(`Applied: ${data.doorsUpdated} doors updated, ${data.wallsUpdated} walls updated (of ${data.totalElements} total elements).`);
                         window.location.reload();
                       } else {
                         alert(`Failed: ${data.message}`);
                       }
                     } catch (e) { alert(`Failed: ${(e as Error).message}`); }
                   }}
-                  className="text-xs px-2 py-1 h-6 bg-purple-50 border-purple-300 text-purple-700 hover:bg-purple-100"
+                  className="text-xs px-2 py-1 h-6 bg-blue-50 border-blue-300 text-blue-700 hover:bg-blue-100"
                   title="Apply Stage 1 (door dimensions) + Stage 2 (wall thicknesses) from pipeline results to existing elements"
                 >
                   Apply Dims
@@ -305,49 +307,6 @@ export default function BIM() {
                     ))}
                   </DropdownMenuContent>
                 </DropdownMenu>
-                <Button 
-                  variant="outline" 
-                  size="sm"
-                  disabled={activeModel?.status === 'generating' || activeModel?.status === 'processing'}
-                  onClick={async () => {
-                    if (activeModel?.status === 'generating' || activeModel?.status === 'processing') {
-                      alert('Model is already being generated. Please wait for it to complete.');
-                      return;
-                    }
-                    if (activeModel?.id && confirm('Regenerate this BIM model with latest settings?')) {
-                      try {
-                        // Use proper construction methodology for regeneration
-                        const token = localStorage.getItem('auth_token');
-                        const response = await fetch(`/api/bim/models/${activeModel.id}/generate`, {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
-                          credentials: 'include',
-                          body: JSON.stringify({ 
-                            projectId: projectId || activeModel.projectId,
-                            positioningMode: 'preferClaude'
-                          })
-                        }).catch(err => {
-                          console.error('Failed to regenerate:', err);
-                          throw err;
-                        });
-                        if (response.ok) {
-                          alert('Regenerating using construction methodology: specs→products→assemblies→elements');
-                          window.location.reload();
-                        }
-                      } catch {
-                        alert('Regeneration must use construction methodology. Use the Generate button to create elements properly.');
-                      }
-                    }
-                  }}
-                  className="text-xs px-2 py-1 h-6 bg-orange-50 border-orange-300 text-orange-700 hover:bg-orange-100"
-                  title={activeModel?.status === 'generating' ? 'Model is currently generating...' : 'Regenerate current model'}
-                >
-                  {activeModel?.status === 'generating' ? (
-                    <><span className="animate-spin inline-block">⟳</span> Generating...</>
-                  ) : (
-                    <>⟳ Regen</>
-                  )}
-                </Button>
                 <Button
                   variant="outline"
                   size="sm"
@@ -440,85 +399,6 @@ export default function BIM() {
               <AlertTriangle className="h-4 w-4 sm:mr-2" />
               <span className="hidden sm:inline">Missing Data</span>
             </Button>
-            {batchConfig?.batches && (
-              <>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setShowBatchConfig(v => !v)}
-                  className="border-blue-300 text-blue-700 hover:bg-blue-50 flex-shrink-0"
-                  title="View pipeline batch configuration"
-                >
-                  <FileText className="h-4 w-4 sm:mr-2" />
-                  <span className="hidden sm:inline">Batches</span>
-                  {showBatchConfig ? <ChevronUp className="h-3 w-3 ml-1" /> : <ChevronDown className="h-3 w-3 ml-1" />}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => runBatch('batch1')}
-                  disabled={batchRunning === 'batch1'}
-                  className="border-emerald-400 text-emerald-700 hover:bg-emerald-50 flex-shrink-0 text-xs px-2 py-1 h-7"
-                  title="Run Batch 1: 20 support docs → Claude extracts schedules/assemblies/specs, enriches existing elements"
-                >
-                  <Zap className="h-3 w-3 mr-1" />
-                  {batchRunning === 'batch1' ? 'Running…' : 'Run B1'}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => runBatch('batch2')}
-                  disabled={batchRunning === 'batch2'}
-                  className="border-violet-400 text-violet-700 hover:bg-violet-50 flex-shrink-0 text-xs px-2 py-1 h-7"
-                  title="Run Batch 2: 5 floor plans → Claude extracts gridlines + places elements"
-                >
-                  <Grid className="h-3 w-3 mr-1" />
-                  {batchRunning === 'batch2' ? 'Running…' : 'Run B2'}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => runBatch('batch_specs')}
-                  disabled={batchRunning === 'batch_specs'}
-                  className="border-amber-400 text-amber-700 hover:bg-amber-50 flex-shrink-0 text-xs px-2 py-1 h-7"
-                  title="Run Spec Batch: A004 Construction Assemblies alone → Claude extracts assembly types, materials, specifications"
-                >
-                  <FileText className="h-3 w-3 mr-1" />
-                  {batchRunning === 'batch_specs' ? 'Running…' : 'Run Spec'}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={savingGridlines}
-                  onClick={async () => {
-                    const activeModelId = activeModel?.id;
-                    if (!activeModelId) { alert('No active BIM model found.'); return; }
-                    if (!confirm('Save the 47 user-confirmed gridlines (28 alpha + 18 numeric) into the BIM model?\n\nCoordinates will be derived from existing element positions. Run this after BIM generation is complete for best accuracy.')) return;
-                    setSavingGridlines(true);
-                    setBatchRunResult(null);
-                    try {
-                      const token = localStorage.getItem('auth_token');
-                      const resp = await fetch(`/api/bim/pipeline/${activeModelId}/save-confirmed-gridlines`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-                        body: JSON.stringify({}),
-                      });
-                      const data = await resp.json();
-                      setBatchRunResult({ batch: 'gridlines', message: data.message ?? (resp.ok ? 'Gridlines saved.' : 'Failed.'), ok: resp.ok && data.ok });
-                    } catch (err: any) {
-                      setBatchRunResult({ batch: 'gridlines', message: err.message, ok: false });
-                    } finally {
-                      setSavingGridlines(false);
-                    }
-                  }}
-                  className="border-teal-400 text-teal-700 hover:bg-teal-50 flex-shrink-0 text-xs px-2 py-1 h-7"
-                  title="Save 47 confirmed gridlines (28 alpha A→CLb + 18 numeric 1→19 no Grid 9) into the BIM model using element-derived coordinates"
-                >
-                  <Grid className="h-3 w-3 mr-1" />
-                  {savingGridlines ? 'Saving…' : 'Save Grids'}
-                </Button>
-              </>
-            )}
             <Button
               variant="outline"
               size="sm"
@@ -548,117 +428,6 @@ export default function BIM() {
           </div>
         </div>
       </header>
-
-      {/* Batch run result notification */}
-      {batchRunResult && (
-        <div className={`px-6 py-2 text-sm flex items-center gap-2 ${batchRunResult.ok ? 'bg-emerald-50 border-b border-emerald-200 text-emerald-800' : 'bg-red-50 border-b border-red-200 text-red-800'}`}>
-          <span className="font-semibold">
-            {batchRunResult.batch === 'batch1' ? 'Batch 1:' : batchRunResult.batch === 'batch2' ? 'Batch 2:' : batchRunResult.batch === 'batch_specs' ? 'Spec Batch:' : batchRunResult.batch === 'gridlines' ? 'Gridlines:' : 'Result:'}
-          </span>
-          <span>{batchRunResult.message}</span>
-          <button onClick={() => setBatchRunResult(null)} className="ml-auto text-gray-400 hover:text-gray-600">✕</button>
-        </div>
-      )}
-
-      {/* Pipeline Progress Banner — shows while pipeline stages are running */}
-      {activeModel?.status === 'generating' && (() => {
-        const meta = activeModel?.metadata;
-        const parsed = meta ? (typeof meta === 'string' ? (() => { try { return JSON.parse(meta); } catch { return null; } })() : meta) : null;
-        const progress = parsed?.progress ?? 0;
-        const message = parsed?.lastMessage || 'Pipeline running…';
-        const pct = Math.round(progress * 100);
-        return (
-          <div className="px-6 py-3 bg-blue-50 border-b border-blue-200 text-blue-900 text-sm">
-            <div className="flex items-center gap-3 mb-1">
-              <span className="animate-spin inline-block">⟳</span>
-              <span className="font-semibold flex-1">{message}</span>
-              <span className="text-blue-600 font-mono text-xs">{pct}%</span>
-            </div>
-            <div className="w-full bg-blue-200 rounded-full h-1.5">
-              <div
-                className="bg-blue-600 h-1.5 rounded-full transition-all duration-500"
-                style={{ width: `${pct}%` }}
-              />
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Grid Confirmation Banner — shows when pipeline is paused waiting for grid review */}
-      {(() => {
-        const meta = activeModel?.metadata;
-        const pipelineState = meta
-          ? (typeof meta === 'string' ? (() => { try { return JSON.parse(meta); } catch { return null; } })() : meta)?.pipelineState
-          : null;
-        if (pipelineState?.currentStage !== 'GRID_CONFIRMATION') return null;
-        const grid = pipelineState?.stageResults?.grid;
-        const alphaCount = grid?.alphaGridlines?.length || 0;
-        const numericCount = grid?.numericGridlines?.length || 0;
-        return (
-          <div className="px-6 py-3 bg-amber-50 border-b border-amber-300 text-amber-900 flex items-center gap-3 text-sm">
-            <AlertTriangle className="h-4 w-4 text-amber-600 flex-shrink-0" />
-            <div className="flex-1">
-              <span className="font-semibold">Grid Confirmation Required — </span>
-              Claude extracted <span className="font-semibold">{alphaCount} alpha</span> + <span className="font-semibold">{numericCount} numeric</span> gridlines from the floor plans.
-              Review and confirm to continue with Stage 5 (element placement).
-            </div>
-            <Button
-              size="sm"
-              className="bg-amber-600 hover:bg-amber-700 text-white text-xs px-3 py-1 h-7 flex-shrink-0"
-              onClick={async () => {
-                const token = localStorage.getItem('auth_token');
-                const r = await fetch(`/api/bim/pipeline/${activeModel?.id}/confirm-grid`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-                  body: '{}',
-                });
-                if (r.ok) {
-                  setBatchRunResult({ batch: 'batch2', message: 'Grid confirmed — Stage 5 (element placement) starting. Poll status for progress.', ok: true });
-                } else {
-                  const err = await r.json().catch(() => ({ message: 'Unknown error' }));
-                  setBatchRunResult({ batch: 'batch2', message: `Confirm failed: ${err.message}`, ok: false });
-                }
-              }}
-            >
-              Confirm Grid &amp; Continue
-            </Button>
-          </div>
-        );
-      })()}
-
-      {/* Pipeline Batch Configuration Panel */}
-      {showBatchConfig && batchConfig?.batches && (
-        <div className="bg-blue-50 border-b border-blue-200 px-6 py-4">
-          <div className="flex items-center gap-2 mb-3">
-            <FileText className="h-4 w-4 text-blue-700" />
-            <h3 className="font-semibold text-blue-900 text-sm">Claude Analysis — Pipeline Batch Configuration</h3>
-            <Badge variant="outline" className="text-xs border-blue-400 text-blue-700">
-              {Object.keys(batchConfig.batches).length} batches
-            </Badge>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {Object.entries(batchConfig.batches).map(([key, batch]: [string, any]) => (
-              <div key={key} className="bg-white rounded-lg border border-blue-200 p-3">
-                <div className="flex items-center gap-2 mb-1">
-                  <Badge className={key === 'batch1' ? 'bg-blue-600 text-white text-xs' : key === 'batch2' ? 'bg-indigo-600 text-white text-xs' : 'bg-amber-600 text-white text-xs'}>
-                    {key === 'batch1' ? 'Batch 1' : key === 'batch2' ? 'Batch 2' : 'Spec Batch'}
-                  </Badge>
-                  <span className="text-xs text-gray-500">{batch.documents?.length} drawings</span>
-                </div>
-                <p className="text-xs text-gray-600 mb-2 italic">{batch.purpose}</p>
-                <div className="space-y-0.5">
-                  {batch.documents?.map((doc: any) => (
-                    <div key={doc.name} className="flex items-center gap-2 text-xs">
-                      <span className="font-mono font-semibold text-blue-700 w-20 flex-shrink-0">{doc.name}</span>
-                      <span className="text-gray-600">{doc.title}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       <div className="flex-1">
         {!projectId ? (
@@ -928,7 +697,7 @@ export default function BIM() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                     {bimModels.map((model: any, index: number) => {
                       const date = new Date(model.created_at || model.createdAt);
-                      const isWorking = (model.status === 'ready' || model.status === 'completed') && model.elementCount > 0;
+                      const isWorking = model.status === 'ready' && model.elementCount > 0;
                       return (
                         <div 
                           key={model.id} 
