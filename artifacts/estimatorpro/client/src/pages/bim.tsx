@@ -6,7 +6,15 @@ import { FloorGenerationButton } from "@/components/bim/FloorGenerationButton";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Layers, Eye, Download, ArrowLeft, Building, Zap, AlertTriangle, Grid, ChevronDown, ChevronUp, FileText } from "lucide-react";
+import { Layers, Eye, Download, ArrowLeft, Building, Zap, AlertTriangle, Grid, ChevronDown, ChevronUp, FileText, RefreshCw } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { MissingDataDialog } from "@/components/dialogs/MissingDataDialog";
 import { GridConfirmationDialog } from "@/components/bim/GridConfirmationDialog";
 
@@ -243,34 +251,60 @@ export default function BIM() {
                 >
                   Apply Dims
                 </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={activeModel?.status === 'generating' || activeModel?.status === 'processing'}
-                  onClick={async () => {
-                    if (!activeModel?.id) return;
-                    if (!confirm('Re-run Stage 2 (Wall Sections)? This will call the AI to re-extract wall assembly thicknesses from the construction documents. Current door dimensions are preserved.')) return;
-                    try {
-                      const token = localStorage.getItem('auth_token');
-                      const resp = await fetch(`/api/bim/pipeline/${activeModel.id}/rerun-stage`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
-                        body: JSON.stringify({ stage: 'sections' }),
-                      });
-                      const data = await resp.json();
-                      if (resp.ok) {
-                        alert(`Started: ${data.message}\n\nWatch the progress bar — once complete, click "Apply Dims" to apply the new wall thicknesses.`);
-                        window.location.reload();
-                      } else {
-                        alert(`Failed: ${data.message}`);
-                      }
-                    } catch (e) { alert(`Failed: ${(e as Error).message}`); }
-                  }}
-                  className="text-xs px-2 py-1 h-6 bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100"
-                  title="Re-run Stage 2 to re-extract wall assembly thicknesses from construction documents. Preserves all other stage results."
-                >
-                  Re-run Sections
-                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={activeModel?.status === 'generating' || activeModel?.status === 'processing'}
+                      className="text-xs px-2 py-1 h-6 bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100 gap-1"
+                      title="Re-run any pipeline stage with the AI — all other stage results are preserved"
+                    >
+                      <RefreshCw className="h-3 w-3" />
+                      Re-run Stage
+                      <ChevronDown className="h-3 w-3" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-64">
+                    <DropdownMenuLabel className="text-xs text-muted-foreground">
+                      Choose a stage to re-run with AI. Other stages are preserved.
+                    </DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    {[
+                      { stage: 'schedules',      label: 'Stage 1 — Door & Window Schedules',  desc: 'Re-extract door/window sizes and finish schedule from drawings.' },
+                      { stage: 'sections',       label: 'Stage 2 — Wall Sections',             desc: 'Re-extract wall assembly thicknesses from section drawings.' },
+                      { stage: 'specifications', label: 'Stage 3 — Specifications',            desc: 'Re-extract material specs, CSI codes, and standards from the spec document.' },
+                      { stage: 'floorPlans',     label: 'Stage 5 — Floor Plans',              desc: 'Re-place elements on floor plans using grid, schedules, and assemblies.' },
+                    ].map(({ stage, label, desc }) => (
+                      <DropdownMenuItem
+                        key={stage}
+                        className="flex flex-col items-start gap-0.5 cursor-pointer py-2"
+                        onClick={async () => {
+                          if (!activeModel?.id) return;
+                          if (!confirm(`Re-run ${label}?\n\n${desc}\n\nThis calls the AI and uses API credits. All other stage results are preserved.`)) return;
+                          try {
+                            const token = localStorage.getItem('auth_token');
+                            const resp = await fetch(`/api/bim/pipeline/${activeModel.id}/rerun-stage`, {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
+                              body: JSON.stringify({ stage }),
+                            });
+                            const data = await resp.json();
+                            if (resp.ok) {
+                              alert(`Started: ${data.message}\n\nWatch the progress bar. Once complete, click "Apply Dims" to apply updated dimensions.`);
+                              window.location.reload();
+                            } else {
+                              alert(`Failed: ${data.message}`);
+                            }
+                          } catch (e) { alert(`Failed: ${(e as Error).message}`); }
+                        }}
+                      >
+                        <span className="text-xs font-medium">{label}</span>
+                        <span className="text-xs text-muted-foreground leading-tight">{desc}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
                 <Button 
                   variant="outline" 
                   size="sm"
