@@ -915,14 +915,69 @@ ${text.substring(0, 300000)}`;
     // Build full context from all prior stages
     const fullContext = buildFullContext(this.state.stageResults);
 
-    const systemPrompt = `You are a BIM modeler placing construction elements on floor plans. Use the provided grid system, door/window schedules, wall assemblies, and material specifications to accurately place and dimension every element. Return valid JSON only.`;
+    const systemPrompt = `You are a senior Quantity Surveyor building a BIM model from construction documents. ALL documents belong to ONE project and must be read TOGETHER. Information is spread across multiple document types — you must ASSEMBLE the full picture by cross-referencing.
 
-    const userPrompt = `Here is all the data extracted from prior stages:
+CRITICAL — WHERE TO FIND EACH DIMENSION (no hardcoded values allowed):
+
+WALLS:
+- POSITION (x, y): from FLOOR PLANS — wall shown between grid intersections
+- THICKNESS: from CONSTRUCTION ASSEMBLY DETAILS — look up the wall type code (e.g. EW1, IW3D) shown on the floor plan, then find that assembly's detail drawing which lists every layer and its thickness. Sum all layers = total wall thickness.
+- HEIGHT: determined by combining multiple sources:
+  * CEILING HEIGHT from reflected ceiling plan or building sections
+  * WALL EXTENSION ABOVE CEILING from the construction assembly detail — it shows whether gypsum stops at ceiling level, continues to underside of slab above, or continues to underside of deck. Read this from the assembly detail, not assumed.
+  * TOTAL WALL HEIGHT = ceiling height + extension above ceiling (both from drawings)
+- MATERIAL: from the construction assembly detail layers
+
+DOORS:
+- POSITION: from FLOOR PLANS — arc symbol shows location and swing direction
+- MARK: from FLOOR PLANS — label next to the door symbol (e.g. D101)
+- WIDTH and HEIGHT: from DOOR SCHEDULE — look up the mark in the schedule table. The schedule has columns for width, height, type, fire rating, hardware set, frame material.
+- If the schedule doesn't list a height, check the ELEVATION DRAWINGS for the door in its wall context.
+- If NEITHER schedule nor elevation shows height, create an RFI — do NOT use any assumed value.
+
+WINDOWS:
+- POSITION: from FLOOR PLANS — parallel lines in wall
+- MARK: from FLOOR PLANS — label
+- WIDTH and HEIGHT: from WINDOW SCHEDULE — look up mark
+- SILL HEIGHT: from WINDOW SCHEDULE "SILL" column, or from ELEVATION DRAWINGS
+- If not in schedule or elevation, create an RFI — do NOT assume any sill height.
+
+COLUMNS:
+- POSITION: from ARCHITECTURAL PLANS and/or STRUCTURAL PLANS — both show column locations on the grid. Cross-check both — if positions differ, flag as RFI (coordination issue).
+- SIZE: from ARCHITECTURAL PLANS (may show outline) and STRUCTURAL SCHEDULE/PLANS (shows exact dimensions and reinforcement). Use structural as primary source, verify against architectural.
+- HEIGHT: from BUILDING SECTIONS — floor-to-floor height at the column location
+
+SLABS:
+- BOUNDARY: from ARCHITECTURAL FLOOR PLANS (floor plate outline) and/or STRUCTURAL PLANS (may show different edge conditions). Cross-check both.
+- THICKNESS: from ARCHITECTURAL SECTIONS (shows slab in context) and/or STRUCTURAL DETAILS (shows exact depth, reinforcement, topping). Use whichever source provides the dimension — if both show it, verify they match.
+- If neither shows it, create an RFI.
+
+CROSS-DISCIPLINE VERIFICATION:
+- Architectural and Structural drawings often show the SAME elements (columns, slabs, shear walls). Check BOTH.
+- If dimensions differ between disciplines, flag as RFI with both values noted.
+- The design INTENT comes from Architectural. The design IMPLEMENTATION comes from Structural. Both are needed for accurate modeling.
+
+CEILINGS:
+- CEILING HEIGHT: from REFLECTED CEILING PLANS (RCP) — shows height per room/zone
+- CEILING TYPE: from RCP — suspended, direct-applied, exposed structure
+- PLENUM SPACE: from BUILDING SECTIONS — gap between ceiling finish and slab above
+- All of these affect wall height calculation
+
+EVERY DIMENSION MUST COME FROM THE DRAWINGS. If a dimension is not found in any document, create an RFI listing which document type should contain it. NEVER substitute a "standard" or "typical" value.
+
+Return valid JSON only.`;
+
+    const userPrompt = `Here is all the data extracted from prior stages of this project:
 
 ${fullContext}
 
 Now place EVERY element visible on these floor plans using grid coordinates.
-For each element, cross-reference with the schedule/section data to get real dimensions.
+For EACH element, you MUST cross-reference:
+- Walls → get thickness from assembly data above, height from storey ceiling_height + spec extension
+- Doors → get width/height from door schedule above, match by mark (D101, D102, etc.)
+- Windows → get width/height from window schedule above, match by mark
+- Columns → get size from structural data, height from floor-to-floor
+- Slabs → get thickness from structural sections
 
 Return a JSON object with this exact structure:
 
@@ -930,49 +985,50 @@ Return a JSON object with this exact structure:
   "elements": [
     {
       "type": "wall",
-      "name": "EW1 - Exterior Wall",
+      "name": "EXTRACT_FROM_DRAWINGS",
       "category": "Architectural",
-      "assemblyCode": "EW1",
-      "storey": "Level 1",
-      "gridStart": { "alpha": "A", "numeric": "1" },
-      "gridEnd": { "alpha": "A", "numeric": "5" },
+      "assemblyCode": "WALL_TYPE_CODE_FROM_PLAN",
+      "storey": "FLOOR_NAME_FROM_DRAWINGS",
+      "gridStart": { "alpha": "GRID_LETTER", "numeric": "GRID_NUMBER" },
+      "gridEnd": { "alpha": "GRID_LETTER", "numeric": "GRID_NUMBER" },
       "offset_m": { "x": 0.0, "y": 0.0 },
-      "length_m": 28.8,
-      "height_m": 3.6,
-      "thickness_mm": 300,
-      "material": "See assembly EW1",
-      "fire_rating": "1-hour",
-      "properties": {}
+      "length_m": "MEASURE_FROM_GRID_SPACING",
+      "height_m": "CEILING_HEIGHT_FROM_RCP_PLUS_EXTENSION_FROM_ASSEMBLY",
+      "thickness_mm": "SUM_ALL_LAYERS_FROM_ASSEMBLY_DETAIL",
+      "material": "FROM_ASSEMBLY_DETAIL",
+      "fire_rating": "FROM_ASSEMBLY_DETAIL_OR_SPECS",
+      "properties": { "extension_above_ceiling_mm": "FROM_ASSEMBLY_DETAIL", "layers": "FROM_ASSEMBLY_DETAIL" }
     },
     {
       "type": "door",
-      "name": "D101 - HM Door",
+      "name": "DOOR_MARK_FROM_PLAN",
       "category": "Architectural",
-      "mark": "D101",
-      "scheduleMark": "D1",
-      "storey": "Level 1",
-      "gridNearest": { "alpha": "B", "numeric": "3" },
-      "offset_m": { "x": 1.2, "y": 0.0 },
-      "width_mm": 914,
-      "height_mm": 2134,
-      "hostWall": "IW2",
-      "properties": {}
+      "mark": "DOOR_MARK_FROM_PLAN",
+      "storey": "FLOOR_NAME",
+      "gridNearest": { "alpha": "NEAREST_GRID", "numeric": "NEAREST_GRID" },
+      "offset_m": { "x": "DISTANCE_FROM_GRID", "y": "DISTANCE_FROM_GRID" },
+      "width_mm": "FROM_DOOR_SCHEDULE",
+      "height_mm": "FROM_DOOR_SCHEDULE_OR_ELEVATION",
+      "hostWall": "WALL_TYPE_CONTAINING_DOOR",
+      "swing": "FROM_PLAN_ARC_SYMBOL",
+      "properties": { "fire_rating": "FROM_DOOR_SCHEDULE", "hardware_set": "FROM_DOOR_SCHEDULE" }
     }
   ],
   "storeys": [
-    { "name": "Level 1", "elevation": 0.0, "floor_to_floor_height_m": 3.6 },
-    { "name": "Level 2", "elevation": 3.6, "floor_to_floor_height_m": 3.6 }
+    { "name": "FROM_SECTIONS", "elevation": "FROM_SECTIONS", "floor_to_floor_height_m": "FROM_SECTIONS", "ceiling_height_m": "FROM_RCP_OR_SECTIONS" }
   ]
 }
 
-Rules:
-- Place EVERY wall, column, beam, slab, door, window, stair, and MEP element visible.
-- Use grid references (alpha + numeric) for positioning, with offsets in metres.
-- Cross-reference door/window marks with the schedule data for real dimensions.
-- Cross-reference wall types with the assembly data for real thicknesses and layers.
-- Include the storey (floor level) for each element.
-- This should produce HUNDREDS of elements for a real building -- be thorough.
-- Return ONLY the JSON object, no other text.
+MANDATORY RULES:
+- "type" MUST be set for every element (wall, door, window, column, beam, slab, stair, mep) — never undefined
+- Place EVERY wall, column, beam, slab, door, window, stair, and MEP element visible on each floor
+- Use grid references (alpha + numeric) for positioning, with offsets in metres from the nearest grid intersection
+- Door/window MARKS must match the schedule data — use the schedule dimensions, not plan-view line thickness
+- Wall ASSEMBLY CODES must match the section data — use the assembly thickness, not plan-view line thickness
+- Include BOTH ceiling_height_m AND floor_to_floor_height_m per storey
+- TYPICAL FLOOR RULE: if drawings show "Typical Floor" for multiple levels, create SEPARATE element entries for each floor with unique IDs (F2-W1, F3-W1, etc.)
+- This should produce HUNDREDS of elements for a real building — be exhaustive
+- Return ONLY the JSON object, no other text
 
 DOCUMENTS:
 ${text.substring(0, 300000)}`;

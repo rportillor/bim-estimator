@@ -1560,7 +1560,8 @@ MANDATORY EXTRACTION REQUIREMENTS:
           discoveredBy: 'createWallElement',
         });
       } catch { /* non-fatal */ }
-      thickness = 0.01; // Minimal render thickness — RFI tracks the missing value
+      // No thickness data — exclude element, RFI already registered above
+      return null;
     }
     
     // Calculate wall center and dimensions
@@ -1568,43 +1569,57 @@ MANDATORY EXTRACTION REQUIREMENTS:
     const centerY = (start.y + end.y) / 2;
     const length = Math.sqrt(Math.pow(end.x - start.x, 2) + Math.pow(end.y - start.y, 2));
     
-    // CRITICAL: Wall height = ceiling height from architectural drawings
-    // Normalise wall height — Claude returns mm (REAL_CEILING_MM prompt convention)
-    const rawWallHeight = wallData.ceiling_height || wallData.floor_to_ceiling_height;
-    const wallHeight = rawWallHeight != null ? (toMetres(rawWallHeight, 'dimension') ?? Number(rawWallHeight)) : null;
+    // CRITICAL: Wall height — check ALL possible sources from Claude's analysis
+    // Priority: element's own height → storey ceiling_height → storey floor_to_floor → floor's own height
+    let actualWallHeight: number | null = null;
+    let wallHeightSource = 'unknown';
 
-    let actualWallHeight: number;
-    let wallHeightSource: string;
+    // Source 1: Element's own height data (Claude may use various field names)
+    const rawWallHeight = wallData.ceiling_height ?? wallData.floor_to_ceiling_height ?? wallData.height ?? wallData.wall_height;
+    if (rawWallHeight != null) {
+      const h = toMetres(rawWallHeight, 'dimension') ?? Number(rawWallHeight);
+      if (h > 0) { actualWallHeight = h; wallHeightSource = 'extracted_from_element'; }
+    }
 
-    if (!wallHeight) {
-      // Register RFI — wall is included as a placeholder with storey height estimate
+    // Source 2: Storey ceiling height (extracted from building sections)
+    if (!actualWallHeight) {
+      const storeyH = (storey as any).ceiling_height ?? (storey as any).floorToFloorHeight_m ?? (storey as any).floor_to_floor_height;
+      if (storeyH != null) {
+        const h = toMetres(storeyH, 'dimension') ?? Number(storeyH);
+        if (h > 0) { actualWallHeight = h; wallHeightSource = 'derived_from_storey'; }
+      }
+    }
+
+    // Source 3: Floor-level height from the floors array (Claude's floor data)
+    if (!actualWallHeight) {
+      const floorH = wallData.floor_height ?? wallData.level_height;
+      if (floorH != null) {
+        const h = toMetres(floorH, 'dimension') ?? Number(floorH);
+        if (h > 0) { actualWallHeight = h; wallHeightSource = 'derived_from_floor_data'; }
+      }
+    }
+
+    // No height from any source — register RFI and exclude
+    if (!actualWallHeight || actualWallHeight <= 0) {
       try {
-        const { registerMissingData } = require('./estimator/rfi-generator');
         registerMissingData({
           category: 'dimension',
           description:
-            `Wall '${wallData.id || 'UNKNOWN'}' on storey '${storey.name}' has no ceiling height. ` +
-            `Required sources: (1) Building sections showing floor-to-ceiling dimension, ` +
-            `(2) Elevation drawings with height annotation, ` +
-            `(3) Drawing legend defining dimension notation. ` +
-            `Wall included in model with storey height estimate — verify and update.`,
-          csiDivision: '03 00 00',
-          impact: 'medium',
+            `Wall '${wallData.id || 'UNKNOWN'}' on storey '${storey.name}' — no height found in any source: ` +
+            `(1) wall element data, (2) storey ceiling height, (3) floor level data. ` +
+            `Required: building sections showing floor-to-ceiling dimension.`,
+          csiDivision: '03 00 00', impact: 'high',
           drawingRef: `Sections / Elevations — Wall ${wallData.id || 'UNKNOWN'}, Storey ${storey.name}`,
-          costImpactLow: 0, costImpactHigh: 0,
-          assumptionUsed: `storey_floor_to_floor=${(storey as any).floorToFloorHeight_m ?? 'unknown'}`,
+          costImpactLow: 0, costImpactHigh: 0, assumptionUsed: 'none',
           discoveredBy: 'createWallElement',
         });
       } catch { /* non-fatal */ }
-      const rawStoreyH = (storey as any).floorToFloorHeight_m ?? (storey as any).ceiling_height;
-      actualWallHeight = rawStoreyH != null ? (toMetres(rawStoreyH, 'dimension') ?? Number(rawStoreyH)) : 0;
-      wallHeightSource = 'estimated_from_storey';
-    } else {
-      actualWallHeight = wallHeight;
-      wallHeightSource = 'extracted_from_drawings';
+      return null;
     }
 
-    const isRfiFlagged = wallHeightSource === 'estimated_from_storey';
+    const isRfiFlagged_height = wallHeightSource !== 'extracted_from_element';
+
+    const isRfiFlagged = wallHeightSource !== 'extracted_from_element' || !thickness;
     
     return {
       id: wallData.id || `wall-${Date.now()}`,
@@ -1728,16 +1743,15 @@ MANDATORY EXTRACTION REQUIREMENTS:
       // Single value — square column: "400" → 400x400
       const dim = parseFloat(sizeStr);
       if (isNaN(dim) || dim <= 0) {
-        // Include as RFI placeholder with minimal geometry so it's visible
-        width = 0.01;
-        depth = 0.01;
+        // No parseable size — exclude element, register RFI
         try {
           registerMissingData({
             category: 'dimension', csiDivision: '03 30 00', impact: 'high',
-            description: `Column '${colData.id || 'UNKNOWN'}' on storey '${storey.name}' has unparseable size '${size}'. Column included as RFI placeholder.`,
+            description: `Column '${colData.id || 'UNKNOWN'}' on storey '${storey.name}' has unparseable size '${size}'. Column excluded — requires structural schedule.`,
             drawingRef: `Structural schedule — Column ${colData.id || 'UNKNOWN'}`,
-            costImpactLow: 0, costImpactHigh: 0, assumptionUsed: 'column_size_rfi',
+            costImpactLow: 0, costImpactHigh: 0, assumptionUsed: 'none',
             discoveredBy: 'createColumnElement' }); } catch { /* non-fatal */ }
+        return null;
       } else {
         width = dim / 1000;
         depth = dim / 1000;
@@ -1745,13 +1759,12 @@ MANDATORY EXTRACTION REQUIREMENTS:
     }
 
     if (width <= 0 || depth <= 0) {
-      width = 0.01;
-      depth = 0.01;
+      return null;
     }
     
-    // Column height: prefer structural schedule, fall back to storey height with RFI
-    // Normalise column height — Claude returns mm (REAL_VALUE_MM convention)
-    const columnHeight = colData.height != null ? (toMetres(colData.height, 'dimension') ?? Number(colData.height)) : null;
+    // Column height: check ALL sources from Claude's analysis
+    const rawColH = colData.height ?? colData.column_height ?? colData.floor_to_floor_height;
+    const columnHeight = rawColH != null ? (toMetres(rawColH, 'dimension') ?? Number(rawColH)) : null;
     let actualColumnHeight: number;
     let heightSource: string;
     if (!columnHeight) {
@@ -1772,7 +1785,9 @@ MANDATORY EXTRACTION REQUIREMENTS:
         });
       } catch { /* rfi-generator unavailable — non-fatal */ }
       // Estimate: typical residential/commercial = 3.0m, use storey data if available
-      actualColumnHeight = (storey as any).floorToFloorHeight_m ?? 0;
+      const storeyH = (storey as any).floorToFloorHeight_m ?? (storey as any).ceiling_height;
+      if (!storeyH || Number(storeyH) <= 0) return null; // No height data anywhere — exclude, RFI registered above
+      actualColumnHeight = Number(storeyH);
       heightSource = 'estimated_from_storey_height';
     } else {
       actualColumnHeight = columnHeight;
@@ -1848,10 +1863,11 @@ MANDATORY EXTRACTION REQUIREMENTS:
       x = 0; y = 0;
     }
 
-    // Width: include as RFI placeholder if missing, do not silently drop
+    // Width: check multiple field names from Claude's analysis
     let width: number | null = null;
-    if (doorData.width) {
-      width = toMetres(doorData.width, 'dimension') ?? (doorData.width / 1000);
+    const rawWidth = doorData.width ?? doorData.door_width ?? doorData.opening_width;
+    if (rawWidth) {
+      width = toMetres(rawWidth, 'dimension') ?? (rawWidth / 1000);
     } else {
       try {
         registerMissingData({ category: 'dimension', csiDivision: '08 14 00', impact: 'high',
@@ -1860,10 +1876,28 @@ MANDATORY EXTRACTION REQUIREMENTS:
           drawingRef: `Door schedule — Door ${doorData.id || 'UNKNOWN'}`, costImpactLow: 0, costImpactHigh: 0,
           assumptionUsed: 'none — rfi_placeholder_only', discoveredBy: 'createDoorElement' }); } catch { /* non-fatal */ }
     }
-    // Height: must come from door schedule — NO assumed values
-    const heightRaw = doorData.height != null
-      ? (toMetres(doorData.height, 'dimension') ?? (doorData.height / 1000))
+    // Height: check element data, then storey data
+    const rawH = doorData.height ?? doorData.door_height ?? doorData.opening_height;
+    let heightRaw = rawH != null
+      ? (toMetres(rawH, 'dimension') ?? (rawH / 1000))
       : null;
+    // If no door height, try storey ceiling height (doors typically go floor to ~ceiling)
+    if (!heightRaw) {
+      const storeyH = (storey as any).ceiling_height ?? (storey as any).floorToFloorHeight_m;
+      if (storeyH != null && Number(storeyH) > 0) {
+        heightRaw = toMetres(storeyH, 'dimension') ?? Number(storeyH);
+      }
+    }
+    // If STILL no width and no height — exclude entirely, RFI
+    if (!width && !heightRaw) {
+      try {
+        registerMissingData({ category: 'dimension', csiDivision: '08 14 00', impact: 'high',
+          description: `Door '${doorData.id || 'UNKNOWN'}' on storey '${storey.name}' has no width AND no height. Excluded — requires door schedule.`,
+          drawingRef: `Door schedule — Door ${doorData.id || 'UNKNOWN'}`,
+          costImpactLow: 0, costImpactHigh: 0, assumptionUsed: 'none',
+          discoveredBy: 'createDoorElement' }); } catch { /* non-fatal */ }
+      return null;
+    }
     const heightRfi = heightRaw === null;
     if (heightRfi) {
       try {
@@ -1949,15 +1983,14 @@ MANDATORY EXTRACTION REQUIREMENTS:
       geometry: {
         location: { realLocation: { x, y, z: storey.elevation } },
         dimensions: {
-          length: width ?? 0,
-          width:  thicknessM ?? 0,
-          height: heightRaw ?? (toMetres((storey as any).ceiling_height ?? (storey as any).floorToFloorHeight_m, 'dimension') ?? 0),
-          area:   (heightRaw != null && width != null) ? width * heightRaw : 0,
+          length: width || 0,
+          width:  thicknessM || 0,
+          height: heightRaw || 0,
+          area:   (heightRaw && width) ? width * heightRaw : 0,
           volume: 0,
         },
       },
       quantities: {
-        // Count only — area/volume excluded until RFI resolved
         metric:   [{ type: 'count', value: 1, unit: 'ea', name: 'Door Count',
                      source: isRfiFlagged ? 'rfi_placeholder' : 'ai_extracted' }],
         imperial: [{ type: 'count', value: 1, unit: 'ea', name: 'Door Count',
@@ -2101,10 +2134,10 @@ MANDATORY EXTRACTION REQUIREMENTS:
       geometry: {
         location: { realLocation: { x, y, z: storey.elevation + (sillHeight ?? 0) } },
         dimensions: {
-          length: width ?? 0,
-          width:  frameDepth ?? 0,
-          height: heightRaw ?? (toMetres((storey as any).ceiling_height ?? (storey as any).floorToFloorHeight_m, 'dimension') ?? 0),
-          area:   (heightRaw != null && width != null) ? width * heightRaw : 0,
+          length: width || 0,
+          width:  frameDepth || 0,
+          height: heightRaw || 0,
+          area:   (heightRaw && width) ? width * heightRaw : 0,
           volume: 0,
         },
       },
@@ -2216,18 +2249,18 @@ MANDATORY EXTRACTION REQUIREMENTS:
     let slabRfi = false;
     if (thicknessMm !== null && thicknessMm !== undefined) {
       const parsed = toMetres(thicknessMm, 'dimension') ?? (Number(thicknessMm) / 1000);
-      thicknessM = (parsed && parsed > 0) ? parsed : 0.01; // minimal render thickness
-      if (!parsed || parsed <= 0) slabRfi = true;
+      if (!parsed || parsed <= 0) return null; // Bad thickness — exclude
+      thicknessM = parsed;
     } else {
-      thicknessM = 0.01; // minimal render thickness — RFI will track
-      slabRfi = true;
+      // No thickness — exclude slab, register RFI
       try {
         registerMissingData({
           category: 'dimension', csiDivision: '03 30 00', impact: 'high',
-          description: `Slab '${slabData.id || 'UNKNOWN'}' on storey '${storey.name}' has no thickness. Required: structural sections. Slab included as RFI placeholder.`,
+          description: `Slab '${slabData.id || 'UNKNOWN'}' on storey '${storey.name}' has no thickness. Required: structural sections.`,
           drawingRef: `Structural sections — Slab ${slabData.id || 'UNKNOWN'}`,
-          costImpactLow: 0, costImpactHigh: 0, assumptionUsed: 'slab_thickness_rfi',
+          costImpactLow: 0, costImpactHigh: 0, assumptionUsed: 'none',
           discoveredBy: 'createSlabElement' }); } catch { /* non-fatal */ }
+      return null;
     }
 
     // Compute slab area using shoelace formula
