@@ -2669,50 +2669,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ error: 'Access denied' });
       }
 
-      // Extract storey information from model data
+      // Read storeys from the bim_storeys table (canonical source of truth)
+      const dbStoreys = await storage.getBimStoreys(modelId);
+
       let storeys: any[] = [];
-      if (model.geometryData && typeof model.geometryData === 'string') {
-        try {
-          const modelData = safeJsonParse(model.geometryData, 10 * 1024 * 1024); // 10MB limit
-          if (!modelData) {
-            logger.warn('Failed to parse BIM model geometry data for storey extraction', { modelId: model.id });
-            return res.json([]);
-          }
-          
-          // Phase 2: Extract real storey data from QTO processing
-          if (modelData.statistics?.realQTOData?.storeys) {
-            storeys = modelData.statistics.realQTOData.storeys;
-          } else if (modelData.elements) {
-            // Fallback: Extract storeys from elements
-            const storeyMap = new Map();
-            
-            modelData.elements.forEach((element: any) => {
-              if (element.properties?.storey) {
-                const storey = element.properties.storey;
-                if (!storeyMap.has(storey.name)) {
-                  storeyMap.set(storey.name, {
-                    name: storey.name,
-                    elevation: storey.elevation || 0,
-                    guid: storey.guid,
-                    elementCount: 0
-                  });
-                }
-                storeyMap.get(storey.name).elementCount++;
-              }
-            });
-            
-            storeys = Array.from(storeyMap.values()).sort((a, b) => a.elevation - b.elevation);
-          }
-        } catch (error) {
-          logger.warn('Error parsing model geometry data for storey extraction', { error: error instanceof Error ? error.message : String(error), modelId: model.id });
+
+      if (dbStoreys.length > 0) {
+        // Get element counts per storey from the elements table
+        const allElements = await storage.getBimElements(modelId);
+        const countByStorey = new Map<string, number>();
+        for (const el of allElements) {
+          const s = el.storeyName || 'none';
+          countByStorey.set(s, (countByStorey.get(s) || 0) + 1);
         }
+
+        storeys = dbStoreys.map((s: any) => ({
+          name: s.name,
+          elevation: Number(s.elevation) || 0,
+          floorToFloorHeight: Number(s.floorToFloorHeight) || 0,
+          elementCount: countByStorey.get(s.name) || 0,
+          guid: null,
+        }));
+      } else {
+        // Fallback: derive storeys from element storeyName field
+        const allElements = await storage.getBimElements(modelId);
+        const storeyMap = new Map<string, { name: string; elevation: number; floorToFloorHeight: number; elementCount: number }>();
+        for (const el of allElements) {
+          const name = el.storeyName || 'Ground Floor';
+          const elevation = Number(el.elevation) || 0;
+          if (!storeyMap.has(name)) {
+            storeyMap.set(name, { name, elevation, floorToFloorHeight: 0, elementCount: 0 });
+          }
+          storeyMap.get(name)!.elementCount++;
+        }
+        storeys = Array.from(storeyMap.values()).sort((a, b) => a.elevation - b.elevation);
       }
 
-      // Default storeys if none found
+      // Default if still empty
       if (storeys.length === 0) {
-        storeys = [
-          { name: 'Ground Floor', elevation: 0, elementCount: 0, guid: null }
-        ];
+        storeys = [{ name: 'Ground Floor', elevation: 0, floorToFloorHeight: 3.6, elementCount: 0, guid: null }];
       }
 
       res.json({

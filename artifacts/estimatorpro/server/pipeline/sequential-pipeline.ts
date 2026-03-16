@@ -967,44 +967,51 @@ ${text.substring(0, 300000)}`;
     const elements: any[] = Array.isArray(parsed.elements) ? parsed.elements : [];
     const storeys: any[] = Array.isArray(parsed.storeys) ? parsed.storeys : [];
 
-    // Enrich existing elements with grid coordinates — do NOT delete/replace existing elements.
+    // Enrich existing elements — do NOT delete/replace existing elements.
     // upsertBimElements does a full DELETE+INSERT so we never call it here.
-    // Instead, load existing elements, match by mark/type/storey, update location only.
+    // Instead, load existing elements, match by mark/elementId/type/storey, update
+    // location + geometry (height, thickness) + storeyName + elevation.
     const existingElements = await storage.getBimElements(this.modelId);
     let enrichedCount = 0;
+
+    // Build a storey lookup from Claude's response for height data
+    const storeyByName = new Map<string, any>();
+    for (const s of storeys) {
+      storeyByName.set((s.name || '').toLowerCase().replace(/\s+/g, ''), s);
+    }
 
     for (const el of elements) {
       const elMark = (el.mark || el.scheduleMark || '').toString().trim().toUpperCase();
       const elType = (el.type || '').toLowerCase();
       const elStoreyRaw = typeof el.storey === 'string' ? el.storey : el.storey?.name || '';
       const elStoreyNorm = elStoreyRaw.toLowerCase().replace(/\s+/g, '');
+      const elNameLower = (el.name || '').toLowerCase();
 
       const match = existingElements.find((ex) => {
         const exProps =
           typeof ex.properties === 'string'
             ? (() => { try { return JSON.parse(ex.properties as string); } catch { return {}; } })()
             : (ex.properties as any) || {};
+        // FIX: also check ex.elementId and ex.name as mark sources
         const exMark = (
           exProps.mark ||
           exProps.tag ||
           exProps.doorMark ||
           exProps.windowMark ||
+          ex.elementId ||
           ''
         )
           .toString()
           .trim()
           .toUpperCase();
-        const exStoreyName = (
-          typeof ex.storey === 'string' ? ex.storey : (ex.storey as any)?.name || ''
-        )
-          .toLowerCase()
-          .replace(/\s+/g, '');
+        const exStoreyRaw = ex.storeyName || (typeof ex.storey === 'string' ? ex.storey : (ex.storey as any)?.name || '');
+        const exStoreyName = exStoreyRaw.toLowerCase().replace(/\s+/g, '');
         const typeMatch = (ex.elementType || '').toLowerCase() === elType;
         if (elMark && exMark) return exMark === elMark && typeMatch;
         return (
           typeMatch &&
           (!elStoreyNorm || exStoreyName.includes(elStoreyNorm) || elStoreyNorm.includes(exStoreyName)) &&
-          (ex.name || '').toLowerCase() === (el.name || '').toLowerCase()
+          (ex.name || '').toLowerCase() === elNameLower
         );
       });
 
@@ -1013,6 +1020,29 @@ ${text.substring(0, 300000)}`;
           typeof match.location === 'string'
             ? (() => { try { return JSON.parse(match.location as string); } catch { return {}; } })()
             : (match.location as any) || {};
+
+        // FIX: resolve storey height from Claude's storey list
+        const storeyInfo = storeyByName.get(elStoreyNorm) || null;
+        const heightM: number | null = el.height_m ?? storeyInfo?.floor_to_floor_height_m ?? null;
+        const thicknessM: number | null = el.thickness_mm ? el.thickness_mm / 1000 : null;
+
+        // FIX: update geometry dimensions when height/thickness data is available
+        const existingGeom: any = (() => {
+          try {
+            return typeof match.geometry === 'string'
+              ? JSON.parse(match.geometry as string)
+              : (match.geometry as any) || {};
+          } catch { return {}; }
+        })();
+        const updatedGeom = (heightM !== null || thicknessM !== null) ? {
+          ...existingGeom,
+          dimensions: {
+            ...existingGeom.dimensions,
+            ...(heightM !== null ? { height: heightM } : {}),
+            ...(thicknessM !== null ? { depth: thicknessM } : {}),
+          },
+        } : null;
+
         await storage.updateBimElement(match.id, {
           location: JSON.stringify({
             ...existingLoc,
@@ -1021,35 +1051,112 @@ ${text.substring(0, 300000)}`;
             gridNearest: el.gridNearest,
             offset_m: el.offset_m,
           }) as any,
+          ...(updatedGeom ? { geometry: JSON.stringify(updatedGeom) as any } : {}),
+          ...(elStoreyRaw ? { storeyName: elStoreyRaw } : {}),
+          ...(storeyInfo?.elevation !== undefined ? { elevation: String(storeyInfo.elevation) } : {}),
         });
         enrichedCount++;
       }
     }
 
-    logger.info('Stage 5: Elements written to DB', {
+    logger.info('Stage 5: Elements enriched via Claude matching', {
       modelId: this.modelId,
       elementCount: enrichedCount,
     });
 
-    // Write storeys to DB (upsert is safe here — storeys don't cascade-delete elements)
-    if (storeys.length > 0) {
+    // ── Post-pass: assign storey heights to ALL elements with flat geometry ───
+    // Elements generated by the old pipeline have height ≈ 0.01m (flat).
+    // Use the bim_storeys table (with confirmed elevations) to assign proper
+    // heights based on each element's prefix pattern in its elementId.
+    // This does NOT call upsertBimElements — only individual updateBimElement calls.
+    const dbStoreys = await storage.getBimStoreys(this.modelId);
+    let heightPassCount = 0;
+
+    if (dbStoreys.length > 0) {
+      // Build prefix→storey map from actual storey names in the DB
+      function inferStoreyFromElementId(elementId: string, allStoreys: typeof dbStoreys): typeof dbStoreys[0] | null {
+        if (!elementId) return null;
+        const prefix = (elementId.split('-')[0] || elementId.substring(0, 3)).toUpperCase();
+        for (const s of allStoreys) {
+          const n = s.name.toLowerCase();
+          if (prefix === 'GF' && n.includes('ground')) return s;
+          if ((prefix === '2F' || prefix === 'F2' || prefix === 'L2') && n.includes('second')) return s;
+          if ((prefix === '3F' || prefix === 'F3' || prefix === 'L3') && n.includes('third')) return s;
+          if ((prefix === 'MP' || prefix === 'DM') && (n.includes('mechanical') || n.includes('penthouse'))) return s;
+          if ((prefix === 'B' || prefix === 'UG' || prefix === 'P1') && (n.includes('underground') || n.includes('parking'))) return s;
+        }
+        // Default to ground floor if no match
+        return allStoreys.find(s => s.name.toLowerCase().includes('ground')) || allStoreys[0] || null;
+      }
+
+      for (const ex of existingElements) {
+        // Only update elements that are still flat (height < 0.5m)
+        const geom: any = (() => {
+          try {
+            return typeof ex.geometry === 'string' ? JSON.parse(ex.geometry as string) : (ex.geometry as any) || {};
+          } catch { return {}; }
+        })();
+        const currentHeight = Number(geom?.dimensions?.height ?? 0);
+        if (currentHeight >= 0.5) continue; // Already has real height — skip
+
+        const storey = inferStoreyFromElementId(ex.elementId || '', dbStoreys);
+        if (!storey) continue;
+
+        const floorHeight = Number(storey.floorToFloorHeight ?? storey.floor_to_floor_height ?? 0);
+        if (floorHeight <= 0) continue;
+
+        const updatedGeom = {
+          ...geom,
+          dimensions: {
+            ...geom.dimensions,
+            height: floorHeight,
+          },
+        };
+
+        await storage.updateBimElement(ex.id, {
+          geometry: JSON.stringify(updatedGeom) as any,
+          storeyName: storey.name,
+          elevation: String(storey.elevation ?? 0),
+        });
+        heightPassCount++;
+      }
+    }
+
+    logger.info('Stage 5: Elements written to DB', {
+      modelId: this.modelId,
+      elementCount: enrichedCount + heightPassCount,
+      enrichedByClaudeMatch: enrichedCount,
+      heightPassUpdated: heightPassCount,
+    });
+
+    // Write storeys to DB only if none exist yet.
+    // If B1 already confirmed storeys for this model, Stage 5 must NOT overwrite them —
+    // the DB storeys are the canonical source and Stage 5's Claude output may use
+    // different naming conventions (e.g. "Level 1" vs "Ground Floor").
+    if (dbStoreys.length === 0 && storeys.length > 0) {
       await storage.upsertBimStoreys(this.modelId, storeys);
+    } else {
+      logger.info('Stage 5: Skipping storey upsert — DB already has confirmed storeys', {
+        modelId: this.modelId,
+        existingStoreys: dbStoreys.length,
+      });
     }
 
     // Update model status
     await storage.updateBimModel(this.modelId, { status: 'completed' });
 
-    this.state.stageResults.floorPlans = { elementCount: enrichedCount, claudeExtracted: elements.length };
+    this.state.stageResults.floorPlans = { elementCount: enrichedCount + heightPassCount, claudeExtracted: elements.length };
     this.endTiming('FLOOR_PLANS');
     await this.saveState();
 
     logger.info('Stage 5 complete', {
       modelId: this.modelId,
       enriched: enrichedCount,
+      heightPassUpdated: heightPassCount,
       claudeExtracted: elements.length,
       storeys: storeys.length,
     });
 
-    await notify(0.95, `Floor plans complete: ${enrichedCount} elements enriched with grid data, ${storeys.length} storeys`);
+    await notify(0.95, `Floor plans complete: ${enrichedCount} elements grid-matched, ${heightPassCount} elements height-assigned from storeys, ${storeys.length} storeys`);
   }
 }

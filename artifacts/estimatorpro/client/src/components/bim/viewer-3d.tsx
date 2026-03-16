@@ -816,6 +816,33 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       let boxFallbackCount = 0;
 
       for(const e of elements){
+        // ── Compute element world position (used by ALL rendering paths) ──
+        // Parse location from whatever format it's stored in
+        let _parsedLocEl: any = null;
+        if (typeof e?.location === 'string' && e.location !== '{}') {
+          try { _parsedLocEl = JSON.parse(e.location); } catch {}
+        }
+        const _rawLocEl = e?.geometry?.location?.realLocation
+              || e?.properties?.realLocation
+              || e?.geometry?.location?.coordinates
+              || _parsedLocEl
+              || e?.location
+              || {x:0,y:0,z:0};
+
+        // When location has no Z (stored as 0), use the storey elevation so
+        // elements appear on the correct floor instead of all collapsing to ground.
+        const _rawLocElZ = Number(_rawLocEl.z || 0);
+        const _storeyElev = Number(e.elevation || 0);
+        const _effectiveZ = (_rawLocElZ === 0 && _storeyElev !== 0) ? _storeyElev : _rawLocElZ;
+
+        const _cc = coerceWithDatum(
+          Number(_rawLocEl.x || 0),
+          Number(_rawLocEl.y || 0),
+          _effectiveZ
+        );
+        // BIM coordinate system: Z is up; Three.js: Y is up
+        const elPos = { x: _cc.x, y: _cc.z, z: _cc.y };
+
         // ═══════════════════════════════════════════════════════════════
         // PRIORITY 1: Try to render from real mesh data (geometry kernel)
         // ═══════════════════════════════════════════════════════════════
@@ -840,6 +867,10 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
 
           const mesh = new THREE.Mesh(realMeshGeo, mat);
 
+          // Apply storey elevation offset so upper-floor elements appear
+          // at the correct height instead of all collapsing to ground level
+          mesh.position.set(elPos.x, elPos.y, elPos.z);
+
           // Add edges for visual clarity
           if (!isTransparent) {
             const edges = new THREE.EdgesGeometry(realMeshGeo, 30);
@@ -851,11 +882,15 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           root.add(mesh);
           meshRenderedCount++;
 
-          // Expand bounding box
+          // Expand bounding box using world-space position of the mesh
           realMeshGeo.computeBoundingBox();
           if (realMeshGeo.boundingBox) {
-            box.expandByPoint(realMeshGeo.boundingBox.min);
-            box.expandByPoint(realMeshGeo.boundingBox.max);
+            box.expandByPoint(
+              realMeshGeo.boundingBox.min.clone().add(mesh.position)
+            );
+            box.expandByPoint(
+              realMeshGeo.boundingBox.max.clone().add(mesh.position)
+            );
           }
           continue; // Skip legacy box rendering
         }
@@ -872,18 +907,8 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         if (profile || assembly) {
           const dims2 = getDims(e);
           if (dims2) {
-            let parsedLoc2 = null;
-            if (typeof e?.location === 'string' && e.location !== '{}') {
-              try { parsedLoc2 = JSON.parse(e.location); } catch {}
-            }
-            const rawLoc2 = e?.geometry?.location?.realLocation
-              || e?.properties?.realLocation
-              || e?.geometry?.location?.coordinates
-              || parsedLoc2 || e?.location || {x:0,y:0,z:0};
-            const cc3 = coerceWithDatum(
-              Number(rawLoc2.x || 0), Number(rawLoc2.y || 0), Number(rawLoc2.z || 0)
-            );
-            const pp = { x: cc3.x, y: cc3.z, z: cc3.y }; // BIM Z-up → Three.js Y-up
+            // Reuse the per-element world position already computed above (with elevation fallback)
+            const pp = elPos;
             const elType2 = (e.elementType || e.type || e.category || '').toLowerCase();
             const yaw = e?.geometry?.orientation?.yawRad || 0;
 
@@ -1173,34 +1198,8 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         const dims = getDims(e);
         if (!dims) continue; // TS18047 fix: getDims returns null when dimensions missing — skip element
 
-        // Get raw location and parse if needed
-        let parsedLocation = null;
-        if (typeof e?.location === 'string' && e.location !== '{}') {
-          try {
-            parsedLocation = JSON.parse(e.location);
-          } catch {
-            // Ignore parse errors
-          }
-        }
-
-        const rawLocation = e?.geometry?.location?.realLocation
-              || e?.properties?.realLocation
-              || e?.geometry?.location?.coordinates
-              || parsedLocation
-              || e?.location
-              || {x:0,y:0,z:0};
-
-        // Coerce to metres + apply datum offset, then axis-swap for Three.js
-        const cc2 = coerceWithDatum(
-          Number(rawLocation.x || 0),
-          Number(rawLocation.y || 0),
-          Number(rawLocation.z || 0)
-        );
-        const p = {
-          x: cc2.x,
-          y: cc2.z,   // Building Z (height/elevation) → Three.js Y (up)
-          z: cc2.y    // Building Y (depth/north-south) → Three.js Z (forward)
-        };
+        // Reuse the world position computed at the top of this loop iteration (with elevation fallback)
+        const p = elPos;
         const type = (e.elementType || e.type || e.category || "").toLowerCase();
 
         // 🔍 DEBUG: Log element types to see what we're working with
@@ -1823,7 +1822,11 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       });
       setIsLoading(false);
     })().catch(err => {
-      console.error('BIM load error:', err);
+      if (err && err.name === 'AbortError') {
+        // Silently swallow abort errors — they're expected during HMR / remount
+        return;
+      }
+      console.error('BIM load error:', err, '| name:', err?.name, '| message:', err?.message, '| stack:', err?.stack);
       setIsLoading(false);
     });
     
