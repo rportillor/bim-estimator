@@ -3,6 +3,7 @@
 // each feeding results to the next. Pauses at GRID_CONFIRMATION for user review.
 
 import Anthropic from '@anthropic-ai/sdk';
+import { PDFDocument } from 'pdf-lib';
 import { storage } from '../storage';
 import { logger } from '../utils/enterprise-logger';
 import { parseFirstJsonObject } from '../utils/anthropic-response';
@@ -113,10 +114,49 @@ async function loadPdfBuffers(docs: Document[]): Promise<Array<{ filename: strin
 }
 
 /**
- * Calls Claude via streaming with actual PDF documents as base64 + text prompt.
- * This allows Claude to SEE the drawings, not just read OCR text.
- * PDFs are sent in batches of 4 to avoid request size limits.
+ * Split a PDF buffer into chunks of at most `maxPages` pages each.
+ * Returns an array of Buffer chunks (may be just [original] if within limit).
  */
+async function splitPdfIntoChunks(
+  filename: string,
+  buffer: Buffer,
+  maxPages: number = 100,
+): Promise<Array<{ filename: string; buffer: Buffer }>> {
+  try {
+    const pdfDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
+    const totalPages = pdfDoc.getPageCount();
+
+    if (totalPages <= maxPages) {
+      return [{ filename, buffer }];
+    }
+
+    const chunks: Array<{ filename: string; buffer: Buffer }> = [];
+    const numChunks = Math.ceil(totalPages / maxPages);
+    logger.info(`Splitting large PDF into ${numChunks} chunks`, { filename, totalPages, maxPages });
+
+    for (let c = 0; c < numChunks; c++) {
+      const startPage = c * maxPages;
+      const endPage = Math.min(startPage + maxPages, totalPages);
+      const pageIndices = Array.from({ length: endPage - startPage }, (_, i) => startPage + i);
+
+      const chunkDoc = await PDFDocument.create();
+      const copiedPages = await chunkDoc.copyPages(pdfDoc, pageIndices);
+      copiedPages.forEach(p => chunkDoc.addPage(p));
+
+      const chunkBytes = await chunkDoc.save();
+      const chunkBuffer = Buffer.from(chunkBytes);
+      const chunkName = `${filename} [pages ${startPage + 1}–${endPage}]`;
+      chunks.push({ filename: chunkName, buffer: chunkBuffer });
+      logger.info(`  Chunk ${c + 1}/${numChunks}: pages ${startPage + 1}–${endPage} (${chunkBuffer.length} bytes)`);
+    }
+
+    return chunks;
+  } catch (err: any) {
+    logger.warn(`splitPdfIntoChunks: could not split "${filename}" — sending as-is`, { error: err?.message });
+    return [{ filename, buffer }];
+  }
+}
+
 async function callClaudeWithDocuments(
   anthropic: Anthropic,
   systemPrompt: string,
@@ -130,13 +170,22 @@ async function callClaudeWithDocuments(
     return callClaude(anthropic, systemPrompt, userPrompt + '\n\n' + textContext, maxTokens);
   }
 
-  // Batch PDFs (max 4 per call to avoid 413 errors)
+  // Expand any PDF that exceeds the 100-page Anthropic limit into ≤100-page chunks.
+  const expandedBuffers: Array<{ filename: string; buffer: Buffer }> = [];
+  for (const pdf of pdfBuffers) {
+    const chunks = await splitPdfIntoChunks(pdf.filename, pdf.buffer, 100);
+    expandedBuffers.push(...chunks);
+  }
+
+  // Batch chunks (max 4 per call to avoid 413 errors)
   const BATCH_SIZE = 4;
   const allResponses: string[] = [];
+  const totalBatches = Math.ceil(expandedBuffers.length / BATCH_SIZE);
 
-  for (let i = 0; i < pdfBuffers.length; i += BATCH_SIZE) {
-    const batch = pdfBuffers.slice(i, i + BATCH_SIZE);
-    const batchLabel = `batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(pdfBuffers.length / BATCH_SIZE)}`;
+  for (let i = 0; i < expandedBuffers.length; i += BATCH_SIZE) {
+    const batch = expandedBuffers.slice(i, i + BATCH_SIZE);
+    const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+    const batchLabel = `batch ${batchNum}/${totalBatches}`;
 
     const content: any[] = [
       // Send actual PDF files so Claude can see the drawings
@@ -833,12 +882,12 @@ ${text.substring(0, 300000)}`;
     const docsToUse = specDocs.length > 0 ? specDocs : this.documents;
     const text = collectText(docsToUse);
 
-    // Load PDFs — specs may be scanned documents or contain drawings with material callouts
-    const pdfBuffers = await loadPdfBuffers(docsToUse);
-    logger.info(`Stage 3: ${docsToUse.length} docs, ${pdfBuffers.length} PDFs loaded for spec reading`);
+    // Specifications are text-heavy — skip PDF sending entirely and use extracted text.
+    // Split the text into 4 equal packages so large specs stay within Claude's limits.
+    logger.info(`Stage 3: ${docsToUse.length} spec docs, ${text.length} chars — text-only, 4 packages`);
 
-    if (!text.trim() && pdfBuffers.length === 0) {
-      logger.warn('Stage 3: No content found for spec extraction', { modelId: this.modelId });
+    if (!text.trim()) {
+      logger.warn('Stage 3: No text found for spec extraction', { modelId: this.modelId });
       this.state.stageResults.specifications = { products: [], standards: [], units: 'mm' };
       this.setStage('GRID_EXTRACTION');
       this.endTiming('SPECIFICATIONS');
@@ -854,15 +903,27 @@ ${text.substring(0, 300000)}`;
     if (this.state.stageResults.sections) {
       priorContext.push(buildAssemblyContext(this.state.stageResults.sections));
     }
+    const priorContextStr = priorContext.join('\n\n');
 
     const systemPrompt = `You are a construction document analyst specializing in reading project specifications. Extract material specifications, CSI division codes, and referenced standards. Return valid JSON only.`;
 
-    const userPrompt = `Here are the assemblies and schedules already extracted from the drawings:
+    // Split spec text into 4 equal packages
+    const NUM_PACKAGES = 4;
+    const chunkSize = Math.ceil(text.length / NUM_PACKAGES);
+    const allProducts: any[] = [];
+    const allStandards: any[] = [];
 
-${priorContext.join('\n\n')}
+    for (let pkg = 0; pkg < NUM_PACKAGES; pkg++) {
+      const chunkStart = pkg * chunkSize;
+      const chunkEnd = Math.min(chunkStart + chunkSize, text.length);
+      const chunk = text.slice(chunkStart, chunkEnd);
+      if (!chunk.trim()) continue;
 
-Now extract material specifications, CSI division codes, and standards from these specification documents.
-Match products to the assemblies above where possible.
+      const userPrompt = `Here are the assemblies and schedules already extracted from the drawings:
+
+${priorContextStr}
+
+Now extract material specifications, CSI division codes, and standards from this portion of the specification document (package ${pkg + 1}/${NUM_PACKAGES}, characters ${chunkStart}–${chunkEnd} of ${text.length}).
 
 Return a JSON object with this exact structure:
 
@@ -888,25 +949,44 @@ Return a JSON object with this exact structure:
 }
 
 Rules:
-- Extract EVERY product specification and referenced standard.
+- Extract EVERY product specification and referenced standard in this package only.
 - Use proper CSI MasterFormat codes (6-digit format like "04 21 13").
 - Include manufacturer and standard references where shown.
 - Return ONLY the JSON object, no other text.
 
-DOCUMENTS:
-${text.substring(0, 300000)}`;
+SPECIFICATION TEXT (package ${pkg + 1}/${NUM_PACKAGES}):
+${chunk}`;
 
-    logger.info('Stage 3: Calling Claude for specification extraction', {
-      modelId: this.modelId,
-      docCount: docsToUse.length,
-      pdfCount: pdfBuffers.length,
+      logger.info(`Stage 3: Calling Claude for spec package ${pkg + 1}/${NUM_PACKAGES}`, {
+        modelId: this.modelId,
+        chunkChars: chunk.length,
+      });
+
+      const response = await callClaude(this.anthropic, systemPrompt, userPrompt, 16000);
+      const parsed = parseFirstJsonObject(response);
+
+      if (Array.isArray(parsed.products)) allProducts.push(...parsed.products);
+      if (Array.isArray(parsed.standards)) allStandards.push(...parsed.standards);
+
+      logger.info(`Stage 3: Package ${pkg + 1} → ${parsed.products?.length ?? 0} products, ${parsed.standards?.length ?? 0} standards`);
+    }
+
+    // De-duplicate by CSI code / standard code
+    const seenProducts = new Set<string>();
+    const uniqueProducts = allProducts.filter(p => {
+      const key = `${p.csiCode}|${p.description}`;
+      if (seenProducts.has(key)) return false;
+      seenProducts.add(key);
+      return true;
+    });
+    const seenStandards = new Set<string>();
+    const uniqueStandards = allStandards.filter(s => {
+      if (seenStandards.has(s.code)) return false;
+      seenStandards.add(s.code);
+      return true;
     });
 
-    const response = await callClaudeWithDocuments(
-      this.anthropic, systemPrompt, userPrompt, pdfBuffers,
-      text.substring(0, 200000), 16000
-    );
-    const parsed = parseFirstJsonObject(response);
+    const parsed = { products: uniqueProducts, standards: uniqueStandards };
 
     const specData: SpecificationData = {
       products: Array.isArray(parsed.products) ? parsed.products : [],

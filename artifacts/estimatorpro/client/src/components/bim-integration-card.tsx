@@ -71,9 +71,16 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
   useEffect(() => {
     if (dbStatus === 'generating' && !generatingLocal) {
       setGeneratingLocal(true);
-      // Always start the elapsed timer from now — latestModel.createdAt is the original
-      // model creation time (potentially hours ago), not the start of the current run.
-      startedAtRef.current = new Date().toISOString();
+      // Use the earliest stage startedAt from the server's pipeline state so the
+      // timer survives page refreshes and shows the true elapsed time.
+      let ps = latestModel?.pipelineState as Record<string, any> | string | undefined;
+      if (typeof ps === 'string') { try { ps = JSON.parse(ps); } catch { ps = undefined; } }
+      const timings: Record<string, { startedAt?: string }> = (ps as any)?.stageTimings ?? {};
+      const starts = Object.values(timings)
+        .map(t => t?.startedAt ? new Date(t.startedAt).getTime() : Infinity)
+        .filter(t => t !== Infinity);
+      const earliest = starts.length > 0 ? Math.min(...starts) : Date.now();
+      startedAtRef.current = new Date(earliest).toISOString();
     }
     if (dbStatus === 'completed' || dbStatus === 'failed' || dbStatus === 'error') {
       setGeneratingLocal(false);
