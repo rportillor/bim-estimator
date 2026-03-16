@@ -92,8 +92,13 @@ function buildWallMesh(wall: WallCandidate): MeshElement | null {
     height: height,
   };
 
+  // Geometry includes dimensions + location + mesh — viewer reads all from here
   const geometry = JSON.stringify({
     dimensions,
+    location: {
+      realLocation: { x: midX, y: midY, z: baseZ },
+    },
+    orientation: { yawRad: angle },
     mesh: serialized,
   });
 
@@ -104,12 +109,19 @@ function buildWallMesh(wall: WallCandidate): MeshElement | null {
     gridEnd: wall.gridEnd,
   });
 
+  // Properties include start/end for viewer wall rendering path
   const properties: Record<string, unknown> = {
     wall_type_code: wall.wall_type_code,
     material: wall.material,
     fire_rating: wall.fire_rating,
     extension_above_ceiling_mm: wall.extension_above_ceiling_mm,
     thickness_mm: wall.thickness_mm,
+    start: { x: sx, y: sy },
+    end: { x: ex, y: ey },
+    floor_level: wall.storey,
+    base_elevation: baseZ,
+    top_elevation: baseZ + height,
+    height_source: 'ir_pipeline',
     evidence_sources: wall.evidence_sources,
     pipelineStage: 'IR_MESH_BUILD',
     candidateStatus: wall.status,
@@ -164,6 +176,7 @@ function buildColumnMesh(col: ColumnCandidate): MeshElement | null {
 
   const geometry = JSON.stringify({
     dimensions,
+    location: { realLocation: { x: col.position_m.x, y: col.position_m.y, z: baseZ } },
     mesh: serialized,
   });
 
@@ -176,6 +189,7 @@ function buildColumnMesh(col: ColumnCandidate): MeshElement | null {
     size_string: col.size_string,
     material: col.material,
     reinforcement: col.reinforcement,
+    element_type: 'column',
     evidence_sources: col.evidence_sources,
     pipelineStage: 'IR_MESH_BUILD',
     candidateStatus: col.status,
@@ -208,7 +222,7 @@ function buildDoorMesh(door: DoorCandidate): MeshElement | null {
 
   const widthM = door.width_mm / 1000;
   const heightM = door.height_mm / 1000;
-  const depthM = door.thickness_mm != null ? door.thickness_mm / 1000 : 0.05;
+  const depthM = door.thickness_mm != null ? door.thickness_mm / 1000 : 0.001; // minimal if not in schedule
 
   const mesh = createBox(widthM, heightM, depthM);
   const serialized = serializeMesh(mesh);
@@ -219,13 +233,16 @@ function buildDoorMesh(door: DoorCandidate): MeshElement | null {
     width: depthM,
   };
 
+  const doorZ = door.storey ? 0 : 0; // base at floor level, storey offset added by viewer
+
   const geometry = JSON.stringify({
     dimensions,
+    location: { realLocation: { x: door.position_m.x, y: door.position_m.y, z: doorZ } },
     mesh: serialized,
   });
 
   const location = JSON.stringify({
-    realLocation: { x: door.position_m.x, y: door.position_m.y, z: 0 },
+    realLocation: { x: door.position_m.x, y: door.position_m.y, z: doorZ },
     gridNearest: door.gridNearest,
   });
 
@@ -237,6 +254,7 @@ function buildDoorMesh(door: DoorCandidate): MeshElement | null {
     host_wall_type: door.host_wall_type,
     width_mm: door.width_mm,
     height_mm: door.height_mm,
+    element_type: 'door',
     evidence_sources: door.evidence_sources,
     pipelineStage: 'IR_MESH_BUILD',
     candidateStatus: door.status,
@@ -269,7 +287,7 @@ function buildWindowMesh(win: WindowCandidate): MeshElement | null {
 
   const widthM = win.width_mm / 1000;
   const heightM = win.height_mm / 1000;
-  const depthM = 0.05; // windows are thin
+  const depthM = 0.001; // minimal depth — window thickness not typically specified
 
   const mesh = createBox(widthM, heightM, depthM);
   const serialized = serializeMesh(mesh);
@@ -284,6 +302,7 @@ function buildWindowMesh(win: WindowCandidate): MeshElement | null {
 
   const geometry = JSON.stringify({
     dimensions,
+    location: { realLocation: { x: win.position_m.x, y: win.position_m.y, z: sillZ } },
     mesh: serialized,
   });
 
@@ -299,6 +318,7 @@ function buildWindowMesh(win: WindowCandidate): MeshElement | null {
     host_wall_type: win.host_wall_type,
     width_mm: win.width_mm,
     height_mm: win.height_mm,
+    element_type: 'window',
     evidence_sources: win.evidence_sources,
     pipelineStage: 'IR_MESH_BUILD',
     candidateStatus: win.status,
@@ -365,6 +385,7 @@ function buildSlabMesh(slab: SlabCandidate): MeshElement | null {
 
   const geometry = JSON.stringify({
     dimensions,
+    location: { realLocation: { x: cx, y: cy, z: 0 } },
     mesh: serialized,
   });
 
@@ -377,6 +398,7 @@ function buildSlabMesh(slab: SlabCandidate): MeshElement | null {
     material: slab.material,
     thickness_mm: slab.thickness_mm,
     area_m2: area,
+    element_type: 'slab',
     boundary_m: slab.boundary_m,
     evidence_sources: slab.evidence_sources,
     pipelineStage: 'IR_MESH_BUILD',
@@ -434,6 +456,8 @@ function buildBeamMesh(beam: BeamCandidate): MeshElement | null {
 
   const geometry = JSON.stringify({
     dimensions,
+    location: { realLocation: { x: midX, y: midY, z: 0 } },
+    orientation: { yawRad: angle },
     mesh: serialized,
   });
 
@@ -495,6 +519,7 @@ function buildStairMesh(stair: StairCandidate): MeshElement | null {
 
   const geometry = JSON.stringify({
     dimensions,
+    location: { realLocation: { x: stair.position_m.x, y: stair.position_m.y, z: 0 } },
     mesh: serialized,
   });
 
@@ -507,6 +532,7 @@ function buildStairMesh(stair: StairCandidate): MeshElement | null {
     rise_mm: stair.rise_mm,
     run_mm: stair.run_mm,
     material: stair.material,
+    element_type: 'stair',
     evidence_sources: stair.evidence_sources,
     pipelineStage: 'IR_MESH_BUILD',
     candidateStatus: stair.status,
@@ -542,7 +568,7 @@ function buildMEPMesh(mep: MEPCandidate): MeshElement | null {
   const mesh = createBox(sizeM, sizeM, sizeM);
   const serialized = serializeMesh(mesh);
 
-  const mountingZ = mep.mounting_height_m ?? 2.4;
+  const mountingZ = mep.mounting_height_m ?? 0; // 0 if not extracted — RFI will track
 
   const dimensions = {
     length: sizeM,
@@ -552,6 +578,7 @@ function buildMEPMesh(mep: MEPCandidate): MeshElement | null {
 
   const geometry = JSON.stringify({
     dimensions,
+    location: { realLocation: { x: mep.position_m.x, y: mep.position_m.y, z: mountingZ } },
     mesh: serialized,
   });
 
@@ -562,6 +589,7 @@ function buildMEPMesh(mep: MEPCandidate): MeshElement | null {
   const properties: Record<string, unknown> = {
     category: mep.category,
     mep_type: mep.mep_type,
+    element_type: 'mep',
     mounting_height_m: mep.mounting_height_m,
     evidence_sources: mep.evidence_sources,
     pipelineStage: 'IR_MESH_BUILD',

@@ -149,7 +149,7 @@ export const getQueryFn: <T>(_options: {
 
     // Silent refresh on 401/403
     if (res.status === 401 || res.status === 403) {
-      if (unauthorizedBehavior === 'returnNull') return null as T;
+      if (unauthorizedBehavior === 'returnNull') return null as any;
       const newToken = await ensureRefresh();
       if (newToken) {
         res = await doFetch(newToken);
@@ -161,7 +161,7 @@ export const getQueryFn: <T>(_options: {
     }
 
     await throwIfResNotOk(res);
-    return await res.json() as T;
+    return await res.json() as any;
   };
 
 // ── QueryClient ─────────────────────────────────────────────────────────────

@@ -29,8 +29,8 @@ export class RelationshipGraph {
         from: r.sourceId,
         to: r.targetId,
         type: r.type,
-        parameterT: r.parameterT,
-        metadata: r.metadata,
+        parameterT: (r as any).parameterT,
+        metadata: (r as any).metadata,
       };
       this.edges.push(edge);
 

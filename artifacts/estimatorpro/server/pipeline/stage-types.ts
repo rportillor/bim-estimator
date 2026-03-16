@@ -93,6 +93,9 @@ export type PipelineStage =
   | 'GRID_EXTRACTION'
   | 'GRID_CONFIRMATION'
   | 'FLOOR_PLANS'
+  | 'FLOOR_PLANS_5A'
+  | 'FLOOR_PLANS_5B'
+  | 'FLOOR_PLANS_5C'
   | 'ENRICHMENT'
   | 'COMPLETE'
   | 'FAILED';

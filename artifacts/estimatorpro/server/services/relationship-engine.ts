@@ -26,7 +26,7 @@ interface RawElement {
   storeyName?: string;
 }
 
-interface Relationship {
+export interface Relationship {
   sourceId: string;
   targetId: string;
   type: 'hosted_in' | 'wall_join_L' | 'wall_join_T' | 'wall_join_X' |

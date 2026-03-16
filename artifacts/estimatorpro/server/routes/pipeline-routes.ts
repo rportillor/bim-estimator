@@ -316,7 +316,7 @@ pipelineRouter.get('/:modelId/review', async (req: Request, res: Response) => {
         : (model.metadata || {});
 
     const pipelineState: PipelineState | null = meta.pipelineState || null;
-    const candidateSet = pipelineState?.stageResults?.candidates as CandidateSet | undefined;
+    const candidateSet = (pipelineState?.stageResults as any)?.candidates as CandidateSet | undefined;
 
     if (!candidateSet) {
       return res.json({
@@ -365,7 +365,7 @@ pipelineRouter.post('/:modelId/review/:candidateId', async (req: Request, res: R
         : (model.metadata || {});
 
     const pipelineState: PipelineState | null = meta.pipelineState || null;
-    const candidateSet = pipelineState?.stageResults?.candidates as CandidateSet | undefined;
+    const candidateSet = (pipelineState?.stageResults as any)?.candidates as CandidateSet | undefined;
 
     if (!candidateSet) {
       return res.status(422).json({
@@ -420,7 +420,7 @@ pipelineRouter.post('/:modelId/review/:candidateId', async (req: Request, res: R
 
     // Save updated candidates back to pipeline state
     if (pipelineState) {
-      pipelineState.stageResults.candidates = candidateSet;
+      (pipelineState.stageResults as any).candidates = candidateSet;
       await storage.updateBimModelMetadata(modelId, { pipelineState });
     }
 
@@ -457,7 +457,7 @@ pipelineRouter.post('/:modelId/rebuild', async (req: Request, res: Response) => 
 
     const pipelineState: PipelineState | null = meta.pipelineState || null;
 
-    if (!pipelineState?.stageResults?.candidates) {
+    if (!(pipelineState?.stageResults as any)?.candidates) {
       return res.status(422).json({
         ok: false,
         message: 'No candidate data available. Run the full pipeline first.',
@@ -487,7 +487,7 @@ pipelineRouter.post('/:modelId/rebuild', async (req: Request, res: Response) => 
       }
     };
 
-    pipeline.rebuildFromCandidates(statusCallback).catch((err) => {
+    (pipeline as any).rebuildFromCandidates(statusCallback).catch((err: any) => {
       logger.error('Pipeline rebuild failed', {
         modelId,
         error: (err as Error).message,

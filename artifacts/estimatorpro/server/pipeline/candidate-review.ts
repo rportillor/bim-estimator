@@ -60,7 +60,7 @@ function statusToCategory(status: string, elementType: string): MissingDataCateg
     case 'needs_review':
       return 'detail';
     case 'unresolved':
-      return 'drawing';
+      return 'detail';
     default:
       return 'dimension';
   }

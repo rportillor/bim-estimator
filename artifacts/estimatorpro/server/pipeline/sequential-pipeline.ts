@@ -3,7 +3,8 @@
 // each feeding results to the next. Pauses at GRID_CONFIRMATION for user review.
 
 import Anthropic from '@anthropic-ai/sdk';
-import { PDFDocument } from 'pdf-lib';
+let PDFDocument: any;
+try { PDFDocument = require('pdf-lib').PDFDocument; } catch { /* pdf-lib optional */ }
 import { storage } from '../storage';
 import { logger } from '../utils/enterprise-logger';
 import { parseFirstJsonObject } from '../utils/anthropic-response';
@@ -23,6 +24,12 @@ import {
   buildGridContext,
   buildFullContext,
 } from './prompt-builders';
+import type { CandidateSet } from './candidate-types';
+import { resolveParameters } from './parameter-resolver';
+import { buildMeshes } from './mesh-builder';
+import { collectUnresolved, generateReviewItems, buildReviewSummary } from './candidate-review';
+import { computeAndStoreTransform } from './coordinate-transform';
+import { classifyDocuments } from './view-classifier';
 
 type StatusCallback = (progress: number, message: string) => Promise<void>;
 
@@ -141,7 +148,7 @@ async function splitPdfIntoChunks(
 
       const chunkDoc = await PDFDocument.create();
       const copiedPages = await chunkDoc.copyPages(pdfDoc, pageIndices);
-      copiedPages.forEach(p => chunkDoc.addPage(p));
+      copiedPages.forEach((p: any) => chunkDoc.addPage(p));
 
       const chunkBytes = await chunkDoc.save();
       const chunkBuffer = Buffer.from(chunkBytes);
@@ -357,15 +364,24 @@ export class SequentialPipeline {
         }
       }
 
-      // Stage 5: Floor plans (only if grid confirmed)
+      // Stage 5: IR pipeline — Claude classifies, code resolves, code builds meshes
       if (this.shouldRunStage('FLOOR_PLANS')) {
         if (this.state.stageResults.grid?.confirmed) {
-          await notify(0.75, 'Stage 5/5: Placing elements on floor plans using grid coordinates');
-          await this.runStage5_FloorPlans(notify);
+          await notify(0.75, 'Stage 5A: Claude classifying elements from floor plans');
+          await this.runStage5A_CandidateExtraction(notify);
         } else if (this.state.currentStage === 'GRID_CONFIRMATION') {
-          // Still waiting for confirmation
           return this.state;
         }
+      }
+
+      if ((this.state.currentStage as string) === 'FLOOR_PLANS_5B') {
+        await notify(0.85, 'Stage 5B: Resolving dimensions from schedules/assemblies (no AI)');
+        await this.runStage5B_ParameterResolution(notify);
+      }
+
+      if ((this.state.currentStage as string) === 'FLOOR_PLANS_5C') {
+        await notify(0.92, 'Stage 5C: Building 3D meshes deterministically (no AI)');
+        await this.runStage5C_MeshGeneration(notify);
       }
 
       if ((this.state.currentStage as string) !== 'FAILED') {
@@ -399,8 +415,18 @@ export class SequentialPipeline {
     await this.saveState();
 
     try {
-      await notify(0.75, 'Resumed: placing elements on floor plans using confirmed grid');
-      await this.runStage5_FloorPlans(notify);
+      await notify(0.75, 'Resumed: Stage 5A — Claude classifying elements');
+      await this.runStage5A_CandidateExtraction(notify);
+
+      if ((this.state.currentStage as string) === 'FLOOR_PLANS_5B') {
+        await notify(0.85, 'Stage 5B: Resolving dimensions from schedules/assemblies');
+        await this.runStage5B_ParameterResolution(notify);
+      }
+
+      if ((this.state.currentStage as string) === 'FLOOR_PLANS_5C') {
+        await notify(0.92, 'Stage 5C: Building 3D meshes deterministically');
+        await this.runStage5C_MeshGeneration(notify);
+      }
 
       if ((this.state.currentStage as string) !== 'FAILED') {
         this.setStage('COMPLETE');
@@ -986,7 +1012,7 @@ ${chunk}`;
       return true;
     });
 
-    const parsed = { products: uniqueProducts, standards: uniqueStandards };
+    const parsed = { products: uniqueProducts, standards: uniqueStandards } as any;
 
     const specData: SpecificationData = {
       products: Array.isArray(parsed.products) ? parsed.products : [],
@@ -1131,145 +1157,111 @@ ${text.substring(0, 300000)}`;
    * Stage 5: Place elements using grid coordinates with all prior stage data.
    * Requires confirmed grid. Writes elements to DB via storage.upsertBimElements.
    */
-  private async runStage5_FloorPlans(notify: StatusCallback): Promise<void> {
-    this.setStage('FLOOR_PLANS');
-    this.startTiming('FLOOR_PLANS');
+  // ──────────────────────────────────────────────────────────────────────────
+  // Stage 5A: CANDIDATE EXTRACTION — Claude classifies elements, code resolves
+  // ──────────────────────────────────────────────────────────────────────────
+  private async runStage5A_CandidateExtraction(notify: StatusCallback): Promise<void> {
+    this.setStage('FLOOR_PLANS' as PipelineStage);
+    this.startTiming('FLOOR_PLANS_5A');
     await this.saveState();
 
-    // Send ALL documents — Claude needs to cross-reference floor plans with
-    // sections, assemblies, schedules, and specs to get real dimensions.
     const docsToUse = this.documents;
     const text = collectText(docsToUse);
-
-    // Load ALL PDFs so Claude can see drawings, not just OCR text
     const pdfBuffers = await loadPdfBuffers(docsToUse);
-    logger.info(`Stage 5: ${docsToUse.length} docs, ${pdfBuffers.length} PDFs loaded for element placement`);
+
+    logger.info(`Stage 5A: ${docsToUse.length} docs, ${pdfBuffers.length} PDFs for candidate extraction`);
 
     if (!text.trim() && pdfBuffers.length === 0) {
-      logger.warn('Stage 5: No content found for floor plan extraction', { modelId: this.modelId });
+      logger.warn('Stage 5A: No content found', { modelId: this.modelId });
       this.state.stageResults.floorPlans = { elementCount: 0 };
-      this.endTiming('FLOOR_PLANS');
+      this.endTiming('FLOOR_PLANS_5A');
       await this.saveState();
       return;
     }
 
-    // Build full context from all prior stages
     const fullContext = buildFullContext(this.state.stageResults);
 
-    const systemPrompt = `You are a senior Quantity Surveyor building a BIM model from construction documents. ALL documents belong to ONE project and must be read TOGETHER. Information is spread across multiple document types — you must ASSEMBLE the full picture by cross-referencing.
+    const systemPrompt = `You are a senior Quantity Surveyor CLASSIFYING building elements from construction drawings.
 
-CRITICAL — WHERE TO FIND EACH DIMENSION (no hardcoded values allowed):
+YOUR JOB: Identify every element on the floor plans — report its TYPE, GRID LOCATION, TYPE CODE/MARK, and STOREY. The code will resolve actual dimensions from schedules and assembly data. You do NOT need to resolve dimensions.
 
-WALLS:
-- POSITION (x, y): from FLOOR PLANS — wall shown between grid intersections
-- THICKNESS: from CONSTRUCTION ASSEMBLY DETAILS — look up the wall type code (e.g. EW1, IW3D) shown on the floor plan, then find that assembly's detail drawing which lists every layer and its thickness. Sum all layers = total wall thickness.
-- HEIGHT: determined by combining multiple sources:
-  * CEILING HEIGHT from reflected ceiling plan or building sections
-  * WALL EXTENSION ABOVE CEILING from the construction assembly detail — it shows whether gypsum stops at ceiling level, continues to underside of slab above, or continues to underside of deck. Read this from the assembly detail, not assumed.
-  * TOTAL WALL HEIGHT = ceiling height + extension above ceiling (both from drawings)
-- MATERIAL: from the construction assembly detail layers
+For each element, report:
+- TYPE: wall, door, window, column, beam, slab, stair, mep
+- GRID REFERENCE: which grid intersection(s) the element is at or between (use the confirmed grid labels)
+- TYPE CODE or MARK: wall assembly code (EW1, IW3D) or door/window mark (D101, W201) as shown on the plan
+- STOREY: which floor level
+- EVIDENCE: which document and what you observed
 
-DOORS:
-- POSITION: from FLOOR PLANS — arc symbol shows location and swing direction
-- MARK: from FLOOR PLANS — label next to the door symbol (e.g. D101)
-- WIDTH and HEIGHT: from DOOR SCHEDULE — look up the mark in the schedule table. The schedule has columns for width, height, type, fire rating, hardware set, frame material.
-- If the schedule doesn't list a height, check the ELEVATION DRAWINGS for the door in its wall context.
-- If NEITHER schedule nor elevation shows height, create an RFI — do NOT use any assumed value.
+POSITIONING RULES:
+- Use GRID REFERENCES (gridStart/gridEnd for walls/beams, gridNearest for doors/windows/columns)
+- Add offset_m (in metres) for elements not exactly on a grid line
+- Wall START is one end, wall END is the other end — the code will compute length, midpoint, and rotation
+- The origin (0,0) is at the confirmed grid origin label shown in the grid data below
 
-WINDOWS:
-- POSITION: from FLOOR PLANS — parallel lines in wall
-- MARK: from FLOOR PLANS — label
-- WIDTH and HEIGHT: from WINDOW SCHEDULE — look up mark
-- SILL HEIGHT: from WINDOW SCHEDULE "SILL" column, or from ELEVATION DRAWINGS
-- If not in schedule or elevation, create an RFI — do NOT assume any sill height.
-
-COLUMNS:
-- POSITION: from ARCHITECTURAL PLANS and/or STRUCTURAL PLANS — both show column locations on the grid. Cross-check both — if positions differ, flag as RFI (coordination issue).
-- SIZE: from ARCHITECTURAL PLANS (may show outline) and STRUCTURAL SCHEDULE/PLANS (shows exact dimensions and reinforcement). Use structural as primary source, verify against architectural.
-- HEIGHT: from BUILDING SECTIONS — floor-to-floor height at the column location
-
-SLABS:
-- BOUNDARY: from ARCHITECTURAL FLOOR PLANS (floor plate outline) and/or STRUCTURAL PLANS (may show different edge conditions). Cross-check both.
-- THICKNESS: from ARCHITECTURAL SECTIONS (shows slab in context) and/or STRUCTURAL DETAILS (shows exact depth, reinforcement, topping). Use whichever source provides the dimension — if both show it, verify they match.
-- If neither shows it, create an RFI.
-
-CROSS-DISCIPLINE VERIFICATION:
-- Architectural and Structural drawings often show the SAME elements (columns, slabs, shear walls). Check BOTH.
-- If dimensions differ between disciplines, flag as RFI with both values noted.
-- The design INTENT comes from Architectural. The design IMPLEMENTATION comes from Structural. Both are needed for accurate modeling.
-
-CEILINGS:
-- CEILING HEIGHT: from REFLECTED CEILING PLANS (RCP) — shows height per room/zone
-- CEILING TYPE: from RCP — suspended, direct-applied, exposed structure
-- PLENUM SPACE: from BUILDING SECTIONS — gap between ceiling finish and slab above
-- All of these affect wall height calculation
-
-EVERY DIMENSION MUST COME FROM THE DRAWINGS. If a dimension is not found in any document, create an RFI listing which document type should contain it. NEVER substitute a "standard" or "typical" value.
+Leave dimension fields as null — the resolver will fill them from schedule/assembly data:
+- thickness_mm, height_m, width_mm, height_mm → all null
+- The code has the door schedule, window schedule, wall assemblies, and storey heights from prior stages
 
 Return valid JSON only.`;
 
-    const userPrompt = `Here is all the data extracted from prior stages of this project:
+    const userPrompt = `Prior stage data (schedules, assemblies, specs, confirmed grid):
 
 ${fullContext}
 
-Now place EVERY element visible on these floor plans using grid coordinates.
-For EACH element, you MUST cross-reference:
-- Walls → get thickness from assembly data above, height from storey ceiling_height + spec extension
-- Doors → get width/height from door schedule above, match by mark (D101, D102, etc.)
-- Windows → get width/height from window schedule above, match by mark
-- Columns → get size from structural data, height from floor-to-floor
-- Slabs → get thickness from structural sections
+CLASSIFY every element visible on the floor plans. Use the EXACT field names shown below.
 
-Return a JSON object with this structure (ALL values must come from the drawings — these are FORMAT EXAMPLES ONLY, not real values):
-
+Return JSON:
 {
-  "elements": [
-    {
-      "type": "wall",
-      "name": "EXTRACT_FROM_DRAWINGS",
-      "category": "Architectural",
-      "assemblyCode": "WALL_TYPE_CODE_FROM_PLAN",
-      "storey": "FLOOR_NAME_FROM_DRAWINGS",
-      "gridStart": { "alpha": "GRID_LETTER", "numeric": "GRID_NUMBER" },
-      "gridEnd": { "alpha": "GRID_LETTER", "numeric": "GRID_NUMBER" },
-      "offset_m": { "x": 0.0, "y": 0.0 },
-      "length_m": "MEASURE_FROM_GRID_SPACING",
-      "height_m": "CEILING_HEIGHT_FROM_RCP_PLUS_EXTENSION_FROM_ASSEMBLY",
-      "thickness_mm": "SUM_ALL_LAYERS_FROM_ASSEMBLY_DETAIL",
-      "material": "FROM_ASSEMBLY_DETAIL",
-      "fire_rating": "FROM_ASSEMBLY_DETAIL_OR_SPECS",
-      "properties": { "extension_above_ceiling_mm": "FROM_ASSEMBLY_DETAIL", "layers": "FROM_ASSEMBLY_DETAIL" }
-    },
-    {
-      "type": "door",
-      "name": "DOOR_MARK_FROM_PLAN",
-      "category": "Architectural",
-      "mark": "DOOR_MARK_FROM_PLAN",
-      "storey": "FLOOR_NAME",
-      "gridNearest": { "alpha": "NEAREST_GRID", "numeric": "NEAREST_GRID" },
-      "offset_m": { "x": "DISTANCE_FROM_GRID", "y": "DISTANCE_FROM_GRID" },
-      "width_mm": "FROM_DOOR_SCHEDULE",
-      "height_mm": "FROM_DOOR_SCHEDULE_OR_ELEVATION",
-      "hostWall": "WALL_TYPE_CONTAINING_DOOR",
-      "swing": "FROM_PLAN_ARC_SYMBOL",
-      "properties": { "fire_rating": "FROM_DOOR_SCHEDULE", "hardware_set": "FROM_DOOR_SCHEDULE" }
-    }
+  "walls": [
+    { "candidateId": "W-F1-001", "type": "wall", "storey": "FLOOR_NAME",
+      "wall_type_code": "CODE_FROM_PLAN", "gridStart": {"alpha":"LETTER","numeric":"NUMBER"},
+      "gridEnd": {"alpha":"LETTER","numeric":"NUMBER"}, "offset_m": {"x":0,"y":0},
+      "start_m": null, "end_m": null, "thickness_mm": null, "height_m": null,
+      "base_elevation_m": null, "material": null, "fire_rating": null,
+      "extension_above_ceiling_mm": null, "status": "unresolved",
+      "evidence_sources": [{"documentName":"SHEET","extractionMethod":"visual","confidence":"high","value_extracted":"WHAT_YOU_SAW"}],
+      "review_notes": [] }
   ],
+  "doors": [
+    { "candidateId": "D-F1-001", "type": "door", "storey": "FLOOR_NAME",
+      "mark": "MARK_FROM_PLAN", "gridNearest": {"alpha":"LETTER","numeric":"NUMBER"},
+      "offset_m": {"x":0,"y":0}, "position_m": null,
+      "width_mm": null, "height_mm": null, "thickness_mm": null,
+      "host_wall_type": "WALL_CODE", "swing": "FROM_ARC",
+      "fire_rating": null, "hardware_set": null, "status": "unresolved",
+      "evidence_sources": [], "review_notes": [] }
+  ],
+  "windows": [
+    { "candidateId": "WIN-F1-001", "type": "window", "storey": "FLOOR_NAME",
+      "mark": "MARK_FROM_PLAN", "gridNearest": {"alpha":"LETTER","numeric":"NUMBER"},
+      "offset_m": {"x":0,"y":0}, "position_m": null,
+      "width_mm": null, "height_mm": null, "sill_height_mm": null,
+      "glazing": null, "host_wall_type": null, "status": "unresolved",
+      "evidence_sources": [], "review_notes": [] }
+  ],
+  "columns": [
+    { "candidateId": "COL-F1-001", "type": "column", "storey": "FLOOR_NAME",
+      "gridPosition": {"alpha":"LETTER","numeric":"NUMBER"}, "offset_m": {"x":0,"y":0},
+      "position_m": null, "size_string": "FROM_PLAN_OR_SCHEDULE",
+      "width_mm": null, "depth_mm": null, "height_m": null,
+      "material": null, "reinforcement": null, "status": "unresolved",
+      "evidence_sources": [], "review_notes": [] }
+  ],
+  "slabs": [], "beams": [], "stairs": [], "mep": [],
   "storeys": [
-    { "name": "FROM_SECTIONS", "elevation": "FROM_SECTIONS", "floor_to_floor_height_m": "FROM_SECTIONS", "ceiling_height_m": "FROM_RCP_OR_SECTIONS" }
+    { "name": "FLOOR_NAME", "elevation_m": 0, "floor_to_floor_height_m": null, "ceiling_height_m": null }
   ]
 }
 
-MANDATORY RULES:
-- "type" MUST be set for every element (wall, door, window, column, beam, slab, stair, mep) — never undefined
-- Place EVERY wall, column, beam, slab, door, window, stair, and MEP element visible on each floor
-- Use grid references (alpha + numeric) for positioning, with offsets in metres from the nearest grid intersection
-- Door/window MARKS must match the schedule data — use the schedule dimensions, not plan-view line thickness
-- Wall ASSEMBLY CODES must match the section data — use the assembly thickness, not plan-view line thickness
-- Include BOTH ceiling_height_m AND floor_to_floor_height_m per storey
-- TYPICAL FLOOR RULE: if drawings show "Typical Floor" for multiple levels, create SEPARATE element entries for each floor with unique IDs (F2-W1, F3-W1, etc.)
-- This should produce HUNDREDS of elements for a real building — be exhaustive
-- Return ONLY the JSON object, no other text
+RULES:
+- "type" MUST be set (wall/door/window/column/beam/slab/stair/mep)
+- Use grid labels from the confirmed grid data above
+- Leave ALL dimension fields null — the resolver fills them from schedules/assemblies
+- Report wall_type_code and door/window mark EXACTLY as shown on drawings
+- candidateId format: TYPE-FLOOR-NUMBER (W-F1-001, D-F2-003, etc.)
+- TYPICAL FLOOR: create separate entries per floor (W-F2-001, W-F3-001, etc.)
+- Be EXHAUSTIVE — hundreds of elements for a real building
+- Return ONLY JSON, no other text
 
 DOCUMENTS:
 ${text.substring(0, 300000)}`;
@@ -1287,172 +1279,210 @@ ${text.substring(0, 300000)}`;
       fullContext + '\n\n' + text.substring(0, 200000), 64000
     );
 
-    // Handle multi-batch responses — merge elements and storeys from all batches
+    // Parse multi-batch responses into CandidateSet
     const batchResponses = response.split('---BATCH_SEPARATOR---').filter(Boolean);
-    let elements: any[] = [];
-    let storeys: any[] = [];
+    const candidateSet: CandidateSet = {
+      walls: [], doors: [], windows: [], columns: [],
+      slabs: [], beams: [], stairs: [], mep: [],
+      storeys: [],
+      metadata: { extractedAt: new Date().toISOString(), documentCount: docsToUse.length, totalCandidates: 0 },
+    };
+
     for (const batchResp of batchResponses) {
       const parsed = parseFirstJsonObject(batchResp);
-      if (Array.isArray(parsed.elements)) elements.push(...parsed.elements);
+      if (Array.isArray(parsed.walls)) candidateSet.walls.push(...parsed.walls);
+      if (Array.isArray(parsed.doors)) candidateSet.doors.push(...parsed.doors);
+      if (Array.isArray(parsed.windows)) candidateSet.windows.push(...parsed.windows);
+      if (Array.isArray(parsed.columns)) candidateSet.columns.push(...parsed.columns);
+      if (Array.isArray(parsed.slabs)) candidateSet.slabs.push(...parsed.slabs);
+      if (Array.isArray(parsed.beams)) candidateSet.beams.push(...parsed.beams);
+      if (Array.isArray(parsed.stairs)) candidateSet.stairs.push(...parsed.stairs);
+      if (Array.isArray(parsed.mep)) candidateSet.mep.push(...parsed.mep);
+      // Legacy: if Claude returns flat "elements" array, sort into typed arrays
+      if (Array.isArray(parsed.elements)) {
+        for (const el of parsed.elements) {
+          const t = (el.type || '').toLowerCase();
+          if (t.includes('wall')) candidateSet.walls.push({ ...el, type: 'wall' });
+          else if (t.includes('door')) candidateSet.doors.push({ ...el, type: 'door', mark: el.mark || el.name });
+          else if (t.includes('window')) candidateSet.windows.push({ ...el, type: 'window', mark: el.mark || el.name });
+          else if (t.includes('column')) candidateSet.columns.push({ ...el, type: 'column' });
+          else if (t.includes('slab')) candidateSet.slabs.push({ ...el, type: 'slab' });
+          else if (t.includes('beam')) candidateSet.beams.push({ ...el, type: 'beam' });
+          else if (t.includes('stair')) candidateSet.stairs.push({ ...el, type: 'stair' });
+          else if (t.includes('mep') || t.includes('light') || t.includes('sprinkler') || t.includes('electrical'))
+            candidateSet.mep.push({ ...el, type: 'mep', category: el.category || 'electrical', mep_type: el.mep_type || t });
+        }
+      }
       if (Array.isArray(parsed.storeys)) {
         for (const s of parsed.storeys) {
-          if (!storeys.find((existing: any) => existing.name === s.name)) {
-            storeys.push(s);
+          if (!candidateSet.storeys.find(existing => existing.name === s.name)) {
+            candidateSet.storeys.push(s);
           }
         }
       }
     }
-    logger.info(`Stage 5: Merged ${elements.length} elements and ${storeys.length} storeys from ${batchResponses.length} batch(es)`);
 
-    // Enrich existing elements: match Claude's output to existing BIM elements by mark/type/storey/name.
-    // This preserves the 886 existing elements and updates their grid positions + dimensions in-place.
-    const existingElements = await storage.getBimElements(this.modelId);
-    let enrichedCount = 0;
-    let heightPassCount = 0;
+    // Ensure base fields on all candidates
+    const ensureBase = (c: any, prefix: string, idx: number) => {
+      if (!c.candidateId) c.candidateId = `${prefix}-${idx}`;
+      if (!c.storey) c.storey = 'Unknown';
+      if (!c.status) c.status = 'unresolved';
+      if (!Array.isArray(c.evidence_sources)) c.evidence_sources = [];
+      if (!Array.isArray(c.review_notes)) c.review_notes = [];
+      if (!c.offset_m) c.offset_m = { x: 0, y: 0 };
+    };
+    candidateSet.walls.forEach((c, i) => ensureBase(c, 'W', i));
+    candidateSet.doors.forEach((c, i) => { ensureBase(c, 'D', i); if (!c.mark) c.mark = c.candidateId; });
+    candidateSet.windows.forEach((c, i) => { ensureBase(c, 'WIN', i); if (!c.mark) c.mark = c.candidateId; });
+    candidateSet.columns.forEach((c, i) => ensureBase(c, 'COL', i));
+    candidateSet.slabs.forEach((c, i) => ensureBase(c, 'SLB', i));
+    candidateSet.beams.forEach((c, i) => ensureBase(c, 'BM', i));
+    candidateSet.stairs.forEach((c, i) => ensureBase(c, 'STR', i));
+    candidateSet.mep.forEach((c, i) => { ensureBase(c, 'MEP', i); if (!c.category) c.category = 'electrical'; if (!c.mep_type) c.mep_type = 'device'; });
 
-    // Build a storey lookup from Claude's response for height data
-    const storeyByName = new Map<string, any>();
-    for (const s of storeys) {
-      storeyByName.set((s.name || '').toLowerCase().replace(/\s+/g, ''), s);
-    }
+    const total = candidateSet.walls.length + candidateSet.doors.length + candidateSet.windows.length +
+      candidateSet.columns.length + candidateSet.slabs.length + candidateSet.beams.length +
+      candidateSet.stairs.length + candidateSet.mep.length;
+    candidateSet.metadata.totalCandidates = total;
 
-    for (const el of elements) {
-      const elMark = (el.mark || el.scheduleMark || '').toString().trim().toUpperCase();
-      const elType = (el.type || '').toLowerCase();
-      const elStoreyRaw = typeof el.storey === 'string' ? el.storey : el.storey?.name || '';
-      const elStoreyNorm = elStoreyRaw.toLowerCase().replace(/\s+/g, '');
-      const elNameLower = (el.name || '').toLowerCase();
-
-      const match = existingElements.find((ex) => {
-        const exProps = typeof ex.properties === 'string'
-          ? (() => { try { return JSON.parse(ex.properties as string); } catch { return {}; } })()
-          : (ex.properties as any) || {};
-        const exMark = (
-          exProps.mark || exProps.tag || exProps.doorMark || exProps.windowMark || ex.elementId || ''
-        ).toString().trim().toUpperCase();
-        const exStoreyRaw = ex.storeyName || (typeof ex.storey === 'string' ? ex.storey : (ex.storey as any)?.name || '');
-        const exStoreyName = exStoreyRaw.toLowerCase().replace(/\s+/g, '');
-        const exTypeLower = (ex.elementType || '').toLowerCase();
-        const typeMatch = elType.length > 0 && (exTypeLower === elType || exTypeLower.includes(elType) || elType.includes(exTypeLower));
-        if (elMark && exMark) return exMark === elMark && typeMatch;
-        return (
-          typeMatch &&
-          (!elStoreyNorm || exStoreyName.includes(elStoreyNorm) || elStoreyNorm.includes(exStoreyName)) &&
-          (ex.name || '').toLowerCase() === elNameLower
-        );
-      });
-
-      if (match) {
-        const existingLoc = typeof match.location === 'string'
-          ? (() => { try { return JSON.parse(match.location as string); } catch { return {}; } })()
-          : (match.location as any) || {};
-
-        const storeyInfo = storeyByName.get(elStoreyNorm) || null;
-        const heightM: number | null = el.height_m ?? storeyInfo?.floor_to_floor_height_m ?? null;
-        const thicknessM: number | null = el.thickness_mm ? el.thickness_mm / 1000 : null;
-
-        const existingGeom = (() => {
-          try {
-            return typeof match.geometry === 'string'
-              ? JSON.parse(match.geometry as string)
-              : (match.geometry as any) || {};
-          } catch { return {}; }
-        })();
-        const updatedGeom = (heightM !== null || thicknessM !== null) ? {
-          ...existingGeom,
-          dimensions: {
-            ...existingGeom.dimensions,
-            ...(heightM !== null ? { height: heightM } : {}),
-            ...(thicknessM !== null ? { depth: thicknessM } : {}),
-          },
-        } : null;
-
-        await storage.updateBimElement(match.id, {
-          location: JSON.stringify({
-            ...existingLoc,
-            gridStart: el.gridStart,
-            gridEnd: el.gridEnd,
-            gridNearest: el.gridNearest,
-            offset_m: el.offset_m,
-          }) as any,
-          ...(updatedGeom ? { geometry: JSON.stringify(updatedGeom) as any } : {}),
-          ...(elStoreyRaw ? { storeyName: elStoreyRaw } : {}),
-        });
-        enrichedCount++;
-      }
-    }
-
-    logger.info('Stage 5: Elements enriched via Claude matching', {
-      modelId: this.modelId,
-      elementCount: enrichedCount,
-    });
-
-    // Height pass: assign floor-to-floor height from confirmed storeys for any
-    // existing elements that still have placeholder height (≤5cm).
-    const dbStoreys = await storage.getBimStoreys(this.modelId);
-    for (const storey of dbStoreys) {
-      const floorHeight = (storey as any).floor_to_floor_height_m || (storey as any).floorToFloorHeight || 0;
-      if (!floorHeight) continue;
-      const storeyEls = existingElements.filter((ex) => {
-        const exStorey = ex.storeyName || '';
-        return exStorey.toLowerCase().replace(/\s+/g, '') ===
-          (storey.name || '').toLowerCase().replace(/\s+/g, '');
-      });
-      for (const ex of storeyEls) {
-        const geom = (() => {
-          try { return typeof ex.geometry === 'string' ? JSON.parse(ex.geometry as string) : (ex.geometry as any) || {}; }
-          catch { return {}; }
-        })();
-        const curHeight = geom?.dimensions?.height ?? 0;
-        if (curHeight > 0.05) continue; // already has real height — skip
-        const updatedGeom = {
-          ...geom,
-          dimensions: { ...geom.dimensions, height: floorHeight },
-        };
-        await storage.updateBimElement(ex.id, {
-          geometry: JSON.stringify(updatedGeom) as any,
-          storeyName: storey.name,
-          elevation: String((storey as any).elevation ?? 0),
-        });
-        heightPassCount++;
-      }
-    }
-
-    logger.info('Stage 5: Elements written to DB', {
-      modelId: this.modelId,
-      elementCount: enrichedCount + heightPassCount,
-      enrichedByClaudeMatch: enrichedCount,
-      heightPassUpdated: heightPassCount,
-    });
-
-    // Write storeys to DB only if none exist yet.
-    // If B1 already confirmed storeys for this model, Stage 5 must NOT overwrite them —
-    // the DB storeys are the canonical source and Stage 5's Claude output may use
-    // different naming conventions (e.g. "Level 1" vs "Ground Floor").
-    if (dbStoreys.length === 0 && storeys.length > 0) {
-      await storage.upsertBimStoreys(this.modelId, storeys);
-    } else {
-      logger.info('Stage 5: Skipping storey upsert — DB already has confirmed storeys', {
-        modelId: this.modelId,
-        existingStoreys: dbStoreys.length,
-      });
-    }
-
-    // Update model status
-    await storage.updateBimModel(this.modelId, { status: 'completed' });
-
-    this.state.stageResults.floorPlans = { elementCount: enrichedCount + heightPassCount, claudeExtracted: elements.length };
-    this.endTiming('FLOOR_PLANS');
+    // Save candidates for Stage 5B
+    (this.state.stageResults as any).candidates = candidateSet;
+    this.state.currentStage = 'FLOOR_PLANS_5B' as PipelineStage;
+    this.endTiming('FLOOR_PLANS_5A');
     await this.saveState();
 
-    logger.info('Stage 5 complete', {
-      modelId: this.modelId,
-      enriched: enrichedCount,
-      heightPassUpdated: heightPassCount,
-      claudeExtracted: elements.length,
-      storeys: storeys.length,
+    logger.info('Stage 5A complete', { modelId: this.modelId, totalCandidates: total, storeys: candidateSet.storeys.length });
+    await notify(0.82, `5A complete: ${total} candidates classified from ${candidateSet.storeys.length} storeys`);
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Stage 5B: PARAMETER RESOLUTION — deterministic, no AI
+  // ──────────────────────────────────────────────────────────────────────────
+  private async runStage5B_ParameterResolution(notify: StatusCallback): Promise<void> {
+    this.startTiming('FLOOR_PLANS_5B');
+
+    const candidateSet = (this.state.stageResults as any).candidates as CandidateSet | undefined;
+    if (!candidateSet) {
+      logger.warn('Stage 5B: No candidates from 5A', { modelId: this.modelId });
+      this.state.currentStage = 'FLOOR_PLANS_5C' as PipelineStage;
+      this.endTiming('FLOOR_PLANS_5B');
+      await this.saveState();
+      return;
+    }
+
+    const schedules = this.state.stageResults.schedules || { doors: [], windows: [], finishes: [], units: 'mm' as const };
+    const sections = this.state.stageResults.sections || { wallTypes: {}, slabTypes: {}, roofTypes: {}, units: 'mm' as const };
+    const grid = this.state.stageResults.grid || {
+      alphaGridlines: [], numericGridlines: [],
+      alphaDirection: 'left_to_right' as const, numericDirection: 'bottom_to_top' as const,
+      originLabel: { letter: 'A', number: '1' }, notes: [], confirmed: false,
+    };
+
+    // Compute sheet→model coordinate transform from grid data
+    try {
+      const transform = computeAndStoreTransform(grid, grid);
+      if (transform) {
+        logger.info('Stage 5B: Coordinate transform computed', {
+          scale: transform.scale, rotation: transform.rotation_deg, residual: transform.residual
+        });
+      }
+    } catch (err) {
+      logger.warn('Stage 5B: Transform computation failed (non-fatal)', { error: (err as Error).message });
+    }
+
+    // Run deterministic parameter resolution
+    const { candidates: resolved, stats } = resolveParameters(candidateSet, schedules, sections, grid);
+
+    (this.state.stageResults as any).candidates = resolved;
+    (this.state.stageResults as any).resolutionStats = stats;
+    this.state.currentStage = 'FLOOR_PLANS_5C' as PipelineStage;
+    this.endTiming('FLOOR_PLANS_5B');
+    await this.saveState();
+
+    logger.info('Stage 5B complete', { modelId: this.modelId, ...stats });
+    await notify(0.88, `5B complete: ${stats.resolved}/${stats.total} resolved, ${stats.unresolved} need review`);
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Stage 5C: MESH GENERATION — deterministic geometry, no AI
+  // ──────────────────────────────────────────────────────────────────────────
+  private async runStage5C_MeshGeneration(notify: StatusCallback): Promise<void> {
+    this.startTiming('FLOOR_PLANS_5C');
+
+    const candidateSet = (this.state.stageResults as any).candidates as CandidateSet | undefined;
+    if (!candidateSet) {
+      logger.warn('Stage 5C: No candidates', { modelId: this.modelId });
+      this.state.stageResults.floorPlans = { elementCount: 0 };
+      this.endTiming('FLOOR_PLANS_5C');
+      await this.saveState();
+      return;
+    }
+
+    // Build meshes deterministically from resolved candidates
+    const meshElements = buildMeshes(candidateSet);
+
+    // Transform to DB format
+    const dbElements = meshElements.map((el, idx) => ({
+      id: `ir_${this.modelId}_${idx}`,
+      elementId: el.candidateId,
+      type: el.elementType,
+      elementType: el.elementType,
+      name: el.name,
+      category: el.category,
+      storey: { name: el.storeyName },
+      storeyName: el.storeyName,
+      material: el.material,
+      quantity: 1,
+      properties: el.properties,
+      geometry: el.geometry,
+      location: el.location,
+      rfiFlag: el.rfiFlag,
+      needsAttention: el.needsAttention,
+      attentionReason: el.attentionReason,
+    }));
+
+    // Write elements to DB
+    if (dbElements.length > 0) {
+      await storage.upsertBimElements(this.modelId, dbElements);
+      logger.info('Stage 5C: Elements written to DB', { modelId: this.modelId, count: dbElements.length });
+    }
+
+    // Write storeys (guard confirmed)
+    if (candidateSet.storeys.length > 0) {
+      const dbStoreys = await storage.getBimStoreys(this.modelId);
+      if (dbStoreys.length === 0) {
+        await storage.upsertBimStoreys(this.modelId, candidateSet.storeys.map(s => ({
+          name: s.name, elevation: s.elevation_m,
+          floorToFloorHeight: s.floor_to_floor_height_m, ceilingHeight: s.ceiling_height_m,
+        })));
+      }
+    }
+
+    // Generate RFIs for unresolved candidates
+    const unresolved = collectUnresolved(candidateSet);
+    let rfiCount = 0;
+    if (unresolved.length > 0) {
+      try {
+        const model = await storage.getBimModel(this.modelId);
+        if (model) rfiCount = await generateReviewItems(unresolved, model.projectId);
+      } catch (err) {
+        logger.warn('Stage 5C: RFI generation failed (non-fatal)', { error: (err as Error).message });
+      }
+    }
+
+    await storage.updateBimModel(this.modelId, { status: 'completed' });
+
+    this.state.stageResults.floorPlans = { elementCount: dbElements.length };
+    this.endTiming('FLOOR_PLANS_5C');
+    await this.saveState();
+
+    const summary = buildReviewSummary(candidateSet);
+    logger.info('Stage 5C complete', {
+      modelId: this.modelId, meshElements: dbElements.length,
+      unresolvedCount: unresolved.length, rfis: rfiCount,
+      resolved: summary.resolved, total: summary.total,
     });
 
-    await notify(0.95, `Floor plans complete: ${enrichedCount} elements grid-matched, ${heightPassCount} elements height-assigned from storeys, ${storeys.length} storeys`);
+    await notify(0.95, `5C complete: ${dbElements.length} 3D elements, ${unresolved.length} unresolved, ${rfiCount} RFIs`);
   }
 }

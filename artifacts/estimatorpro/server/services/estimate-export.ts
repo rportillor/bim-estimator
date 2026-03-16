@@ -284,7 +284,7 @@ export function buildEstimateGroupedCostCsv(elements: any[], keys: GroupKey[], u
 /* ---------------- XLSX with cost ---------------- */
 export async function buildEstimateXlsxBuffer(elements: any[]): Promise<Buffer> {
   let XLSX: any;
-  try { XLSX = await import("xlsx"); } catch { throw new Error('xlsx module not installed. Add "xlsx" to dependencies.'); }
+  try { XLSX = (await import("xlsx" as any)); } catch { try { XLSX = require("xlsx" as any); } catch { throw new Error('xlsx module not installed'); } }
   const rows = buildEstimateRows(elements);
   const tradeTotals  = buildEstimateGroupedRows(elements, ["trade"]);
   const typeTotals   = buildEstimateGroupedRows(elements, ["type"]);
@@ -299,7 +299,7 @@ export async function buildEstimateXlsxBuffer(elements: any[]): Promise<Buffer> 
 
 export async function buildEstimateCostXlsxBuffer(elements: any[], units: "metric"|"imperial", profileName?: string): Promise<Buffer> {
   let XLSX: any;
-  try { XLSX = await import("xlsx"); } catch { throw new Error('xlsx module not installed. Add "xlsx" to dependencies.'); }
+  try { XLSX = (await import("xlsx" as any)); } catch { try { XLSX = require("xlsx" as any); } catch { throw new Error('xlsx module not installed'); } }
   const rows = buildEstimateCostRows(elements, units, profileName);
   const trades = buildEstimateGroupedRows(elements, ["trade"]);
   const types  = buildEstimateGroupedRows(elements, ["type"]);

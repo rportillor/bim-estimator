@@ -8,7 +8,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { storage } from '../storage';
-import { detectRelationships } from '../services/relationship-engine';
+import { establishRelationships as detectRelationships } from '../services/relationship-engine';
 import { ParameterEngine, buildElementMap, buildConstraintsFromRelationships } from '../services/parameter-engine';
 import { RelationshipGraph } from '../services/relationship-graph';
 
@@ -45,12 +45,13 @@ bimElementMoveRouter.post(
       }
 
       // 2. Detect relationships
-      const relationships = detectRelationships(elements);
+      const relResult = detectRelationships(elements);
+      const relationships = relResult.relationships;
 
       // 3. Build constraint engine
       const elMap = buildElementMap(elements);
-      const constraints = buildConstraintsFromRelationships(relationships);
-      const graph = new RelationshipGraph(relationships);
+      const constraints = buildConstraintsFromRelationships(relationships as any);
+      const graph = new RelationshipGraph(relationships as any);
 
       const engine = new ParameterEngine(elMap, constraints);
       engine.setGraph(graph);

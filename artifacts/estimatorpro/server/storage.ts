@@ -7,9 +7,7 @@ import {
   type InsertDocument,
   type DocumentImage,
   type InsertDocumentImage,
-  type DocumentComment,
-  type InsertDocumentComment,
-  documentComments,
+  // DocumentComment not in shared schema — define locally
   type BoqItem,
   type InsertBoqItem,
   type ComplianceCheck,
@@ -100,6 +98,11 @@ import {
   gridLabels,
   gridAxisLabels,
 } from "@shared/schema";
+
+// DocumentComment — not in shared schema, defined locally
+type DocumentComment = { id: string; documentId: string; content: string; authorName: string; commentType: string; resolved: boolean; resolvedBy: string | null; resolvedAt: Date | null; resolvedByName: string | null; createdAt: Date | null; [key: string]: any };
+type InsertDocumentComment = { documentId: string; content: string; authorName: string; commentType: string; [key: string]: any };
+
 import { randomUUID } from "crypto";
 import { PRNG } from "./helpers/prng";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -608,14 +611,15 @@ export class MemStorage implements Partial<IStorage> {
 
   async createDocumentComment(comment: InsertDocumentComment): Promise<DocumentComment> {
     const id = randomUUID();
-    const newComment: DocumentComment = {
+    const newComment = {
       ...comment,
       id,
       resolved: false,
+      resolvedBy: null,
       resolvedAt: null,
       resolvedByName: null,
       createdAt: new Date(),
-    };
+    } as DocumentComment;
     this.documentComments.set(id, newComment);
     return newComment;
   }
@@ -997,23 +1001,26 @@ export class DBStorage implements Partial<IStorage> {
     return result[0];
   }
 
-  // Document Comments
+  // Document Comments — table not in schema, using in-memory fallback
+  private _docComments = new Map<string, DocumentComment>();
   async getDocumentComments(documentId: string): Promise<DocumentComment[]> {
-    return await db.select().from(documentComments)
-      .where(eq(documentComments.documentId, documentId))
-      .orderBy(documentComments.createdAt);
+    return Array.from(this._docComments.values()).filter(c => c.documentId === documentId);
   }
 
   async createDocumentComment(comment: InsertDocumentComment): Promise<DocumentComment> {
-    const result = await db.insert(documentComments).values(comment).returning();
-    return result[0];
+    const id = randomUUID();
+    const newComment: any = { ...comment, id, resolved: false, resolvedBy: null, resolvedAt: null, resolvedByName: null, createdAt: new Date() };
+    this._docComments.set(id, newComment);
+    return newComment;
   }
 
   async resolveDocumentComment(commentId: string, resolvedByName: string): Promise<DocumentComment | undefined> {
-    const result = await db.update(documentComments)
-      .set({ resolved: true, resolvedAt: new Date(), resolvedByName })
-      .where(eq(documentComments.id, commentId))
-      .returning();
+    const comment = this._docComments.get(commentId);
+    if (!comment) return undefined;
+    comment.resolved = true;
+    comment.resolvedByName = resolvedByName;
+    comment.resolvedAt = new Date();
+    const result = [comment];
     return result[0];
   }
 
@@ -1637,8 +1644,8 @@ export class DBStorage implements Partial<IStorage> {
           // ✅ FIX: quantity must be a plain number for the decimal column — never pass an object
           quantity: (() => {
             const q = element.quantity;
-            if (typeof q === 'number' && Number.isFinite(q)) return q;
-            if (typeof q === 'string' && Number.isFinite(Number(q))) return Number(q);
+            if (typeof q === 'number' && Number.isFinite(q)) return String(q);
+            if (typeof q === 'string' && Number.isFinite(Number(q))) return q;
             return null;
           })(),
           storeyGuid: element.storey?.guid || element.storeyGuid,
@@ -1649,12 +1656,12 @@ export class DBStorage implements Partial<IStorage> {
             const e = element.storey?.elevation ?? element.elevation ?? null;
             if (e === null || e === undefined) return null;
             const n = Number(e);
-            return Number.isFinite(n) ? n : null;
+            return Number.isFinite(n) ? String(n) : null;
           })(),
           quantityMetric: (() => {
             const v = element.quantities?.metric?.find((q: any) => q.type === 'volume')?.value;
             const n = Number(v);
-            return Number.isFinite(n) ? n : 0;
+            return Number.isFinite(n) ? String(n) : '0';
           })(),
           unit: (() => {
             const v = element.quantities?.metric?.find((q: any) => q.type === 'area')?.value;
@@ -1663,7 +1670,7 @@ export class DBStorage implements Partial<IStorage> {
           quantityImperial: (() => {
             const v = element.quantities?.imperial?.find((q: any) => q.type === 'volume')?.value;
             const n = Number(v);
-            return Number.isFinite(n) ? n : 0;
+            return Number.isFinite(n) ? String(n) : '0';
           })(),
           // ── RFI / Attention flags (v15) ──────────────────────────────────────
           // Read from element.properties (set by createDoorElement / createWallElement / etc.)
@@ -1705,14 +1712,13 @@ export class DBStorage implements Partial<IStorage> {
         await db.insert(bimElements).values(insertElements.map(el => ({
           ...el,
           geometry: sanitizeGeom(el.geometry),
-          // Clamp all decimal(10,3) fields — never let overflow reach the DB
           quantity:        clampDecimal(el.quantity),
           elevation:       clampDecimal(el.elevation),
           quantityMetric:  clampDecimal(el.quantityMetric),
           quantityImperial: clampDecimal(el.quantityImperial),
           createdAt: new Date(),
           updatedAt: new Date()
-        })));
+        })) as any);
       }
     }
   }

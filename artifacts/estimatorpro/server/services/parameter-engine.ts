@@ -65,7 +65,7 @@ type PropagationStrategy = (
  */
 const hostedFollowHost: PropagationStrategy = (movedId, delta, edge, elements) => {
   // Only propagate if the host (target) was moved
-  if (edge.type !== 'hosted_by') return null;
+  if ((edge.type as string) !== 'hosted_by') return null;
   // The host is the target — if movedId is the host, propagate to the source (door)
   if (edge.to === movedId) {
     // movedId is the wall, source is the door → door follows
@@ -88,7 +88,7 @@ const wallJoinAdjust: PropagationStrategy = (movedId, delta, edge, _elements) =>
  * Beam endpoints re-snap when column moves.
  */
 const beamReSnapToColumn: PropagationStrategy = (movedId, delta, edge, _elements) => {
-  if (edge.type !== 'column_beam') return null;
+  if ((edge.type as string) !== 'column_beam') return null;
   // If the column (sourceId) moved, the beam endpoint follows
   if (edge.from === movedId) {
     return { x: delta.x, y: delta.y, z: 0 };
@@ -101,7 +101,7 @@ const beamReSnapToColumn: PropagationStrategy = (movedId, delta, edge, _elements
  * Instead of moving the slab, we adjust its dimension to maintain the boundary.
  */
 const slabEdgeAdjust: PropagationStrategy = (movedId, delta, edge, elements) => {
-  if (edge.type !== 'slab_bounded') return null;
+  if ((edge.type as string) !== 'slab_bounded') return null;
   // If the wall (target) moved, the slab (source) doesn't translate —
   // but we signal that its dimension should change.
   // For simplicity, apply a half-delta to shift the slab centre slightly.

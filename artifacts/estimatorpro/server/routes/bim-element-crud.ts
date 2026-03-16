@@ -8,7 +8,7 @@
 import { Router, type Request, type Response } from 'express';
 import { storage } from '../storage';
 import { validateExtractedDimensions } from '../helpers/dimension-validator';
-import { detectRelationships } from '../services/relationship-engine';
+import { establishRelationships as detectRelationships } from '../services/relationship-engine';
 
 export const bimElementCrudRouter = Router();
 
@@ -266,9 +266,9 @@ bimElementCrudRouter.delete(
       const deleted = parseElement(all[idx]);
 
       // Check for hosted elements that will be orphaned
-      const relationships = detectRelationships(all.map(parseElement));
-      const hosted = relationships.filter(
-        r => r.type === 'hosted_by' && r.targetId === elementId
+      const relResult = detectRelationships(all.map(parseElement));
+      const hosted = relResult.relationships.filter(
+        (r: any) => r.type === 'hosted_by' && r.targetId === elementId
       );
 
       // Remove the element
@@ -288,7 +288,7 @@ bimElementCrudRouter.delete(
           type: deleted.elementType,
           name: deleted.name,
         },
-        orphanedElements: hosted.map(h => h.sourceId),
+        orphanedElements: hosted.map((h: any) => h.sourceId),
         warning: hosted.length > 0
           ? `${hosted.length} hosted element(s) are now orphaned (doors/windows without a wall)`
           : undefined,

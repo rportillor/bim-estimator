@@ -220,7 +220,7 @@ export class RealQTOProcessor {
     try {
 
       registerMissingData({
-        category: 'drawing',
+        category: 'detail',
         description:
           'IFC file received but no Claude analysis was provided. ' +
           'Cannot extract elements without AI analysis of the IFC content. ' +
@@ -1026,7 +1026,7 @@ MANDATORY EXTRACTION REQUIREMENTS:
       try {
         const { registerMissingData } = require('./estimator/rfi-generator');
         registerMissingData({
-          category: 'drawing',
+          category: 'detail',
           description:
             'Claude analysis returned no floor data. ' +
             'Required: at least one floor plan or building section with labelled floor elevations, ' +
@@ -1525,7 +1525,7 @@ MANDATORY EXTRACTION REQUIREMENTS:
       try {
         const { registerMissingData } = require('./estimator/rfi-generator');
         registerMissingData({
-          category: 'drawing',
+          category: 'detail',
           description: `Wall '${wallData.id || 'UNKNOWN'}' on storey '${storey.name}' is missing start or end coordinates. ` +
             `Required: floor plan with wall endpoints in drawing coordinate system. Wall excluded from model.`,
           csiDivision: '03 00 00', impact: 'high',
@@ -1679,7 +1679,7 @@ MANDATORY EXTRACTION REQUIREMENTS:
       try {
         const { registerMissingData } = require('./estimator/rfi-generator');
         registerMissingData({
-          category: 'drawing',
+          category: 'detail',
           description: `Column '${colData.id || 'UNKNOWN'}' on storey '${storey.name}' has no x/y coordinates. ` +
             `Required: structural floor plan with column grid positions. Column excluded from model.`,
           csiDivision: '03 00 00', impact: 'high',
@@ -1694,7 +1694,7 @@ MANDATORY EXTRACTION REQUIREMENTS:
     const x = colData.x;
     if (colData.y == null) {
       try { const { registerMissingData } = require('./estimator/rfi-generator');
-        registerMissingData({ category: 'drawing', csiDivision: '03 00 00', impact: 'high',
+        registerMissingData({ category: 'detail', csiDivision: '03 00 00', impact: 'high',
           description: `Column '${colData.id || 'UNKNOWN'}' on storey '${storey.name}' has no y coordinate. Column excluded.`,
           drawingRef: `Structural plan — Column ${colData.id || 'UNKNOWN'}`, costImpactLow: 0, costImpactHigh: 0,
           assumptionUsed: 'column_excluded_no_y', discoveredBy: 'createColumnElement' }); } catch { /* non-fatal */ }
@@ -1704,7 +1704,7 @@ MANDATORY EXTRACTION REQUIREMENTS:
     const size = colData.size;
     if (!size) {
       try { const { registerMissingData } = require('./estimator/rfi-generator');
-        registerMissingData({ category: 'drawing', csiDivision: '03 00 00', impact: 'medium',
+        registerMissingData({ category: 'detail', csiDivision: '03 00 00', impact: 'medium',
           description: `Column '${colData.id || 'UNKNOWN'}' on storey '${storey.name}' has no size data. Required: structural schedule or plan with column dimensions.`,
           drawingRef: `Structural plan/schedule — Column ${colData.id || 'UNKNOWN'}`,
           costImpactLow: 0, costImpactHigh: 0, assumptionUsed: 'column_excluded_no_size',
@@ -1855,7 +1855,7 @@ MANDATORY EXTRACTION REQUIREMENTS:
     const positionMissing = (x == null || y == null);
     if (positionMissing) {
       try {
-        registerMissingData({ category: 'drawing', csiDivision: '08 00 00', impact: 'high',
+        registerMissingData({ category: 'detail', csiDivision: '08 00 00', impact: 'high',
           description: `Door '${doorData.id || 'UNKNOWN'}' on storey '${storey.name}' has no x/y coordinates. ` +
             `Required: floor plan door symbol position. Door included as RFI placeholder at (0,0).`,
           drawingRef: `Floor plan — Door ${doorData.id || 'UNKNOWN'}`, costImpactLow: 0, costImpactHigh: 0,
@@ -2008,7 +2008,7 @@ MANDATORY EXTRACTION REQUIREMENTS:
   private createWindowElement(winData: any, storey: StoreyData): RealBIMElement | null {
     if (winData.x == null || winData.y == null) {
       try {
-        registerMissingData({ category: 'drawing', csiDivision: '08 00 00', impact: 'medium',
+        registerMissingData({ category: 'detail', csiDivision: '08 00 00', impact: 'medium',
           description: `Window '${winData.id || 'UNKNOWN'}' on storey '${storey.name}' has no x/y coordinates. Window excluded.`,
           drawingRef: `Floor plan — Window ${winData.id || 'UNKNOWN'}`, costImpactLow: 0, costImpactHigh: 0,
           assumptionUsed: 'window_excluded_no_coordinates', discoveredBy: 'createWindowElement' }); } catch { /* non-fatal */ }
@@ -2180,7 +2180,7 @@ MANDATORY EXTRACTION REQUIREMENTS:
       try {
         const { registerMissingData } = require('./estimator/rfi-generator');
         registerMissingData({
-          category: 'drawing', csiDivision: '01 00 00', impact: 'medium',
+          category: 'detail', csiDivision: '01 00 00', impact: 'medium',
           description: `Room/space '${name}' on storey '${storey.name}' has no boundary polygon. ` +
             `Required: floor plan with room boundary. Room included as placeholder.`,
           drawingRef: `Floor plan — Room ${roomData.id || 'UNKNOWN'}, Storey ${storey.name}`,
