@@ -65,10 +65,15 @@ export default function BIM() {
     enabled: !projectId
   });
 
-  // Fetch BIM models for the project
+  // Fetch BIM models — polls every 3 seconds while pipeline is running
   const { data: bimModels = [], isLoading: modelsLoading } = useQuery<any[]>({
     queryKey: ['/api/projects', projectId, 'bim-models'],
-    enabled: !!projectId
+    enabled: !!projectId,
+    refetchInterval: (data: any) => {
+      const models = Array.isArray(data) ? data : (data?.data ?? []);
+      const anyGenerating = models.some((m: any) => m.status === 'generating' || m.status === 'processing');
+      return anyGenerating ? 3000 : false;
+    },
   });
 
   const activeModel = modelId 
@@ -466,6 +471,30 @@ export default function BIM() {
           <button onClick={() => setBatchRunResult(null)} className="ml-auto text-gray-400 hover:text-gray-600">✕</button>
         </div>
       )}
+
+      {/* Pipeline Progress Banner — shows while pipeline stages are running */}
+      {activeModel?.status === 'generating' && (() => {
+        const meta = activeModel?.metadata;
+        const parsed = meta ? (typeof meta === 'string' ? (() => { try { return JSON.parse(meta); } catch { return null; } })() : meta) : null;
+        const progress = parsed?.progress ?? 0;
+        const message = parsed?.lastMessage || 'Pipeline running…';
+        const pct = Math.round(progress * 100);
+        return (
+          <div className="px-6 py-3 bg-blue-50 border-b border-blue-200 text-blue-900 text-sm">
+            <div className="flex items-center gap-3 mb-1">
+              <span className="animate-spin inline-block">⟳</span>
+              <span className="font-semibold flex-1">{message}</span>
+              <span className="text-blue-600 font-mono text-xs">{pct}%</span>
+            </div>
+            <div className="w-full bg-blue-200 rounded-full h-1.5">
+              <div
+                className="bg-blue-600 h-1.5 rounded-full transition-all duration-500"
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Grid Confirmation Banner — shows when pipeline is paused waiting for grid review */}
       {(() => {

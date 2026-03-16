@@ -68,8 +68,9 @@ pipelineRouter.post('/:projectId/start', async (req: Request, res: Response) => 
       message: 'Sequential pipeline started. Poll /api/bim/pipeline/:modelId/status for progress.',
     });
 
-    // Run the pipeline asynchronously
+    // Run the pipeline asynchronously — always reset so a COMPLETE state doesn't skip all stages
     const pipeline = new SequentialPipeline(projectId, modelId);
+    await pipeline.resetState();
     const statusCallback = async (progress: number, message: string) => {
       try {
         await updateModelStatus(storage, modelId, {
