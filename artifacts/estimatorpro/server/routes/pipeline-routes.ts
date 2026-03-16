@@ -644,16 +644,38 @@ pipelineRouter.post('/:modelId/rerun-stage', async (req: Request, res: Response)
       progress: 0,
       lastMessage: `Re-running stage: ${stage}…`,
     });
-    await storage.updateBimModel(modelId, { status: 'pending' } as any);
+    // Fetch project documents (same as /start endpoint)
+    const documents = await storage.getDocuments(model.projectId);
+    if (documents.length === 0) {
+      return res.status(422).json({ ok: false, message: 'No documents linked to this project.' });
+    }
 
-    // Fire off the pipeline asynchronously (same pattern as /start)
-    const { SequentialPipeline } = await import('../pipeline/sequential-pipeline.js');
-    const pipeline = new SequentialPipeline(modelId);
-    pipeline.start().catch((err: Error) => {
-      logger.error('rerun-stage pipeline error', { modelId, stage, error: err.message });
-    });
+    await storage.updateBimModel(modelId, { status: 'generating' } as any);
 
+    // Build status callback (same pattern as /start and /confirm-grid)
+    const statusCallback = async (progress: number, message: string) => {
+      try {
+        await updateModelStatus(storage, modelId, {
+          status: progress >= 1.0 ? 'completed' : 'generating',
+          progress,
+          message,
+        });
+      } catch (err) {
+        logger.warn('rerun-stage status update failed', { error: (err as Error).message });
+      }
+    };
+
+    // Load existing state (preserves other stage results) — done before responding so any load error returns a 500
+    const pipeline = new SequentialPipeline(model.projectId, modelId);
+    await pipeline.loadState();
+
+    // Respond immediately, then kick off background run
     res.json({ ok: true, message: `Resetting ${stage} and re-running pipeline from that stage.` });
+
+    pipeline.run(documents, statusCallback).catch((err: Error) => {
+      logger.error('rerun-stage pipeline error', { modelId, stage, error: err.message });
+      updateModelStatus(storage, modelId, { status: 'failed', progress: 1.0, error: err.message }).catch(() => {});
+    });
   } catch (err) {
     logger.error('rerun-stage failed', { modelId, error: (err as Error).message });
     res.status(500).json({ ok: false, message: (err as Error).message });
