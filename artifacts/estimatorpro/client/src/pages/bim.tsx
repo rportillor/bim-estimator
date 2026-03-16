@@ -5,17 +5,10 @@ import BimViewer from "@/components/bim/bim-viewer";
 import { FloorGenerationButton } from "@/components/bim/FloorGenerationButton";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Layers, Eye, Download, ArrowLeft, Building, Zap, AlertTriangle, Grid, RefreshCw, ChevronDown } from "lucide-react";
+import { Layers, Eye, Download, ArrowLeft, Building, Zap, AlertTriangle, Grid } from "lucide-react";
 import { MissingDataDialog } from "@/components/dialogs/MissingDataDialog";
 import { GridConfirmationDialog } from "@/components/bim/GridConfirmationDialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { CandidateReviewPanel } from "@/components/pipeline/CandidateReviewPanel";
 
 export default function BIM() {
   const params = useParams();
@@ -23,6 +16,7 @@ export default function BIM() {
   const modelId = params.modelId;
   const [showMissingData, setShowMissingData] = useState(false);
   const [showGridConfig, setShowGridConfig] = useState(false);
+  const [showCandidateReview, setShowCandidateReview] = useState(false);
 
   // Fetch project details if projectId is provided
   const { data: project, isLoading: projectLoading } = useQuery({
@@ -229,84 +223,12 @@ export default function BIM() {
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={activeModel?.status === 'generating' || activeModel?.status === 'processing'}
-                  onClick={async () => {
-                    if (!activeModel?.id) return;
-                    if (!confirm('Apply Stage 1 (door dimensions) + Stage 2 (wall thicknesses) from pipeline results to existing elements?\n\nThis enriches the 886 existing BIM elements in-place without re-running the AI.')) return;
-                    try {
-                      const token = localStorage.getItem('auth_token');
-                      const resp = await fetch(`/api/bim/pipeline/${activeModel.id}/apply-stage-data`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
-                      });
-                      const data = await resp.json();
-                      if (resp.ok) {
-                        alert(`Applied: ${data.doorsUpdated} doors updated, ${data.wallsUpdated} walls updated (of ${data.totalElements} total elements).`);
-                        window.location.reload();
-                      } else {
-                        alert(`Failed: ${data.message}`);
-                      }
-                    } catch (e) { alert(`Failed: ${(e as Error).message}`); }
-                  }}
-                  className="text-xs px-2 py-1 h-6 bg-blue-50 border-blue-300 text-blue-700 hover:bg-blue-100"
-                  title="Apply Stage 1 (door dimensions) + Stage 2 (wall thicknesses) from pipeline results to existing elements"
+                  onClick={() => setShowCandidateReview(true)}
+                  className="text-xs px-2 py-1 h-6 hover:bg-purple-100 border-purple-300 text-purple-700"
+                  title="Review unresolved pipeline candidates and fill missing values"
                 >
-                  Apply Dims
+                  Review
                 </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={activeModel?.status === 'generating' || activeModel?.status === 'processing'}
-                      className="text-xs px-2 py-1 h-6 bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100 gap-1"
-                      title="Re-run any pipeline stage with the AI — all other stage results are preserved"
-                    >
-                      <RefreshCw className="h-3 w-3" />
-                      Re-run Stage
-                      <ChevronDown className="h-3 w-3" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-64">
-                    <DropdownMenuLabel className="text-xs text-muted-foreground">
-                      Choose a stage to re-run with AI. Other stages are preserved.
-                    </DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                    {[
-                      { stage: 'schedules',      label: 'Stage 1 — Door & Window Schedules',  desc: 'Re-extract door/window sizes and finish schedule from drawings.' },
-                      { stage: 'sections',       label: 'Stage 2 — Wall Sections',             desc: 'Re-extract wall assembly thicknesses from section drawings.' },
-                      { stage: 'specifications', label: 'Stage 3 — Specifications',            desc: 'Re-extract material specs, CSI codes, and standards from the spec document.' },
-                      { stage: 'floorPlans',     label: 'Stage 5 — Floor Plans',              desc: 'Re-place elements on floor plans using grid, schedules, and assemblies.' },
-                    ].map(({ stage, label, desc }) => (
-                      <DropdownMenuItem
-                        key={stage}
-                        className="flex flex-col items-start gap-0.5 cursor-pointer py-2"
-                        onClick={async () => {
-                          if (!activeModel?.id) return;
-                          if (!confirm(`Re-run ${label}?\n\n${desc}\n\nThis calls the AI and uses API credits. All other stage results are preserved.`)) return;
-                          try {
-                            const token = localStorage.getItem('auth_token');
-                            const resp = await fetch(`/api/bim/pipeline/${activeModel.id}/rerun-stage`, {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
-                              body: JSON.stringify({ stage }),
-                            });
-                            const data = await resp.json();
-                            if (resp.ok) {
-                              alert(`Started: ${data.message}\n\nWatch the progress bar. Once complete, click "Apply Dims" to apply updated dimensions.`);
-                              window.location.reload();
-                            } else {
-                              alert(`Failed: ${data.message}`);
-                            }
-                          } catch (e) { alert(`Failed: ${(e as Error).message}`); }
-                        }}
-                      >
-                        <span className="text-xs font-medium">{label}</span>
-                        <span className="text-xs text-muted-foreground leading-tight">{desc}</span>
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
                 <Button
                   variant="outline"
                   size="sm"
@@ -794,6 +716,18 @@ export default function BIM() {
           open={showGridConfig}
           onOpenChange={setShowGridConfig}
           onConfirmed={() => {
+            window.location.reload();
+          }}
+        />
+      )}
+
+      {/* Candidate Review Panel */}
+      {activeModel?.id && (
+        <CandidateReviewPanel
+          modelId={activeModel.id}
+          open={showCandidateReview}
+          onOpenChange={setShowCandidateReview}
+          onResolved={() => {
             window.location.reload();
           }}
         />

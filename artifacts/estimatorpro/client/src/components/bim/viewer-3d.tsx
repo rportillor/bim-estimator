@@ -824,32 +824,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         // ═══════════════════════════════════════════════════════════════
         // PRIORITY 1: Try to render from real mesh data (geometry kernel)
         // ═══════════════════════════════════════════════════════════════
-        let meshData = e?.geometry?.mesh || e?.mesh;
-
-        // Fix placeholder mesh height for walls: mesh z-vertices were computed with
-        // height=0.01 (1cm) but geometry.dimensions.height holds the real storey height.
-        // Scale z-vertices so walls render as proper 3D planes, not hairlines.
-        const elTypeStr = (e.type || e.elementType || '').toLowerCase();
-        if (elTypeStr.includes('wall') && meshData?.vertices?.length) {
-          const correctH = Number(e?.geometry?.dimensions?.height ?? 0);
-          let meshMinZ = Infinity;
-          let meshMaxZ = -Infinity;
-          for (let i = 2; i < meshData.vertices.length; i += 3) {
-            const z = meshData.vertices[i];
-            if (z < meshMinZ) meshMinZ = z;
-            if (z > meshMaxZ) meshMaxZ = z;
-          }
-          const meshZExtent = meshMaxZ - meshMinZ;
-          if (meshZExtent > 0 && meshZExtent <= 0.02 && correctH > 0.5) {
-            const scale = correctH / meshZExtent;
-            const fixedVerts = Array.from(meshData.vertices as number[]);
-            for (let i = 2; i < fixedVerts.length; i += 3) {
-              fixedVerts[i] = (fixedVerts[i] - meshMinZ) * scale;
-            }
-            meshData = { ...meshData, vertices: fixedVerts };
-          }
-        }
-
+        const meshData = e?.geometry?.mesh || e?.mesh;
         const realMeshGeo = createMeshFromSerialized(meshData);
 
         if (realMeshGeo) {
