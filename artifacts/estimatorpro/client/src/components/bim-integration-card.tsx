@@ -219,6 +219,19 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
       queryClient.invalidateQueries({ queryKey: ['/api/projects', projectId, 'bim-models'] });
     },
     onError: (err: Error) => {
+      const alreadyRunning =
+        err.message?.toLowerCase().includes('already in progress') ||
+        err.message?.toLowerCase().includes('acquire lock') ||
+        err.message?.toLowerCase().includes('409');
+      if (alreadyRunning) {
+        toast({
+          title: 'Generation in progress',
+          description: 'The model is already being generated — check the progress bar below.',
+        });
+        refetch();
+        queryClient.invalidateQueries({ queryKey: ['/api/projects', projectId, 'bim-models'] });
+        return;
+      }
       setGeneratingLocal(false);
       setSsePercent(0);
       setSseMsg('');
