@@ -594,6 +594,72 @@ pipelineRouter.post('/:modelId/apply-stage-data', async (req: Request, res: Resp
   }
 });
 
+// ---------------------------------------------------------------------------
+// POST /api/bim/pipeline/:modelId/rerun-stage
+// Reset a specific stage's stageResults and re-start the pipeline from that
+// stage, preserving results from all other completed stages.
+// Body: { stage: 'sections' | 'schedules' | 'specifications' | 'floorPlans' }
+// ---------------------------------------------------------------------------
+pipelineRouter.post('/:modelId/rerun-stage', async (req: Request, res: Response) => {
+  const { modelId } = req.params;
+  const { stage } = req.body as { stage?: string };
+
+  const stageMap: Record<string, string> = {
+    schedules: 'SCHEDULES',
+    sections: 'SECTIONS',
+    specifications: 'SPECIFICATIONS',
+    floorPlans: 'FLOOR_PLANS',
+  };
+
+  if (!stage || !stageMap[stage]) {
+    return res.status(400).json({
+      ok: false,
+      message: `Invalid stage. Must be one of: ${Object.keys(stageMap).join(', ')}`,
+    });
+  }
+
+  try {
+    const model = await storage.getBimModel(modelId);
+    if (!model) return res.status(404).json({ ok: false, message: `Model ${modelId} not found` });
+
+    const meta = typeof model.metadata === 'string'
+      ? (() => { try { return JSON.parse(model.metadata as string); } catch { return {}; } })()
+      : (model.metadata as any) ?? {};
+
+    // Null out the target stage's stageResults and reset the currentStage
+    const pipelineState = meta?.pipelineState ?? {};
+    const stageResults = pipelineState?.stageResults ?? {};
+    stageResults[stage] = null;
+
+    const updatedState = {
+      ...pipelineState,
+      currentStage: stageMap[stage],
+      status: 'idle',
+      stageResults,
+      error: null,
+    };
+
+    await storage.updateBimModelMetadata(modelId, {
+      pipelineState: updatedState,
+      progress: 0,
+      lastMessage: `Re-running stage: ${stage}…`,
+    });
+    await storage.updateBimModel(modelId, { status: 'pending' } as any);
+
+    // Fire off the pipeline asynchronously (same pattern as /start)
+    const { SequentialPipeline } = await import('../pipeline/sequential-pipeline.js');
+    const pipeline = new SequentialPipeline(modelId);
+    pipeline.start().catch((err: Error) => {
+      logger.error('rerun-stage pipeline error', { modelId, stage, error: err.message });
+    });
+
+    res.json({ ok: true, message: `Resetting ${stage} and re-running pipeline from that stage.` });
+  } catch (err) {
+    logger.error('rerun-stage failed', { modelId, error: (err as Error).message });
+    res.status(500).json({ ok: false, message: (err as Error).message });
+  }
+});
+
 // Inserts the 47 user-confirmed gridlines (28 alpha + 19 numeric) into the 10-table
 // grid hierarchy, using the BIM element bounding box to derive real-world coordinates.
 // Idempotent — deletes and rebuilds if called more than once on the same model.

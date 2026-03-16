@@ -243,6 +243,34 @@ export default function BIM() {
                 >
                   Apply Dims
                 </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={activeModel?.status === 'generating' || activeModel?.status === 'processing'}
+                  onClick={async () => {
+                    if (!activeModel?.id) return;
+                    if (!confirm('Re-run Stage 2 (Wall Sections)? This will call the AI to re-extract wall assembly thicknesses from the construction documents. Current door dimensions are preserved.')) return;
+                    try {
+                      const token = localStorage.getItem('auth_token');
+                      const resp = await fetch(`/api/bim/pipeline/${activeModel.id}/rerun-stage`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
+                        body: JSON.stringify({ stage: 'sections' }),
+                      });
+                      const data = await resp.json();
+                      if (resp.ok) {
+                        alert(`Started: ${data.message}\n\nWatch the progress bar — once complete, click "Apply Dims" to apply the new wall thicknesses.`);
+                        window.location.reload();
+                      } else {
+                        alert(`Failed: ${data.message}`);
+                      }
+                    } catch (e) { alert(`Failed: ${(e as Error).message}`); }
+                  }}
+                  className="text-xs px-2 py-1 h-6 bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100"
+                  title="Re-run Stage 2 to re-extract wall assembly thicknesses from construction documents. Preserves all other stage results."
+                >
+                  Re-run Sections
+                </Button>
                 <Button 
                   variant="outline" 
                   size="sm"
