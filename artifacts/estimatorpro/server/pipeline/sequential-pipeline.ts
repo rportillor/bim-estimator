@@ -131,8 +131,29 @@ export class SequentialPipeline {
 
   async saveState(): Promise<void> {
     try {
+      const stageProgress: Record<string, number> = {
+        SCHEDULES: 0.1,
+        SECTIONS: 0.3,
+        SPECIFICATIONS: 0.55,
+        GRID_CONFIRMATION: 0.75,
+        FLOOR_PLANS: 0.9,
+        COMPLETE: 1.0,
+        FAILED: 0,
+      };
+      const stageMessages: Record<string, string> = {
+        SCHEDULES: 'Stage 1/5: Extracting door, window & finish schedules…',
+        SECTIONS: 'Stage 2/5: Analysing wall sections & thicknesses…',
+        SPECIFICATIONS: 'Stage 3/5: Extracting material specifications…',
+        GRID_CONFIRMATION: 'Stage 4/5 complete — grid detected, awaiting confirmation…',
+        FLOOR_PLANS: 'Stage 5/5: Placing elements on floor plans…',
+        COMPLETE: 'Pipeline complete — all elements placed.',
+        FAILED: `Pipeline failed at stage: ${this.state.error?.stage ?? 'unknown'}`,
+      };
+      const stage = this.state.currentStage;
       await storage.updateBimModelMetadata(this.modelId, {
         pipelineState: this.state,
+        progress: stageProgress[stage] ?? 0,
+        lastMessage: stageMessages[stage] ?? `Running stage: ${stage}`,
       });
     } catch (err) {
       logger.error('Failed to save pipeline state', {
