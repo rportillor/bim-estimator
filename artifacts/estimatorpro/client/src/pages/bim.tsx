@@ -69,9 +69,9 @@ export default function BIM() {
   const { data: bimModels = [], isLoading: modelsLoading } = useQuery<any[]>({
     queryKey: ['/api/projects', projectId, 'bim-models'],
     enabled: !!projectId,
-    refetchInterval: (data: any) => {
-      const models = Array.isArray(data) ? data : (data?.data ?? []);
-      const anyGenerating = models.some((m: any) => m.status === 'generating' || m.status === 'processing');
+    refetchInterval: (query: any) => {
+      const models: any[] = query?.state?.data ?? [];
+      const anyGenerating = Array.isArray(models) && models.some((m: any) => m.status === 'generating' || m.status === 'processing');
       return anyGenerating ? 3000 : false;
     },
   });
