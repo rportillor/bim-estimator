@@ -510,7 +510,10 @@ export class SequentialPipeline {
 
         // Match walls to assembly types — update properties AND geometry
         if (etype.includes('wall') && sections) {
-          const wallCode = (props.wallType || props.assemblyCode || props.wall_type || props.type || '').toUpperCase();
+          // props.assembly stores values like "EW1a (extracted)" or "IW2f (extracted)".
+          // Strip the " (extracted)" suffix before looking up in the wallTypes map.
+          const rawAssembly = props.assembly || props.wallType || props.assemblyCode || props.wall_type || props.type || '';
+          const wallCode = rawAssembly.replace(/\s*\(extracted\)\s*/gi, '').trim().toUpperCase();
           const assembly = wallCode ? sections.wallTypes[wallCode] : undefined;
           if (assembly) {
             props.totalThickness_mm = assembly.totalThickness_mm;
@@ -1249,7 +1252,8 @@ ${text.substring(0, 300000)}`;
         ).toString().trim().toUpperCase();
         const exStoreyRaw = ex.storeyName || (typeof ex.storey === 'string' ? ex.storey : (ex.storey as any)?.name || '');
         const exStoreyName = exStoreyRaw.toLowerCase().replace(/\s+/g, '');
-        const typeMatch = (ex.elementType || '').toLowerCase() === elType;
+        const exTypeLower = (ex.elementType || '').toLowerCase();
+        const typeMatch = elType.length > 0 && (exTypeLower === elType || exTypeLower.includes(elType) || elType.includes(exTypeLower));
         if (elMark && exMark) return exMark === elMark && typeMatch;
         return (
           typeMatch &&

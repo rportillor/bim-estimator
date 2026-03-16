@@ -71,7 +71,9 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
   useEffect(() => {
     if (dbStatus === 'generating' && !generatingLocal) {
       setGeneratingLocal(true);
-      startedAtRef.current = latestModel?.createdAt || new Date().toISOString();
+      // Always start the elapsed timer from now — latestModel.createdAt is the original
+      // model creation time (potentially hours ago), not the start of the current run.
+      startedAtRef.current = new Date().toISOString();
     }
     if (dbStatus === 'completed' || dbStatus === 'failed' || dbStatus === 'error') {
       setGeneratingLocal(false);
