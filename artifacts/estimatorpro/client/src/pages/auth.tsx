@@ -2,16 +2,16 @@ import { useState } from "react";
 import { LoginForm } from "@/components/auth/login-form";
 import { RegisterForm } from "@/components/auth/register-form";
 import { useAuth } from "@/contexts/auth-context";
-import { useLocation } from "wouter";
+import { queryClient } from "@/lib/queryClient";
 
 export default function AuthPage() {
   const [isLogin, setIsLogin] = useState(true);
   const { login } = useAuth();
-  const [, setLocation] = useLocation();
 
   const handleAuthSuccess = (user: any, token: string) => {
     login(user, token);
-    setLocation("/"); // Redirect to dashboard after successful auth
+    queryClient.clear();
+    window.location.replace("/");
   };
 
   return (
