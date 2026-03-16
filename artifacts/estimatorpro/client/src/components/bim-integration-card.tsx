@@ -106,6 +106,11 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
 
   const [docsProcessed, setDocsProcessed] = useState<number | null>(null);
   const [docsTotal, setDocsTotal] = useState<number | null>(null);
+  const [productsFound, setProductsFound] = useState<number | null>(null);
+  const [currentChunk, setCurrentChunk] = useState<number | null>(null);
+  const [totalChunks, setTotalChunks] = useState<number | null>(null);
+  const [currentBatch, setCurrentBatch] = useState<number | null>(null);
+  const [totalBatches, setTotalBatches] = useState<number | null>(null);
 
   useEffect(() => {
     if (!sseProgress) return;
@@ -113,12 +118,22 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
     setSseMsg(sseProgress.message || '');
     if (sseProgress.documentsProcessed != null) setDocsProcessed(sseProgress.documentsProcessed);
     if (sseProgress.totalDocuments != null) setDocsTotal(sseProgress.totalDocuments);
+    if (sseProgress.details?.productsFound != null) setProductsFound(sseProgress.details.productsFound);
+    if (sseProgress.details?.currentChunk != null) setCurrentChunk(sseProgress.details.currentChunk);
+    if (sseProgress.details?.totalChunks != null) setTotalChunks(sseProgress.details.totalChunks);
+    if (sseProgress.details?.currentBatch != null) setCurrentBatch(sseProgress.details.currentBatch);
+    if (sseProgress.details?.totalBatches != null) setTotalBatches(sseProgress.details.totalBatches);
 
     if (sseProgress.status === 'completed') {
       setGeneratingLocal(false);
       setSsePercent(100);
       setDocsProcessed(null);
       setDocsTotal(null);
+      setProductsFound(null);
+      setCurrentChunk(null);
+      setTotalChunks(null);
+      setCurrentBatch(null);
+      setTotalBatches(null);
       toast({ title: 'BIM model ready', description: 'Your 3D model has been generated.' });
       refetch();
       queryClient.invalidateQueries({ queryKey: ['/api/projects', projectId, 'bim-models'] });
@@ -127,6 +142,11 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
       setGeneratingLocal(false);
       setDocsProcessed(null);
       setDocsTotal(null);
+      setProductsFound(null);
+      setCurrentChunk(null);
+      setTotalChunks(null);
+      setCurrentBatch(null);
+      setTotalBatches(null);
       toast({
         title: 'Generation failed',
         description: sseProgress.error || sseProgress.message || 'Something went wrong.',
@@ -333,6 +353,34 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
                 <div className="text-xs text-blue-600">documents read</div>
                 <div className="ml-auto w-24">
                   <Progress value={docsTotal > 0 ? Math.round(((docsProcessed ?? 0) / docsTotal) * 100) : 0} className="h-1.5" />
+                </div>
+              </div>
+            )}
+
+            {/* Live product / chunk counter — shown during AI extraction phase */}
+            {productsFound != null && (
+              <div className="flex items-center gap-3 px-3 py-2 bg-emerald-50 border border-emerald-100 rounded-lg">
+                <div className="text-2xl font-bold text-emerald-700 tabular-nums leading-none">
+                  {productsFound.toLocaleString()}
+                </div>
+                <div className="text-xs text-emerald-700 leading-snug">
+                  <div className="font-medium">spec products found</div>
+                  {currentChunk != null && totalChunks != null && (
+                    <div className="text-emerald-500">
+                      chunk {currentChunk}/{totalChunks}
+                      {currentBatch != null && totalBatches != null
+                        ? ` · batch ${currentBatch}/${totalBatches}`
+                        : ''}
+                    </div>
+                  )}
+                </div>
+                <div className="ml-auto w-24">
+                  <Progress
+                    value={totalChunks && totalChunks > 0
+                      ? Math.round(((currentChunk ?? 0) / totalChunks) * 100)
+                      : 0}
+                    className="h-1.5"
+                  />
                 </div>
               </div>
             )}

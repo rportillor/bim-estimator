@@ -10,6 +10,15 @@ interface ProgressData {
   totalDocuments?: number;
   pct?: number;
   phase?: string;
+  details?: {
+    productsFound?: number;
+    currentChunk?: number;
+    totalChunks?: number;
+    currentBatch?: number;
+    totalBatches?: number;
+    assembliesCreated?: number;
+    elementsBuilt?: number;
+  };
 }
 
 const MIN_RETRY_MS = 1_500;
@@ -55,6 +64,7 @@ export function useSSEProgress(modelId: string | null, enabled: boolean = true) 
           error:    raw.phase === 'error' ? raw.message : undefined,
           documentsProcessed: raw.documentsProcessed,
           totalDocuments:     raw.totalDocuments,
+          details:  raw.details,
         };
         console.log(`📊 SSE Progress: ${Math.round(pd.progress * 100)}% - ${pd.message}`);
         setData(pd);
