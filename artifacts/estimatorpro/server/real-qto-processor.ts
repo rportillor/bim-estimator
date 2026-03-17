@@ -839,6 +839,32 @@ MANDATORY EXTRACTION REQUIREMENTS:
     // Process floors and elements from structured response
     logger.info(`generateElementsFromAIAnalysis: parsedData type=${typeof parsedData}, keys=${typeof parsedData === 'object' && parsedData ? Object.keys(parsedData).join(', ') : 'n/a'}, floors=${Array.isArray(parsedData?.floors) ? parsedData.floors.length : 'none'}`);
     if (parsedData.floors && Array.isArray(parsedData.floors)) {
+      // ── ASL (above-sea-level) elevation detection ────────────────────────
+      // Claude extracts survey elevations from building sections as absolute ASL
+      // values (e.g. 257.60, 262.25, 266.25 mASL for The Moorings).  After the
+      // normaliser fix (threshold 1000) these arrive here as raw metres.
+      // Detect ASL by checking: all numeric floor elevations > 50 m AND total
+      // spread < 100 m (real-world floor-to-floor × storeys won't exceed that).
+      // When detected, subtract the lowest non-negative elevation as the datum
+      // so all storeys become relative (ground floor → 0.000 m).
+      const numericElevations = parsedData.floors
+        .map((f: any) => (f.elevation !== null && f.elevation !== undefined) ? Number(f.elevation) : null)
+        .filter((v: number | null): v is number => v !== null && Number.isFinite(v));
+      let aslDatum = 0;
+      if (numericElevations.length > 0) {
+        const minElev = Math.min(...numericElevations);
+        const maxElev = Math.max(...numericElevations);
+        const allAbove50 = numericElevations.every((v: number) => Math.abs(v) > 50);
+        const spreadUnder100 = (maxElev - minElev) < 100;
+        if (allAbove50 && spreadUnder100) {
+          // Find the ground floor datum — lowest positive elevation
+          const positiveElevs = numericElevations.filter((v: number) => v >= 0);
+          aslDatum = positiveElevs.length > 0 ? Math.min(...positiveElevs) : minElev;
+          logger.info(`[ASL-DETECT] Survey elevations detected (range ${minElev.toFixed(2)}–${maxElev.toFixed(2)} m). Datum=${aslDatum.toFixed(2)} m. Converting to relative.`);
+        }
+      }
+      // ─────────────────────────────────────────────────────────────────────
+
       for (const floor of parsedData.floors) {
         // ── Storey elevation ─────────────────────────────────────────────────
         // Source priority:
@@ -858,8 +884,8 @@ MANDATORY EXTRACTION REQUIREMENTS:
             elevation_mm:  undefined,         // will fall through to elevation_raw
             elevation_raw: floor.elevation,   // let normaliser detect unit
           });
-          storeyElevation = normE ?? Number(floor.elevation);
-          elevSource = 'extracted_from_drawings';
+          storeyElevation = (normE ?? Number(floor.elevation)) - aslDatum;
+          elevSource = aslDatum !== 0 ? 'extracted_from_drawings_asl_relative' : 'extracted_from_drawings';
         } else {
           // Attempt to derive from previous storey + ceiling height
           const prev = storeys.length > 0 ? storeys[storeys.length - 1] : null;

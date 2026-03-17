@@ -292,8 +292,13 @@ function inferFromNumber(
   }
 
   if (context === 'elevation') {
-    // Floor elevations: metric drawings use 0, 3600, 7200 (mm) or 0, 3.6, 7.2 (m)
-    if (abs > 200) return make(num / 1000, original, 'mm', true);
+    // Floor elevations in mm: typical range 2700–5000 mm (2.7–5.0 m per storey).
+    // Survey / ASL elevations in metres: Canadian buildings often sit at 100–400 m above
+    // sea level (e.g. 257.60 mASL, 262.25 mASL).  The old threshold of 200 wrongly treated
+    // survey elevations as mm (258 → 0.258 m).  Use 1000 as the cutoff so that:
+    //   • 3000 mm → 3.0 m  ✓  (floor-to-floor in mm)
+    //   • 258 m   → 258 m  ✓  (ASL elevation — caller must subtract datum)
+    if (abs >= 1000) return make(num / 1000, original, 'mm', true);
     return make(num, original, 'm', true);
   }
 
