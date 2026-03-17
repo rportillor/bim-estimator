@@ -3295,18 +3295,24 @@ MANDATORY EXTRACTION REQUIREMENTS:
     const ctx = `You are analyzing ARCHITECTURAL CONSTRUCTION DRAWINGS for "${projectName}" at 99 Louisa Street, Fenelon Falls, Ontario (The Moorings on Cameron Lake).\n\nFLOOR CONTEXT: ${floor.name} | Slab elevation: ${floor.elevation}m above ground datum (262.25m ASL) | Ceiling: ${floor.ceilingElevation}m | Floor-to-floor: ${h.toFixed(3)}m\nCOORDINATE ORIGIN: Grid origin = lowest-level first grid intersection. All values in METRES.\n\n`;
 
     const instructions: Record<string, string> = {
-      gridlines: ctx + `TASK: Extract ONLY the structural grid lines. Return NOTHING else.
+      gridlines: ctx + `TASK: Extract EVERY structural grid line shown on the drawing. Return NOTHING else.
 
-For each grid line:
+CRITICAL — ANGLED GRID LINES:
+This building has a wing that is NOT perpendicular to the main grid. Some grid lines (often labelled CLa, CLb, or similar) are drawn at an angle.
+The EXACT angle in degrees IS annotated on the drawing (look for a degree symbol ° or "deg" near the angled lines, or an angle dimension arc between the angled line and the main grid).
+You MUST read and report the EXACT angle value as printed on the drawing — do NOT assume 15°, 30°, 45°, or any default.
+If the annotation reads "30°27'" or "30.45°" report that precise value.
+
+For each grid line output:
 { "label": "A", "axis": "Y", "coordinate_m": 0.0, "start_m": 0.0, "end_m": 106.8, "angle_deg": 0 }
-- axis: "X" = line runs parallel to X axis (horizontal); "Y" = parallel to Y axis (vertical)
-- coordinate_m: position along the PERPENDICULAR axis
-- start_m / end_m: extents along the LINE'S own axis
-- angle_deg: 0 for orthogonal, non-zero for angled wings (CLa, CLb, etc.)
-- Extract ALL grid labels including CL, CLa, CLb, any letter or number shown
+- axis: "X" = runs parallel to X-axis (east-west); "Y" = runs parallel to Y-axis (north-south)
+- coordinate_m: position along the PERPENDICULAR axis where this line sits
+- start_m / end_m: extent along the line's own direction (or along the perpendicular for angled lines)
+- angle_deg: 0 for orthogonal lines. For ANGLED lines: the angle between this line and the nearest main orthogonal axis, READ DIRECTLY from the degree annotation on the drawing. Report positive for counter-clockwise from the axis.
+- Extract ALL grid labels: every letter (A, B, C … skip I and O per convention), every number, and any special labels (CL, CLa, CLb, Sa, Ga, etc.)
 
-Return JSON ONLY:
-{ "grid_lines": [ { "label", "axis", "coordinate_m", "start_m", "end_m", "angle_deg" }, ... ] }`,
+Return JSON ONLY — no prose, no explanation:
+{ "grid_lines": [ { "label": "A", "axis": "Y", "coordinate_m": 0.0, "start_m": 0.0, "end_m": 106.8, "angle_deg": 0 }, ... ] }`,
 
       perimeter_walls: ctx + `TASK: Extract ONLY the EXTERIOR PERIMETER WALLS and FOUNDATION/RETAINING WALLS at the ${floor.name} level. Return NOTHING else.
 
