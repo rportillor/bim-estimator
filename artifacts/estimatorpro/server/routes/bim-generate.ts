@@ -416,12 +416,13 @@ bimGenerateRouter.post("/bim/models/:modelId/extract-elements", async (req: Requ
 // ─────────────────────────────────────────────────────────────────────────────
 bimGenerateRouter.post("/bim/models/:modelId/extract-layer", async (req: Request, res: Response) => {
   const { modelId } = req.params;
-  const { floor: floorName, layer, elevation, ceilingElevation, documentKeys } = req.body as {
+  const { floor: floorName, layer, elevation, ceilingElevation, documentKeys, forceRefresh } = req.body as {
     floor: string;
     layer: string;
     elevation?: number;
     ceilingElevation?: number;
     documentKeys?: string[];
+    forceRefresh?: boolean;
   };
 
   if (!floorName || !layer) {
@@ -472,6 +473,7 @@ bimGenerateRouter.post("/bim/models/:modelId/extract-layer", async (req: Request
       floor: floorDef,
       layer,
       documentStorageKeys: resolvedKeys,
+      forceRefresh: forceRefresh === true,
     });
 
     logger.info(`[extract-layer] Extracted ${newElements.length} elements for ${floorName}/${layer}`);
@@ -679,10 +681,9 @@ bimGenerateRouter.post("/bim/models/:modelId/build-model", async (req: Request, 
           });
 
           try {
-            // Smart document selection: gridlines → plan drawings only
-            const patterns = layer === 'gridlines'
-              ? (RealQTOProcessor.FLOOR_PLAN_PATTERNS[floorName] ?? [])
-              : (RealQTOProcessor.FLOOR_DOC_PATTERNS[floorName] ?? []);
+            // Always use the full document set — Claude needs all drawings to correctly
+            // identify angled grid lines and read their angle annotations
+            const patterns = RealQTOProcessor.FLOOR_DOC_PATTERNS[floorName] ?? [];
 
             const resolvedKeys = allDocs
               .filter((d: any) => {

@@ -3297,33 +3297,31 @@ MANDATORY EXTRACTION REQUIREMENTS:
     const instructions: Record<string, string> = {
       gridlines: ctx + `TASK: Extract EVERY structural grid line shown on the drawing. Return NOTHING else.
 
-CRITICAL — ANGLED GRID LINES (READ THIS CAREFULLY):
-This building has at least one wing that is NOT orthogonal to the main grid.
-On the drawing you will see angle annotations — numbers with a degree symbol (°) — marking the angle between the angled lines and the adjacent orthogonal grid lines.
-These angle annotations ARE printed on the drawing. You must READ THEM, not estimate or assume.
+STEP 1 — VISUAL SCAN FOR ANGLED LINES (do this first):
+Before extracting any data, look at the overall floor plan shape.
+Does any part of the building have walls or grid lines that run at a diagonal — i.e., NOT perfectly horizontal and NOT perfectly vertical on the page?
+This building has a wing or annex that is visually rotated relative to the main rectangular grid. You will see grid lines in that wing running at a clear diagonal angle on the drawing.
+Those diagonal grid lines MUST be reported with a non-zero angle_deg. Do NOT force them into axis=X or axis=Y with angle=0. If a line is diagonal, it is diagonal — report it as such.
 
-HOW TO INTERPRET THE ANGLE ANNOTATIONS:
-- If the annotation shows something like "166°42'" or "166.42°" this is the INTERIOR angle between two grid lines meeting at a node.
-- To get angle_deg for output: subtract 180 from that interior angle to get the deviation from straight (e.g. 180 - 166.42 = 13.58°).
-- If the annotation shows something like "13°34'" or "13.58°" directly, use that as angle_deg.
-- Report angle_deg as a decimal number (e.g. 13.58 not "13°34'").
-- Do NOT default to 0, 15, 30, or 45. Only output 0 for lines that are genuinely perpendicular to the main grid.
+STEP 2 — READ ANGLE ANNOTATIONS:
+Near any diagonal grid line you will find an angle annotation. It may appear as:
+  • An interior angle between two lines at a grid node, e.g. "166°42'" or "166.5°" — if so, angle_deg = 180 − that value (e.g. 180 − 166.42 = 13.58)
+  • A direct angle from the main axis, e.g. "13°34'" — use that directly as a decimal (13.57)
+READ THE ACTUAL NUMBER from the drawing. Do not assume any default.
 
-WHICH LINES ARE ANGLED:
-- Look for lines that are clearly not horizontal or vertical relative to the main orthogonal grid
-- They are typically labelled CLa, CLb, or with special designators
-- They appear in a partial wing of the building, not spanning the full plan
-
-For each grid line output:
+STEP 3 — EXTRACT ALL GRID LINES:
+For each grid line (orthogonal and angled alike):
 { "label": "A", "axis": "Y", "coordinate_m": 0.0, "start_m": 0.0, "end_m": 106.8, "angle_deg": 0 }
-- axis: "X" = runs parallel to X-axis (east-west); "Y" = runs parallel to Y-axis (north-south)
-- coordinate_m: position along the PERPENDICULAR axis where this line sits
-- start_m / end_m: extents along the line's own direction
-- angle_deg: EXACT value read from drawing annotation (converted to decimal degrees as described above). 0 for orthogonal lines only.
-- Extract ALL labels: letters (skip I and O per convention), numbers, and special labels (CL, CLa, CLb, Sa, Ga, etc.)
+
+Field rules:
+- label: every label shown on the drawing — letters (conventionally skip I and O), numbers, and special labels (CL, CLa, CLb, Sa, Ga, etc.)
+- axis: the main direction of the line — "X" (roughly east-west / horizontal on plan) or "Y" (roughly north-south / vertical on plan)
+- coordinate_m: position of this line along its perpendicular axis, in metres from grid origin
+- start_m / end_m: extent of this line along its own direction, in metres
+- angle_deg: 0 for perfectly orthogonal lines ONLY. For ANY visually diagonal line, this is the measured rotation in decimal degrees from the nearest main axis — read from the drawing annotation as described in Step 2. MUST be non-zero for diagonal lines.
 
 Return JSON ONLY — no prose, no explanation:
-{ "grid_lines": [ { "label": "CLa", "axis": "X", "coordinate_m": 21.0, "start_m": 84.0, "end_m": 132.0, "angle_deg": 13.58 }, ... ] }`,
+{ "grid_lines": [ { "label": "A", "axis": "Y", "coordinate_m": 0.0, "start_m": 0.0, "end_m": 106.8, "angle_deg": 0 }, ... ] }`,
 
       perimeter_walls: ctx + `TASK: Extract ONLY the EXTERIOR PERIMETER WALLS and FOUNDATION/RETAINING WALLS at the ${floor.name} level. Return NOTHING else.
 
