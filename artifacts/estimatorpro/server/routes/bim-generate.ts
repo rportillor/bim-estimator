@@ -388,3 +388,143 @@ bimGenerateRouter.post("/bim/models/:modelId/extract-elements", async (req: Requ
     await ExtractionLockManager.releaseLock(processId);
   }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/bim/models/:modelId/extract-layer
+//
+// Layer-by-layer BIM extraction — the proper way to build a model:
+//   1. gridlines          (structural grid system — the skeleton)
+//   2. perimeter_walls    (exterior envelope / foundation walls)
+//   3. interior_walls     (partitions)
+//   4. columns            (structural columns)
+//   5. slabs              (floor + ceiling slabs)
+//   6. doors
+//   7. windows
+//   8. stairs
+//   9. mep
+//
+// Each layer is cached after the first Claude call — subsequent calls are FREE.
+// Elements are appended to the model (existing layers for OTHER types are kept).
+//
+// Body:
+//   floor          — "P1" | "Ground" | "Floor2" | "Floor3" | "MPH" | "Roof"
+//   layer          — one of the 9 layer names above
+//   elevation?     — override floor elevation (metres, relative to datum)
+//   ceilingElevation? — override ceiling elevation (metres)
+//   documentKeys?  — override document storage keys (auto-mapped from floor if omitted)
+// ─────────────────────────────────────────────────────────────────────────────
+bimGenerateRouter.post("/bim/models/:modelId/extract-layer", async (req: Request, res: Response) => {
+  const { modelId } = req.params;
+  const { floor: floorName, layer, elevation, ceilingElevation, documentKeys } = req.body as {
+    floor: string;
+    layer: string;
+    elevation?: number;
+    ceilingElevation?: number;
+    documentKeys?: string[];
+  };
+
+  if (!floorName || !layer) {
+    return res.status(400).json({ ok: false, message: 'Body must include "floor" and "layer".' });
+  }
+
+  const model = await storage.getBimModel(modelId).catch(() => null);
+  if (!model) return res.status(404).json({ ok: false, message: `BIM model ${modelId} not found.` });
+  const pid = (model as any).projectId;
+
+  try {
+    const { RealQTOProcessor } = await import('../real-qto-processor');
+    const qto = new RealQTOProcessor();
+
+    // Resolve floor elevations — body overrides win; then static map; then defaults
+    const staticFloor = RealQTOProcessor.FLOOR_ELEVATIONS[floorName];
+    const floorDef = {
+      name: floorName,
+      elevation:        elevation        ?? staticFloor?.elevation ?? 0,
+      ceilingElevation: ceilingElevation ?? staticFloor?.ceiling   ?? 4,
+    };
+
+    // Resolve document storage keys — body overrides; otherwise auto-map from floor
+    let resolvedKeys: string[] = documentKeys ?? [];
+    if (resolvedKeys.length === 0) {
+      const patterns = RealQTOProcessor.FLOOR_DOC_PATTERNS[floorName] ?? [];
+      if (patterns.length === 0) {
+        return res.status(400).json({ ok: false, message: `No document mapping found for floor "${floorName}". Provide documentKeys.` });
+      }
+      const allDocs = await storage.getDocumentsByProject(pid);
+      resolvedKeys = allDocs
+        .filter((d: any) => {
+          const fn: string = (d.filename || d.storageKey || '').toUpperCase();
+          return patterns.some(p => fn.includes(p.toUpperCase()));
+        })
+        .map((d: any) => d.storageKey || d.filename || '')
+        .filter(Boolean);
+      logger.info(`[extract-layer] Auto-mapped ${resolvedKeys.length} docs for ${floorName}: ${resolvedKeys.map((k: string) => k.split('_').pop()).join(', ')}`);
+    }
+
+    if (resolvedKeys.length === 0) {
+      return res.status(422).json({ ok: false, message: `No documents found for floor "${floorName}". Upload drawings first.` });
+    }
+
+    // Run the layer extraction (uses cache, then Claude, then saves cache)
+    const newElements = await qto.extractLayer({
+      modelId, projectId: pid,
+      floor: floorDef,
+      layer,
+      documentStorageKeys: resolvedKeys,
+    });
+
+    logger.info(`[extract-layer] Extracted ${newElements.length} elements for ${floorName}/${layer}`);
+
+    // Delete existing elements of this type+storey before saving new ones
+    const layerTypes = RealQTOProcessor.LAYER_ELEMENT_TYPES[layer] ?? [];
+    const existing = await storage.getBimElements(modelId);
+    const toDelete = existing.filter((e: any) =>
+      layerTypes.includes(e.elementType) &&
+      (e.storeyName === floorName || !e.storeyName)
+    );
+    for (const el of toDelete) {
+      await storage.deleteBimElement(el.id).catch(() => {});
+    }
+    logger.info(`[extract-layer] Deleted ${toDelete.length} stale ${floorName}/${layer} elements`);
+
+    // Insert new elements
+    for (const el of newElements) {
+      const elId = (el as any).id || `${floorName}_${layer}_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+      await storage.createBimElement({
+        modelId,
+        elementId: elId,
+        elementType: (el as any).elementType,
+        name: (el as any).name,
+        storeyName: floorName,
+        geometry: (el as any).geometry,
+        properties: (el as any).properties,
+        quantity: (el as any).quantity,
+        unit: (el as any).unit,
+        ifcClass: null,
+        guid: null,
+        parentId: null,
+        level: null,
+        material: null,
+      } as any);
+    }
+
+    // Update model element count
+    const allAfter = await storage.getBimElements(modelId);
+    await storage.updateBimModel(modelId, { elementCount: allAfter.length } as any);
+
+    return res.json({
+      ok: true,
+      modelId,
+      floor: floorName,
+      layer,
+      extracted: newElements.length,
+      deleted: toDelete.length,
+      totalElements: allAfter.length,
+      message: `${floorName}/${layer}: extracted ${newElements.length} elements (deleted ${toDelete.length} stale).`,
+    });
+
+  } catch (err: any) {
+    logger.error(`[extract-layer] Failed: ${err?.message}`);
+    return res.status(500).json({ ok: false, message: err?.message || 'Layer extraction failed.' });
+  }
+});

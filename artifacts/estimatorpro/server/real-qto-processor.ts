@@ -3216,4 +3216,410 @@ MANDATORY EXTRACTION REQUIREMENTS:
     logger.debug(`Looking for existing Claude analysis for project ${projectId}`);
     return null; // Implement if needed
   }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // LAYER-BY-LAYER EXTRACTION
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /** Map floor name → document filename patterns to include */
+  static readonly FLOOR_DOC_PATTERNS: Record<string, string[]> = {
+    'P1':     ['A101', 'A401', 'A411'],
+    'Ground': ['A102', 'A201', 'A202', 'A203', 'A401'],
+    'Floor2': ['A103', 'A204', 'A205', 'A206', 'A401'],
+    'Floor3': ['A104', 'A207', 'A208', 'A209', 'A401'],
+    'MPH':    ['A105', 'A210', 'A211', 'A212', 'A401'],
+    'Roof':   ['A106', 'A401'],
+  };
+
+  /** Map layer name → bim_elements.element_type values */
+  static readonly LAYER_ELEMENT_TYPES: Record<string, string[]> = {
+    'gridlines':       ['grid_line'],
+    'perimeter_walls': ['exterior_wall', 'foundation_wall', 'retaining_wall'],
+    'interior_walls':  ['interior_wall', 'partition'],
+    'columns':         ['column'],
+    'slabs':           ['slab'],
+    'doors':           ['door'],
+    'windows':         ['window'],
+    'stairs':          ['stair'],
+    'mep':             ['mep'],
+  };
+
+  /** Known floor elevations (metres, relative to ground datum) */
+  static readonly FLOOR_ELEVATIONS: Record<string, { elevation: number; ceiling: number }> = {
+    'P1':     { elevation: -4.650, ceiling:  0.000 },
+    'Ground': { elevation:  0.000, ceiling:  4.000 },
+    'Floor2': { elevation:  4.000, ceiling:  7.600 },
+    'Floor3': { elevation:  7.600, ceiling: 11.700 },
+    'MPH':    { elevation: 11.700, ceiling: 15.800 },
+    'Roof':   { elevation: 15.800, ceiling: 18.500 },
+  };
+
+  /** Build a tightly-focused Claude prompt for the requested layer only */
+  private buildLayerPrompt(
+    floor: { name: string; elevation: number; ceilingElevation: number },
+    layer: string,
+    projectName: string,
+  ): string {
+    const h = floor.ceilingElevation - floor.elevation;
+    const ctx = `You are analyzing ARCHITECTURAL CONSTRUCTION DRAWINGS for "${projectName}" at 99 Louisa Street, Fenelon Falls, Ontario (The Moorings on Cameron Lake).\n\nFLOOR CONTEXT: ${floor.name} | Slab elevation: ${floor.elevation}m above ground datum (262.25m ASL) | Ceiling: ${floor.ceilingElevation}m | Floor-to-floor: ${h.toFixed(3)}m\nCOORDINATE ORIGIN: Grid origin = lowest-level first grid intersection. All values in METRES.\n\n`;
+
+    const instructions: Record<string, string> = {
+      gridlines: ctx + `TASK: Extract ONLY the structural grid lines. Return NOTHING else.
+
+For each grid line:
+{ "label": "A", "axis": "Y", "coordinate_m": 0.0, "start_m": 0.0, "end_m": 106.8, "angle_deg": 0 }
+- axis: "X" = line runs parallel to X axis (horizontal); "Y" = parallel to Y axis (vertical)
+- coordinate_m: position along the PERPENDICULAR axis
+- start_m / end_m: extents along the LINE'S own axis
+- angle_deg: 0 for orthogonal, non-zero for angled wings (CLa, CLb, etc.)
+- Extract ALL grid labels including CL, CLa, CLb, any letter or number shown
+
+Return JSON ONLY:
+{ "grid_lines": [ { "label", "axis", "coordinate_m", "start_m", "end_m", "angle_deg" }, ... ] }`,
+
+      perimeter_walls: ctx + `TASK: Extract ONLY the EXTERIOR PERIMETER WALLS and FOUNDATION/RETAINING WALLS at the ${floor.name} level. Return NOTHING else.
+
+For each wall:
+{ "wall_id": "EW-001", "start": {"x":0.0,"y":0.0}, "end": {"x":5.5,"y":0.0}, "thickness_m": 0.35, "height_m": ${h.toFixed(2)}, "material": "concrete", "type": "foundation" }
+- type: "foundation" | "retaining" | "exterior"
+- All coordinates in metres from grid origin
+
+Return JSON ONLY:
+{ "perimeter_walls": [ { "wall_id","start","end","thickness_m","height_m","material","type" }, ... ] }`,
+
+      interior_walls: ctx + `TASK: Extract ONLY the INTERIOR PARTITION WALLS at the ${floor.name} level. Exclude exterior walls and structural columns.
+
+For each wall:
+{ "wall_id": "IW-001", "start": {"x":0.0,"y":0.0}, "end": {"x":3.0,"y":0.0}, "thickness_m": 0.15, "height_m": ${h.toFixed(2)}, "type": "partition", "fire_rating": "1hr" }
+- type: "partition" | "fire-rated" | "demising" | "corridor"
+- fire_rating: null or "1hr" or "2hr" if visible
+
+Return JSON ONLY:
+{ "interior_walls": [ { "wall_id","start","end","thickness_m","height_m","type","fire_rating" }, ... ] }`,
+
+      columns: ctx + `TASK: Extract ONLY the STRUCTURAL COLUMNS at the ${floor.name} level.
+
+For each column:
+{ "col_id": "C-001", "x": 0.0, "y": 0.0, "section": "W-shape", "size": "W200x100", "height_m": ${h.toFixed(2)}, "grid_ref": "A/1" }
+- section: "W-shape" | "HSS" | "round" | "concrete-rect" | "concrete-round"
+- size: as marked on drawing, or null
+
+Return JSON ONLY:
+{ "columns": [ { "col_id","x","y","section","size","height_m","grid_ref" }, ... ] }`,
+
+      slabs: ctx + `TASK: Extract ONLY the FLOOR/CEILING SLABS at the ${floor.name} level.
+
+For each slab:
+{ "slab_id": "S-001", "level": "${floor.name}", "elevation_m": ${floor.elevation}, "outline": [{"x":0,"y":0},{"x":10,"y":0},{"x":10,"y":8},{"x":0,"y":8}], "thickness_m": 0.200, "area_m2": 80.0, "material": "concrete", "type": "floor" }
+- type: "floor" | "roof" | "transfer"
+- outline: polygon vertices in metres (x=plan X, y=plan Y)
+
+Return JSON ONLY:
+{ "slabs": [ { "slab_id","level","elevation_m","outline","thickness_m","area_m2","material","type" }, ... ] }`,
+
+      doors: ctx + `TASK: Extract ONLY the DOORS at the ${floor.name} level.
+
+For each door:
+{ "door_id": "D-101", "x": 5.0, "y": 10.0, "width_m": 0.9, "height_m": 2.1, "type": "HM", "swing": "LH", "fire_rating": null, "room_from": "Corridor", "room_to": "Suite 101" }
+- type: "HM" (hollow metal) | "WD" (wood) | "GL" (glass) | "SD" (sliding) | "OH" (overhead)
+- swing: "LH" | "RH" | "PAIR" | null
+- Coordinates are centre of door opening
+
+Return JSON ONLY:
+{ "doors": [ { "door_id","x","y","width_m","height_m","type","swing","fire_rating","room_from","room_to" }, ... ] }`,
+
+      windows: ctx + `TASK: Extract ONLY the WINDOWS and GLAZED OPENINGS at the ${floor.name} level.
+
+For each window:
+{ "win_id": "W-201", "x": 8.0, "y": 0.0, "width_m": 1.8, "height_m": 1.5, "sill_m": 0.9, "head_m": 2.4, "type": "fixed", "glazing": "FG" }
+- type: "fixed" | "operable" | "curtain-wall" | "storefront"
+- glazing: "FG" (clear) | "GL2" (tinted) | "SP1/SP2" (spandrel)
+- Coordinates are centre of window at sill level
+
+Return JSON ONLY:
+{ "windows": [ { "win_id","x","y","width_m","height_m","sill_m","head_m","type","glazing" }, ... ] }`,
+
+      stairs: ctx + `TASK: Extract ONLY the STAIRS and RAMPS at the ${floor.name} level.
+
+For each stair:
+{ "stair_id": "ST-A", "x": 12.0, "y": 5.0, "width_m": 1.5, "run_m": 4.8, "rise_count": 20, "rise_mm": 195, "going_mm": 280, "from_level": "${floor.name}", "to_level": "next", "type": "concrete-precast" }
+
+Return JSON ONLY:
+{ "stairs": [ { "stair_id","x","y","width_m","run_m","rise_count","rise_mm","going_mm","from_level","to_level","type" }, ... ] }`,
+
+      mep: ctx + `TASK: Extract ONLY the MEP (Mechanical, Electrical, Plumbing) elements visible at the ${floor.name} level.
+
+For each MEP element:
+{ "mep_id": "M-001", "system": "HVAC", "type": "duct", "x": 5.0, "y": 8.0, "size": "600x400", "notes": null }
+- system: "HVAC" | "Plumbing" | "Electrical" | "Fire"
+- type: "duct" | "pipe" | "panel" | "equipment" | "drain"
+
+Return JSON ONLY:
+{ "mep": [ { "mep_id","system","type","x","y","size","notes" }, ... ] }`,
+    };
+
+    return instructions[layer] || ctx + `Extract all BIM elements visible at the ${floor.name} level. Return JSON.`;
+  }
+
+  /** Convert a layer-specific Claude JSON response into RealBIMElement[] */
+  private parseLayerResponse(
+    result: any,
+    layer: string,
+    floor: { name: string; elevation: number; ceilingElevation: number },
+  ): RealBIMElement[] {
+    const h = floor.ceilingElevation - floor.elevation;
+    const elev = floor.elevation;
+    const elements: RealBIMElement[] = [];
+
+    // ─────────────────────────────────────────────────────────────────────
+    // COORDINATE CONVENTION (viewer-3d.tsx axis-swap):
+    //   realLocation.x → Three.js X (east-west in plan)
+    //   realLocation.y → Three.js Z (north-south in plan)    ← plan Y
+    //   realLocation.z → Three.js Y (elevation / height up)  ← elevation
+    // All elements MUST follow { x: eastWest, y: northSouth, z: elevation }
+    // ─────────────────────────────────────────────────────────────────────
+    if (layer === 'gridlines') {
+      for (const g of (result?.grid_lines ?? [])) {
+        const len = Math.abs((g.end_m ?? 0) - (g.start_m ?? 0));
+        const midSpan = ((g.start_m ?? 0) + (g.end_m ?? 0)) / 2;
+        // For Y-axis lines (run east-west): east-west = midSpan, north-south = coordinate_m
+        // For X-axis lines (run north-south): east-west = coordinate_m, north-south = midSpan
+        const planX = g.axis === 'Y' ? midSpan        : (g.coordinate_m ?? 0);
+        const planY = g.axis === 'Y' ? (g.coordinate_m ?? 0) : midSpan;
+        elements.push({
+          id: randomUUID(), elementType: 'grid_line',
+          name: `Grid ${g.label}`,
+          storeyName: floor.name,
+          geometry: JSON.stringify({
+            type: 'grid_line', label: g.label, axis: g.axis,
+            coordinate_m: g.coordinate_m, start_m: g.start_m, end_m: g.end_m, angle_deg: g.angle_deg ?? 0,
+            dimensions: { length: len, height: 0.05, depth: 0.05, area: 0, volume: 0 },
+            location: { realLocation: { x: planX, y: planY, z: elev } },
+          }),
+          properties: JSON.stringify({ label: g.label, axis: g.axis, coordinateM: g.coordinate_m }),
+          quantity: 1, unit: 'EA',
+        } as any);
+      }
+    } else if (layer === 'perimeter_walls' || layer === 'interior_walls') {
+      const key = layer === 'perimeter_walls' ? 'perimeter_walls' : 'interior_walls';
+      const elType = layer === 'perimeter_walls' ? 'exterior_wall' : 'interior_wall';
+      for (const w of (result?.[key] ?? [])) {
+        const dx = (w.end?.x ?? 0) - (w.start?.x ?? 0);
+        const dy = (w.end?.y ?? 0) - (w.start?.y ?? 0);
+        const len = Math.sqrt(dx * dx + dy * dy);
+        const wallH = w.height_m ?? h;
+        const thick = w.thickness_m ?? 0.2;
+        elements.push({
+          id: randomUUID(), elementType: elType,
+          name: w.wall_id ?? `${elType.toUpperCase()}-${elements.length + 1}`,
+          storeyName: floor.name,
+          geometry: JSON.stringify({
+            type: 'wall',
+            dimensions: { length: len, height: wallH, depth: thick, area: len * wallH, volume: len * wallH * thick },
+            location: { realLocation: { x: w.start?.x ?? 0, y: w.start?.y ?? 0, z: elev } },
+            start: w.start, end: w.end,
+          }),
+          properties: JSON.stringify({ material: w.material, type: w.type ?? elType, fireRating: w.fire_rating }),
+          quantity: len, unit: 'LM',
+        } as any);
+      }
+    } else if (layer === 'columns') {
+      for (const c of (result?.columns ?? [])) {
+        elements.push({
+          id: randomUUID(), elementType: 'column',
+          name: c.col_id ?? `COL-${elements.length + 1}`,
+          storeyName: floor.name,
+          geometry: JSON.stringify({
+            type: 'column',
+            dimensions: { length: 0.3, height: c.height_m ?? h, depth: 0.3, area: 0.09, volume: 0.09 * (c.height_m ?? h) },
+            location: { realLocation: { x: c.x ?? 0, y: c.y ?? 0, z: elev } },
+          }),
+          properties: JSON.stringify({ section: c.section, size: c.size, gridRef: c.grid_ref }),
+          quantity: 1, unit: 'EA',
+        } as any);
+      }
+    } else if (layer === 'slabs') {
+      for (const s of (result?.slabs ?? [])) {
+        const area = s.area_m2 ?? 0;
+        const thick = s.thickness_m ?? 0.2;
+        elements.push({
+          id: randomUUID(), elementType: 'slab',
+          name: s.slab_id ?? `SLAB-${elements.length + 1}`,
+          storeyName: floor.name,
+          geometry: JSON.stringify({
+            type: 'slab', outline: s.outline,
+            dimensions: { length: Math.sqrt(area), height: thick, depth: Math.sqrt(area), area, volume: area * thick },
+            location: { realLocation: { x: 0, y: 0, z: s.elevation_m ?? elev } },
+          }),
+          properties: JSON.stringify({ material: s.material, type: s.type }),
+          quantity: area, unit: 'M2',
+        } as any);
+      }
+    } else if (layer === 'doors') {
+      for (const d of (result?.doors ?? [])) {
+        elements.push({
+          id: randomUUID(), elementType: 'door',
+          name: d.door_id ?? `D-${elements.length + 1}`,
+          storeyName: floor.name,
+          geometry: JSON.stringify({
+            type: 'door',
+            dimensions: { length: d.width_m ?? 0.9, height: d.height_m ?? 2.1, depth: 0.05, area: (d.width_m ?? 0.9) * (d.height_m ?? 2.1), volume: 0 },
+            location: { realLocation: { x: d.x ?? 0, y: d.y ?? 0, z: elev } },
+          }),
+          properties: JSON.stringify({ type: d.type, swing: d.swing, fireRating: d.fire_rating, roomFrom: d.room_from, roomTo: d.room_to }),
+          quantity: 1, unit: 'EA',
+        } as any);
+      }
+    } else if (layer === 'windows') {
+      for (const w of (result?.windows ?? [])) {
+        elements.push({
+          id: randomUUID(), elementType: 'window',
+          name: w.win_id ?? `W-${elements.length + 1}`,
+          storeyName: floor.name,
+          geometry: JSON.stringify({
+            type: 'window',
+            dimensions: { length: w.width_m ?? 1.5, height: w.height_m ?? 1.2, depth: 0.15, area: (w.width_m ?? 1.5) * (w.height_m ?? 1.2), volume: 0 },
+            location: { realLocation: { x: w.x ?? 0, y: w.y ?? 0, z: elev + (w.sill_m ?? 0.9) } },
+          }),
+          properties: JSON.stringify({ type: w.type, glazing: w.glazing, sillM: w.sill_m, headM: w.head_m }),
+          quantity: 1, unit: 'EA',
+        } as any);
+      }
+    } else if (layer === 'stairs') {
+      for (const s of (result?.stairs ?? [])) {
+        elements.push({
+          id: randomUUID(), elementType: 'stair',
+          name: s.stair_id ?? `ST-${elements.length + 1}`,
+          storeyName: floor.name,
+          geometry: JSON.stringify({
+            type: 'stair',
+            dimensions: { length: s.run_m ?? 4, height: h, depth: s.width_m ?? 1.5, area: (s.run_m ?? 4) * (s.width_m ?? 1.5), volume: 0 },
+            location: { realLocation: { x: s.x ?? 0, y: s.y ?? 0, z: elev } },
+          }),
+          properties: JSON.stringify({ riseCount: s.rise_count, riseMm: s.rise_mm, goingMm: s.going_mm, fromLevel: s.from_level, toLevel: s.to_level, type: s.type }),
+          quantity: 1, unit: 'EA',
+        } as any);
+      }
+    } else if (layer === 'mep') {
+      for (const m of (result?.mep ?? [])) {
+        elements.push({
+          id: randomUUID(), elementType: 'mep',
+          name: m.mep_id ?? `MEP-${elements.length + 1}`,
+          storeyName: floor.name,
+          geometry: JSON.stringify({
+            type: 'mep',
+            dimensions: { length: 1, height: 0.4, depth: 0.4, area: 0.16, volume: 0.064 },
+            location: { realLocation: { x: m.x ?? 0, y: m.y ?? 0, z: elev } },
+          }),
+          properties: JSON.stringify({ system: m.system, type: m.type, size: m.size, notes: m.notes }),
+          quantity: 1, unit: 'EA',
+        } as any);
+      }
+    }
+
+    return elements;
+  }
+
+  /**
+   * Extract a single layer for a single floor from a focused set of drawings.
+   * Results are cached in the first document's analysis_result so Claude is never
+   * called twice for the same floor+layer+document combination.
+   */
+  async extractLayer(params: {
+    modelId:   string;
+    projectId: string;
+    floor:     { name: string; elevation: number; ceilingElevation: number };
+    layer:     string;
+    documentStorageKeys: string[];
+  }): Promise<RealBIMElement[]> {
+    const { modelId, projectId, floor, layer, documentStorageKeys } = params;
+    logger.info(`[extractLayer] floor=${floor.name} layer=${layer} docs=${documentStorageKeys.length}`);
+
+    const { loadFileBuffer } = await import('./services/storage-file-resolver');
+    const { storage: _stor } = await import('./storage');
+
+    // Load PDF buffers
+    const pdfBuffers: { key: string; buf: Buffer }[] = [];
+    for (const key of documentStorageKeys) {
+      const buf = await loadFileBuffer(key);
+      if (buf) pdfBuffers.push({ key, buf });
+      else logger.warn(`[extractLayer] Could not load: ${path.basename(key)}`);
+    }
+    if (pdfBuffers.length === 0) throw new Error('No PDF buffers loaded for layer extraction');
+
+    // Build stable cache key
+    const cacheKey = `qto_layer_${floor.name}_${layer}_${pdfBuffers.map(b => path.basename(b.key)).sort().join('|')}`;
+
+    // Load document records for cache read/write
+    const projectDocs = await _stor.getDocuments(projectId).catch(() => [] as any[]);
+    const docByKey = new Map<string, { id: string; analysisResult: any }>();
+    for (const doc of projectDocs) {
+      if (doc.storageKey) docByKey.set(doc.storageKey, { id: doc.id, analysisResult: doc.analysisResult ?? {} });
+    }
+
+    // ── Cache READ ────────────────────────────────────────────────────────────
+    const firstDocInfo = docByKey.get(pdfBuffers[0].key);
+    const cached = firstDocInfo?.analysisResult?.[cacheKey];
+    if (cached) {
+      logger.info(`[extractLayer] Cache HIT for ${floor.name}/${layer} — skipping Claude`);
+      return this.parseLayerResponse(cached, layer, floor);
+    }
+
+    // ── Call Claude ───────────────────────────────────────────────────────────
+    logger.info(`[extractLayer] Cache MISS — calling Claude for ${floor.name}/${layer}`);
+    let projectName = 'The Moorings on Cameron Lake';
+    try {
+      const proj = await _stor.getProject(projectId);
+      if (proj?.name) projectName = proj.name;
+    } catch { /* non-fatal */ }
+
+    const { default: Anthropic } = await import('@anthropic-ai/sdk');
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+    const prompt = this.buildLayerPrompt(floor, layer, projectName);
+    const docList = pdfBuffers.map(({ key }, i) => `  ${i + 1}. ${path.basename(key)}`).join('\n');
+
+    const content: any[] = [
+      ...pdfBuffers.map(({ buf }) => ({
+        type: 'document',
+        source: { type: 'base64', media_type: 'application/pdf', data: buf.toString('base64') },
+      })),
+      { type: 'text', text: `${prompt}\n\nDrawings provided (${pdfBuffers.length}):\n${docList}` },
+    ];
+
+    const stream = anthropic.messages.stream({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 16000,
+      messages: [{ role: 'user', content }],
+    });
+    const finalMsg = await stream.finalMessage();
+    const raw = finalMsg.content[0].type === 'text' ? finalMsg.content[0].text : '';
+    logger.info(`[extractLayer] Claude response: ${raw.length} chars`);
+
+    let result: any = null;
+    try {
+      const m = raw.match(/```json\n([\s\S]*?)\n```/);
+      if (m) result = JSON.parse(m[1]);
+      else result = parseFirstJsonObject(raw);
+    } catch { logger.warn(`[extractLayer] Failed to parse Claude JSON`); }
+
+    if (!result) throw new Error(`Claude returned no parseable JSON for ${floor.name}/${layer}`);
+
+    // ── Cache WRITE ───────────────────────────────────────────────────────────
+    for (const { key } of pdfBuffers) {
+      const docInfo = docByKey.get(key);
+      if (docInfo?.id) {
+        const updated = { ...(docInfo.analysisResult ?? {}), [cacheKey]: result };
+        try {
+          await _stor.updateDocument(docInfo.id, { analysisResult: updated });
+          docInfo.analysisResult = updated;
+          logger.info(`[extractLayer] Cache SAVED → doc ${docInfo.id} (${path.basename(key)})`);
+        } catch (e: any) {
+          logger.warn(`[extractLayer] Cache save failed: ${e?.message}`);
+        }
+      }
+    }
+
+    return this.parseLayerResponse(result, layer, floor);
+  }
 }

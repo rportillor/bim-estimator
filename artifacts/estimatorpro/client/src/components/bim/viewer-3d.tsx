@@ -1260,6 +1260,73 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         // 🔍 DEBUG: Log element types to see what we're working with
         if(Math.random() < 0.001) console.log(`🏗️ Element type: "${e.elementType}" → "${type}"`);
 
+        // ══════════════════════════════════════════════════════════════════
+        // STRUCTURAL GRID LINES — rendered as real THREE.Line objects
+        // Coordinate convention (parseLayerResponse):
+        //   realLocation.x → Three.js X (east-west)
+        //   realLocation.y → Three.js Z (north-south)   ← plan depth
+        //   realLocation.z → Three.js Y (elevation)     ← up axis
+        // ══════════════════════════════════════════════════════════════════
+        if (type === 'grid_line') {
+          const gd = e.geometry || {};
+          const axis      = String(gd.axis || 'Y');
+          const coord     = Number(gd.coordinate_m ?? 0);
+          const startM    = Number(gd.start_m ?? 0);
+          const endM      = Number(gd.end_m ?? 0);
+          const label     = String(gd.label || '?');
+          const rl        = gd.location?.realLocation || {};
+          // elevation from realLocation.z (new convention)
+          const elevRaw   = Number(rl.z ?? 0);
+          const elevCC    = coerceWithDatum(0, 0, elevRaw);
+          const floorY    = elevCC.z; // Three.js Y (up)
+
+          // Build the two endpoints in Three.js space
+          // Three.js X = east-west, Three.js Y = elevation, Three.js Z = north-south
+          let pt1: THREE.Vector3, pt2: THREE.Vector3;
+          if (axis === 'Y') {
+            // Y-axis line: fixed north-south (coord), runs east-west (startM → endM)
+            pt1 = new THREE.Vector3(startM, floorY, coord);
+            pt2 = new THREE.Vector3(endM,   floorY, coord);
+          } else {
+            // X-axis line: fixed east-west (coord), runs north-south (startM → endM)
+            pt1 = new THREE.Vector3(coord, floorY, startM);
+            pt2 = new THREE.Vector3(coord, floorY, endM);
+          }
+
+          const pts = new Float32Array([pt1.x, pt1.y, pt1.z, pt2.x, pt2.y, pt2.z]);
+          const lineGeo = new THREE.BufferGeometry();
+          lineGeo.setAttribute('position', new THREE.BufferAttribute(pts, 3));
+          const lineMat = new THREE.LineBasicMaterial({
+            color: axis === 'X' ? 0xFF6600 : 0xFFCC00, // orange for X-axis, yellow for Y-axis
+            linewidth: 1,
+          });
+          const line = new THREE.Line(lineGeo, lineMat);
+          line.userData = { elementId: e.id, type: 'grid_line', label, axis };
+          root.add(line);
+
+          // Bubble label at the far end of the line
+          const labelCanvas = document.createElement('canvas');
+          labelCanvas.width = 64; labelCanvas.height = 32;
+          const ctx2d = labelCanvas.getContext('2d')!;
+          ctx2d.fillStyle = axis === 'X' ? '#FF6600' : '#FFCC00';
+          ctx2d.fillRect(0, 0, 64, 32);
+          ctx2d.fillStyle = '#000000';
+          ctx2d.font = 'bold 18px sans-serif';
+          ctx2d.textAlign = 'center';
+          ctx2d.textBaseline = 'middle';
+          ctx2d.fillText(label, 32, 16);
+          const labelTex = new THREE.CanvasTexture(labelCanvas);
+          const labelSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTex, depthTest: false }));
+          labelSprite.scale.set(0.8, 0.4, 1);
+          labelSprite.position.copy(pt2).add(new THREE.Vector3(
+            axis === 'Y' ? 0.5 : 0,
+            0.3,
+            axis === 'X' ? 0.5 : 0
+          ));
+          root.add(labelSprite);
+          continue; // grid lines are lines, not meshes — skip box rendering
+        }
+
         // 🏗️ COMPREHENSIVE BOQ ELEMENT DETECTION
         // Basic Structure
         const isWall = /(wall|partition|curtain)/.test(type);
