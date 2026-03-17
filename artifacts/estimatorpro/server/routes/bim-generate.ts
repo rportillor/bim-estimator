@@ -16,6 +16,7 @@
 
 import { Router, type Request, type Response } from "express";
 import { storage } from "../storage";
+import { publish } from "../services/progress-bus";
 
 const logger = {
   info:  (msg: string, d?: any) => console.log(`✅ [BIM-ROUTE] ${msg}`, d || ''),
@@ -527,4 +528,236 @@ bimGenerateRouter.post("/bim/models/:modelId/extract-layer", async (req: Request
     logger.error(`[extract-layer] Failed: ${err?.message}`);
     return res.status(500).json({ ok: false, message: err?.message || 'Layer extraction failed.' });
   }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/bim/models/:modelId/build-model
+//
+// Fully automated layer-by-layer BIM model build.
+// Iterates every floor × every layer in the canonical order, calls
+// extract-layer logic for each combination, publishes SSE progress events
+// that the client SSE hook can display live.
+//
+// Caching is handled inside extractLayer — if a floor+layer combo was already
+// extracted and its documents haven't changed, Claude is NOT called again.
+// This means re-running a completed build is nearly instant.
+//
+// Document selection rules:
+//   gridlines layer → plan-only drawings (FLOOR_PLAN_PATTERNS)
+//   all other layers → full drawing set  (FLOOR_DOC_PATTERNS)
+//
+// Body (all optional):
+//   floors        — array of floor names to process (default: all 6)
+//   layers        — array of layer names to process (default: all 9)
+//   forceRefresh  — if true, bypass the Claude cache for all layers
+// ─────────────────────────────────────────────────────────────────────────────
+bimGenerateRouter.post("/bim/models/:modelId/build-model", async (req: Request, res: Response) => {
+  const { modelId } = req.params;
+  const {
+    floors: requestedFloors,
+    layers: requestedLayers,
+    forceRefresh = false,
+  } = req.body as {
+    floors?: string[];
+    layers?: string[];
+    forceRefresh?: boolean;
+  };
+
+  const model = await storage.getBimModel(modelId).catch(() => null);
+  if (!model) return res.status(404).json({ ok: false, message: `BIM model ${modelId} not found.` });
+  const pid = (model as any).projectId;
+
+  const { RealQTOProcessor } = await import('../real-qto-processor');
+
+  // Resolve the floor and layer lists to process
+  const floors = (requestedFloors && requestedFloors.length > 0)
+    ? requestedFloors
+    : RealQTOProcessor.FLOOR_ORDER;
+  const layers = (requestedLayers && requestedLayers.length > 0)
+    ? requestedLayers
+    : RealQTOProcessor.LAYER_ORDER;
+
+  const totalSteps = floors.length * layers.length;
+
+  logger.info(`[build-model] Starting — ${floors.length} floors × ${layers.length} layers = ${totalSteps} steps`);
+
+  // Acknowledge immediately — the real work runs asynchronously
+  res.json({
+    ok: true,
+    running: true,
+    floors,
+    layers,
+    totalSteps,
+    message: `Build pipeline started: ${totalSteps} floor/layer combinations queued.`,
+  });
+
+  // ── Background pipeline ──────────────────────────────────────────────────
+  (async () => {
+    let step = 0;
+    let totalExtracted = 0;
+    let totalDeleted = 0;
+
+    try {
+      const allDocs = await storage.getDocumentsByProject(pid);
+      const qto = new RealQTOProcessor();
+
+      for (const floorName of floors) {
+        const staticFloor = RealQTOProcessor.FLOOR_ELEVATIONS[floorName];
+        if (!staticFloor) {
+          logger.warn(`[build-model] Unknown floor "${floorName}" — skipping`);
+          step += layers.length;
+          continue;
+        }
+        const floorDef = {
+          name: floorName,
+          elevation: staticFloor.elevation,
+          ceilingElevation: staticFloor.ceiling,
+        };
+
+        for (const layer of layers) {
+          step++;
+          const pct = Math.round((step / totalSteps) * 98); // cap at 98 — 100 reserved for done
+
+          // Publish start-of-layer progress
+          publish(modelId, {
+            pct,
+            phase: 'running',
+            message: `${floorName} / ${layer} (${step}/${totalSteps})…`,
+            floor: floorName,
+            layer,
+            step,
+            totalSteps,
+          });
+
+          try {
+            // Smart document selection: gridlines → plan drawings only
+            const patterns = layer === 'gridlines'
+              ? (RealQTOProcessor.FLOOR_PLAN_PATTERNS[floorName] ?? [])
+              : (RealQTOProcessor.FLOOR_DOC_PATTERNS[floorName] ?? []);
+
+            const resolvedKeys = allDocs
+              .filter((d: any) => {
+                const fn: string = (d.filename || d.storageKey || '').toUpperCase();
+                return patterns.some((p: string) => fn.includes(p.toUpperCase()));
+              })
+              .map((d: any) => d.storageKey || d.filename || '')
+              .filter(Boolean);
+
+            if (resolvedKeys.length === 0) {
+              logger.warn(`[build-model] No docs for ${floorName}/${layer} — skipping`);
+              publish(modelId, {
+                pct,
+                phase: 'running',
+                message: `${floorName} / ${layer} — no documents found, skipped`,
+                floor: floorName,
+                layer,
+                step,
+                totalSteps,
+              });
+              continue;
+            }
+
+            // Run extraction (cache-first: no Claude call if result is cached)
+            const newElements = await qto.extractLayer({
+              modelId,
+              projectId: pid,
+              floor: floorDef,
+              layer,
+              documentStorageKeys: resolvedKeys,
+              forceRefresh,
+            });
+
+            // Delete stale elements for this floor+layer
+            const layerTypes = RealQTOProcessor.LAYER_ELEMENT_TYPES[layer] ?? [];
+            const existing = await storage.getBimElements(modelId);
+            const toDelete = existing.filter((e: any) =>
+              layerTypes.includes(e.elementType) &&
+              (e.storeyName === floorName || !e.storeyName)
+            );
+            for (const el of toDelete) {
+              await storage.deleteBimElement(el.id).catch(() => {});
+            }
+
+            // Insert new elements
+            for (const el of newElements) {
+              const elId = (el as any).id ||
+                `${floorName}_${layer}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+              await storage.createBimElement({
+                modelId,
+                elementId: elId,
+                elementType: (el as any).elementType,
+                name: (el as any).name,
+                storeyName: floorName,
+                geometry: (el as any).geometry,
+                properties: (el as any).properties,
+                quantity: (el as any).quantity,
+                unit: (el as any).unit,
+                ifcClass: null,
+                guid: null,
+                parentId: null,
+                level: null,
+                material: null,
+              } as any);
+            }
+
+            totalExtracted += newElements.length;
+            totalDeleted += toDelete.length;
+
+            logger.info(`[build-model] ${floorName}/${layer}: +${newElements.length} extracted, -${toDelete.length} stale`);
+
+            // Update element count after each layer
+            const allAfter = await storage.getBimElements(modelId);
+            await storage.updateBimModel(modelId, { elementCount: allAfter.length } as any);
+
+            // Publish post-layer progress with element counts
+            publish(modelId, {
+              pct,
+              phase: 'running',
+              message: `${floorName} / ${layer} ✓ — ${newElements.length} elements (${step}/${totalSteps} done)`,
+              floor: floorName,
+              layer,
+              step,
+              totalSteps,
+              extracted: newElements.length,
+              totalElements: allAfter.length,
+            });
+
+          } catch (layerErr: any) {
+            logger.error(`[build-model] ${floorName}/${layer} failed: ${layerErr?.message}`);
+            publish(modelId, {
+              pct,
+              phase: 'running',
+              message: `${floorName} / ${layer} — error: ${layerErr?.message || 'unknown'} (continuing…)`,
+              floor: floorName,
+              layer,
+              step,
+              totalSteps,
+              layerError: layerErr?.message,
+            });
+            // Non-fatal: continue with next layer
+          }
+        }
+      }
+
+      // All done
+      const finalCount = (await storage.getBimElements(modelId)).length;
+      logger.info(`[build-model] Complete — ${totalExtracted} extracted, ${totalDeleted} deleted, ${finalCount} total elements`);
+      publish(modelId, {
+        pct: 100,
+        phase: 'complete',
+        message: `Build complete — ${finalCount} elements across ${floors.length} floors`,
+        totalExtracted,
+        totalDeleted,
+        totalElements: finalCount,
+      });
+
+    } catch (err: any) {
+      logger.error(`[build-model] Pipeline failed: ${err?.message}`);
+      publish(modelId, {
+        pct: 0,
+        phase: 'error',
+        message: `Build pipeline failed: ${err?.message || 'unknown error'}`,
+      });
+    }
+  })().catch(() => {}); // swallow unhandled promise rejection — errors are published above
 });

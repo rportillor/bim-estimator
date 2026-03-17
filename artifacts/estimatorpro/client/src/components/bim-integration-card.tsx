@@ -14,6 +14,7 @@ import {
   AlertTriangle,
   Clock,
   RefreshCw,
+  Layers,
 } from 'lucide-react';
 import { queryClient } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
@@ -39,6 +40,12 @@ function elapsed(since: string) {
 
 export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProps) {
   const [generatingLocal, setGeneratingLocal] = useState(false);
+  const [buildingModel, setBuildingModel] = useState(false);
+  const [buildCurrentFloor, setBuildCurrentFloor] = useState('');
+  const [buildCurrentLayer, setBuildCurrentLayer] = useState('');
+  const [buildStep, setBuildStep] = useState(0);
+  const [buildTotalSteps, setBuildTotalSteps] = useState(0);
+  const [buildTotalElements, setBuildTotalElements] = useState(0);
   const [ssePercent, setSsePercent] = useState(0);
   const [sseMsg, setSseMsg] = useState('');
   const [elapsedStr, setElapsedStr] = useState('');
@@ -73,7 +80,7 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
     ? Date.now() - new Date(latestModel.updatedAt || latestModel.createdAt || 0).getTime()
     : Infinity;
   const isStuck = !generatingLocal && dbSaysRunning && modelAge > 60 * 60 * 1000;
-  const isGenerating = generatingLocal || (dbSaysRunning && !isStuck);
+  const isGenerating = generatingLocal || buildingModel || (dbSaysRunning && !isStuck);
 
   // If the DB already says "generating" or "processing" on mount, reconnect tracker.
   // This fires on every navigation back to this page so the progress bar reappears.
@@ -145,8 +152,19 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
     if (sseProgress.details?.currentBatch != null) setCurrentBatch(sseProgress.details.currentBatch);
     if (sseProgress.details?.totalBatches != null) setTotalBatches(sseProgress.details.totalBatches);
 
+    // Build-model specific progress fields
+    const raw = sseProgress as any;
+    if (raw.floor) setBuildCurrentFloor(raw.floor);
+    if (raw.layer) setBuildCurrentLayer(raw.layer);
+    if (raw.step != null) setBuildStep(raw.step);
+    if (raw.totalSteps != null) setBuildTotalSteps(raw.totalSteps);
+    if (raw.totalElements != null) setBuildTotalElements(raw.totalElements);
+
     if (sseProgress.status === 'completed') {
       setGeneratingLocal(false);
+      setBuildingModel(false);
+      setBuildCurrentFloor('');
+      setBuildCurrentLayer('');
       setSsePercent(100);
       setDocsProcessed(null);
       setDocsTotal(null);
@@ -161,6 +179,9 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
       setTimeout(() => setSsePercent(0), 3000);
     } else if (sseProgress.status === 'failed' || sseProgress.status === 'error') {
       setGeneratingLocal(false);
+      setBuildingModel(false);
+      setBuildCurrentFloor('');
+      setBuildCurrentLayer('');
       setDocsProcessed(null);
       setDocsTotal(null);
       setProductsFound(null);
@@ -220,6 +241,54 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
   const handleExtractElements = () => {
     setExtractingElements(true);
     extractMutation.mutate();
+  };
+
+  const buildMutation = useMutation({
+    mutationFn: async () => {
+      const headers = getAuthHeaders();
+      const modelsRes = await fetch(`/api/projects/${projectId}/bim-models`, { headers, credentials: 'include' });
+      if (!modelsRes.ok) throw new Error('Could not load BIM model slot');
+      const models = await modelsRes.json();
+      const modelId = models[0]?.id;
+      if (!modelId) throw new Error('No BIM model slot found for this project.');
+
+      const res = await fetch(`/api/bim/models/${modelId}/build-model`, {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: `HTTP ${res.status}` }));
+        throw new Error(err.message || err.error || 'Build failed to start');
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({
+        title: 'Build pipeline started',
+        description: `Processing ${data.totalSteps || 54} floor/layer combinations. Watch the progress below.`,
+      });
+    },
+    onError: (err: Error) => {
+      setBuildingModel(false);
+      setSsePercent(0);
+      setSseMsg('');
+      toast({ title: 'Build failed to start', description: err.message, variant: 'destructive' });
+    },
+  });
+
+  const handleBuildModel = () => {
+    setBuildingModel(true);
+    setBuildStep(0);
+    setBuildTotalSteps(54);
+    setBuildTotalElements(0);
+    setBuildCurrentFloor('');
+    setBuildCurrentLayer('');
+    setSsePercent(2);
+    setSseMsg('Starting build pipeline…');
+    startedAtRef.current = new Date().toISOString();
+    buildMutation.mutate();
   };
 
   const generateMutation = useMutation({
@@ -341,24 +410,51 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
           </div>
         )}
 
-        {/* ── GENERATING ───────────────────────────────────────────────────── */}
+        {/* ── GENERATING / BUILDING ────────────────────────────────────────── */}
         {isGenerating && (
           <div className="space-y-4">
             {/* Header row */}
             <div className="flex items-center gap-3">
               <Loader2 className="h-5 w-5 text-blue-600 animate-spin shrink-0" />
               <div className="flex-1">
-                <p className="font-medium text-sm text-blue-900">Generating BIM model…</p>
+                <p className="font-medium text-sm text-blue-900">
+                  {buildingModel ? 'Building full 3D model…' : 'Generating BIM model…'}
+                </p>
                 <p className="text-xs text-blue-600 mt-0.5">
                   {elapsedStr && <>{elapsedStr} elapsed · </>}
-                  {documents?.length || 0} source documents
+                  {buildingModel
+                    ? `${buildTotalSteps > 0 ? `${buildTotalSteps} floor/layer steps` : '6 floors × 9 layers'}`
+                    : `${documents?.length || 0} source documents`}
                 </p>
               </div>
               <Badge variant="secondary">In Progress</Badge>
             </div>
 
-            {/* Document counter — shown as soon as SSE sends doc info */}
-            {docsTotal != null && (
+            {/* Build-model floor/layer progress — shown when using the automated build */}
+            {buildingModel && buildTotalSteps > 0 && (
+              <div className="flex items-center gap-3 px-3 py-2 bg-blue-50 rounded-lg">
+                <div className="text-2xl font-bold text-blue-700 tabular-nums leading-none">
+                  {buildStep}
+                  <span className="text-base font-normal text-blue-400">/{buildTotalSteps}</span>
+                </div>
+                <div className="text-xs text-blue-600 flex-1 leading-snug">
+                  <div className="font-medium">
+                    {buildCurrentFloor && buildCurrentLayer
+                      ? `${buildCurrentFloor} / ${buildCurrentLayer.replace(/_/g, ' ')}`
+                      : 'Queued…'}
+                  </div>
+                  {buildTotalElements > 0 && (
+                    <div className="text-blue-400">{buildTotalElements.toLocaleString()} elements so far</div>
+                  )}
+                </div>
+                <div className="ml-auto w-24">
+                  <Progress value={buildTotalSteps > 0 ? Math.round((buildStep / buildTotalSteps) * 100) : 0} className="h-1.5" />
+                </div>
+              </div>
+            )}
+
+            {/* Document counter — shown during classic generate flow */}
+            {!buildingModel && docsTotal != null && (
               <div className="flex items-center gap-3 px-3 py-2 bg-blue-50 rounded-lg">
                 <div className="text-2xl font-bold text-blue-700 tabular-nums leading-none">
                   {docsProcessed ?? 0}
@@ -372,7 +468,7 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
             )}
 
             {/* Live product / chunk counter — shown during AI extraction phase */}
-            {productsFound != null && (
+            {!buildingModel && productsFound != null && (
               <div className="flex items-center gap-3 px-3 py-2 bg-emerald-50 border border-emerald-100 rounded-lg">
                 <div className="text-2xl font-bold text-emerald-700 tabular-nums leading-none">
                   {productsFound.toLocaleString()}
@@ -408,18 +504,39 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
               </div>
             </div>
 
-            {/* Steps summary */}
-            <div className="grid grid-cols-3 gap-2 text-center text-xs text-gray-500">
-              <div className={`p-2 rounded ${ssePercent >= 30 ? 'bg-blue-50 text-blue-700 font-medium' : 'bg-gray-50'}`}>
-                Document reading
+            {/* Steps summary — different for build vs generate */}
+            {buildingModel ? (
+              <div className="grid grid-cols-6 gap-1 text-center text-xs">
+                {['P1', 'Ground', 'Floor2', 'Floor3', 'MPH', 'Roof'].map((floor) => {
+                  const floorOrder = ['P1', 'Ground', 'Floor2', 'Floor3', 'MPH', 'Roof'];
+                  const floorIdx = floorOrder.indexOf(floor);
+                  const currentFloorIdx = floorOrder.indexOf(buildCurrentFloor);
+                  const done = floorIdx < currentFloorIdx;
+                  const active = floorIdx === currentFloorIdx;
+                  return (
+                    <div key={floor} className={`p-1.5 rounded text-[10px] font-medium ${
+                      done   ? 'bg-green-100 text-green-700' :
+                      active ? 'bg-blue-100 text-blue-700' :
+                               'bg-gray-50 text-gray-400'
+                    }`}>
+                      {done ? '✓ ' : ''}{floor}
+                    </div>
+                  );
+                })}
               </div>
-              <div className={`p-2 rounded ${ssePercent >= 60 ? 'bg-blue-50 text-blue-700 font-medium' : 'bg-gray-50'}`}>
-                AI extraction
+            ) : (
+              <div className="grid grid-cols-3 gap-2 text-center text-xs text-gray-500">
+                <div className={`p-2 rounded ${ssePercent >= 30 ? 'bg-blue-50 text-blue-700 font-medium' : 'bg-gray-50'}`}>
+                  Document reading
+                </div>
+                <div className={`p-2 rounded ${ssePercent >= 60 ? 'bg-blue-50 text-blue-700 font-medium' : 'bg-gray-50'}`}>
+                  AI extraction
+                </div>
+                <div className={`p-2 rounded ${ssePercent >= 90 ? 'bg-blue-50 text-blue-700 font-medium' : 'bg-gray-50'}`}>
+                  3D geometry
+                </div>
               </div>
-              <div className={`p-2 rounded ${ssePercent >= 90 ? 'bg-blue-50 text-blue-700 font-medium' : 'bg-gray-50'}`}>
-                3D geometry
-              </div>
-            </div>
+            )}
           </div>
         )}
 
@@ -449,6 +566,17 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
                   View 3D Model
                 </Button>
               </Link>
+              <Button
+                onClick={handleBuildModel}
+                disabled={buildingModel || generatingLocal}
+                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700"
+                data-testid="button-build-full-model"
+              >
+                {buildingModel
+                  ? <><Loader2 className="h-4 w-4 animate-spin" />Building…</>
+                  : <><Layers className="h-4 w-4" />Build Full Model</>
+                }
+              </Button>
               <Button variant="outline" onClick={handleExport} className="flex items-center gap-2" data-testid="button-download-ifc">
                 <Download className="h-4 w-4" />
                 Export IFC

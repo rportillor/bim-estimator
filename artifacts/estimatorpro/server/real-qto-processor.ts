@@ -3254,6 +3254,37 @@ MANDATORY EXTRACTION REQUIREMENTS:
     'Roof':   { elevation: 15.800, ceiling: 18.500 },
   };
 
+  /**
+   * Plan-only drawing patterns per floor — used for gridlines extraction.
+   * Section and elevation drawings (A401, A411, etc.) are excluded because
+   * they show vertical cross-sections and confuse Claude into reading section
+   * coordinates instead of plan grid coordinates.
+   */
+  static readonly FLOOR_PLAN_PATTERNS: Record<string, string[]> = {
+    'P1':     ['A101'],
+    'Ground': ['A102', 'A201', 'A202', 'A203'],
+    'Floor2': ['A103', 'A204', 'A205', 'A206'],
+    'Floor3': ['A104', 'A207', 'A208', 'A209'],
+    'MPH':    ['A105', 'A210', 'A211', 'A212'],
+    'Roof':   ['A106'],
+  };
+
+  /** Canonical extraction order for floors (bottom → top) */
+  static readonly FLOOR_ORDER = ['P1', 'Ground', 'Floor2', 'Floor3', 'MPH', 'Roof'];
+
+  /** Canonical extraction order for layers (skeleton → structure → openings → services) */
+  static readonly LAYER_ORDER = [
+    'gridlines',
+    'perimeter_walls',
+    'interior_walls',
+    'columns',
+    'slabs',
+    'doors',
+    'windows',
+    'stairs',
+    'mep',
+  ];
+
   /** Build a tightly-focused Claude prompt for the requested layer only */
   private buildLayerPrompt(
     floor: { name: string; elevation: number; ceilingElevation: number },
@@ -3531,8 +3562,9 @@ Return JSON ONLY:
     floor:     { name: string; elevation: number; ceilingElevation: number };
     layer:     string;
     documentStorageKeys: string[];
+    forceRefresh?: boolean;
   }): Promise<RealBIMElement[]> {
-    const { modelId, projectId, floor, layer, documentStorageKeys } = params;
+    const { modelId, projectId, floor, layer, documentStorageKeys, forceRefresh = false } = params;
     logger.info(`[extractLayer] floor=${floor.name} layer=${layer} docs=${documentStorageKeys.length}`);
 
     const { loadFileBuffer } = await import('./services/storage-file-resolver');
@@ -3560,9 +3592,12 @@ Return JSON ONLY:
     // ── Cache READ ────────────────────────────────────────────────────────────
     const firstDocInfo = docByKey.get(pdfBuffers[0].key);
     const cached = firstDocInfo?.analysisResult?.[cacheKey];
-    if (cached) {
+    if (cached && !forceRefresh) {
       logger.info(`[extractLayer] Cache HIT for ${floor.name}/${layer} — skipping Claude`);
       return this.parseLayerResponse(cached, layer, floor);
+    }
+    if (cached && forceRefresh) {
+      logger.info(`[extractLayer] Cache HIT for ${floor.name}/${layer} — forceRefresh=true, re-running Claude`);
     }
 
     // ── Call Claude ───────────────────────────────────────────────────────────
