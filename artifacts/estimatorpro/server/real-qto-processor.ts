@@ -765,6 +765,18 @@ MANDATORY EXTRACTION REQUIREMENTS:
         if (!acc.drawing_legend && incoming.drawing_legend) acc.drawing_legend = incoming.drawing_legend;
       };
 
+      // ── Load project documents so we can read/write per-batch QTO cache ────────
+      const { storage: _cacheStorage } = await import('./storage');
+      const projectDocsList = await _cacheStorage.getDocuments(projectId).catch(() => [] as any[]);
+      // Build lookup: storageKey → { id, analysisResult }
+      const docByKey = new Map<string, { id: string; analysisResult: any }>();
+      for (const doc of projectDocsList) {
+        if (doc.storageKey) {
+          docByKey.set(doc.storageKey, { id: doc.id, analysisResult: doc.analysisResult ?? {} });
+        }
+      }
+      logger.info(`[cache] Loaded ${docByKey.size} documents for QTO batch cache lookup`);
+
       // ── Process all PDFs sequentially in batches of BATCH_SIZE ───────────────
       const totalBatches = Math.ceil(pdfBuffers.length / BATCH_SIZE);
       logger.info(`Processing ${pdfBuffers.length} PDFs in ${totalBatches} batches of ${BATCH_SIZE}`);
@@ -774,7 +786,22 @@ MANDATORY EXTRACTION REQUIREMENTS:
         const batchBufs = pdfBuffers.slice(i, i + BATCH_SIZE);
         const batchNum = Math.floor(i / BATCH_SIZE) + 1;
         const batchLabel = `batch-${batchNum}/${totalBatches}`;
-        logger.info(`[${batchLabel}] Sending ${batchBufs.length} PDFs to Claude...`);
+
+        // Build a stable cache key from the sorted basenames of files in this batch
+        const batchCacheKey = 'qto_batch_' + batchBufs.map(b => path.basename(b.key)).sort().join('|');
+
+        // ── Cache READ: check if the first doc in the batch already has a stored result ──
+        const firstDocInfo = docByKey.get(batchBufs[0].key);
+        const cachedResult = firstDocInfo?.analysisResult?.[batchCacheKey];
+        if (cachedResult) {
+          logger.info(`[${batchLabel}] Cache HIT (key: ${batchCacheKey.slice(0, 60)}…) — skipping Claude call`);
+          mergeFloors(mergedAnalysis, cachedResult);
+          const floorCount = mergedAnalysis.floors?.length ?? 0;
+          logger.info(`[${batchLabel}] merged from cache: ${floorCount} floors total`);
+          continue;
+        }
+
+        logger.info(`[${batchLabel}] Cache MISS — sending ${batchBufs.length} PDFs to Claude...`);
         try {
           const result = await callClaude(batchBufs, batchLabel);
           if (result) {
@@ -785,6 +812,22 @@ MANDATORY EXTRACTION REQUIREMENTS:
               return sum + CATS.reduce((s: number, c: string) => s + (Array.isArray(f[c]) ? f[c].length : 0), 0);
             }, 0);
             logger.info(`[${batchLabel}] merged: ${floorCount} floors, ${elemCount} total elements so far`);
+
+            // ── Cache WRITE: persist result to every doc in the batch ──────────
+            for (const { key } of batchBufs) {
+              const docInfo = docByKey.get(key);
+              if (docInfo?.id) {
+                const updatedAnalysisResult = { ...(docInfo.analysisResult ?? {}), [batchCacheKey]: result };
+                try {
+                  await _cacheStorage.updateDocument(docInfo.id, { analysisResult: updatedAnalysisResult });
+                  // Update in-memory map so subsequent batches see the fresh data
+                  docInfo.analysisResult = updatedAnalysisResult;
+                  logger.info(`[${batchLabel}] Cache SAVED → doc ${docInfo.id} (${path.basename(key)})`);
+                } catch (saveErr: any) {
+                  logger.warn(`[${batchLabel}] Cache save failed for ${path.basename(key)}: ${saveErr?.message}`);
+                }
+              }
+            }
           } else {
             logger.warn(`[${batchLabel}] No usable JSON returned — skipping`);
           }
