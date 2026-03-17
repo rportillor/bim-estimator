@@ -2670,19 +2670,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Extract storey information — prefer bim_storeys table, fallback to geometryData
       let storeys: any[] = [];
 
+      // Live element counts: always count from the actual elements table so the
+      // storey list reflects what is genuinely in the database (not stale cached counts).
+      let liveCountsByStorey = new Map<string, number>();
+      try {
+        const elements = await storage.getBimElements(modelId);
+        for (const el of elements) {
+          const sn = (el as any).storeyName || '';
+          if (sn) liveCountsByStorey.set(sn, (liveCountsByStorey.get(sn) ?? 0) + 1);
+        }
+      } catch { /* non-fatal — fall back to stored counts */ }
+
       // Source 1: bim_storeys table (authoritative, written by pipeline)
       try {
         if (typeof (storage as any).getBimStoreys === 'function') {
           const dbStoreys = await (storage as any).getBimStoreys(modelId);
           if (Array.isArray(dbStoreys) && dbStoreys.length > 0) {
-            storeys = dbStoreys.map((s: any) => ({
-              id: s.id,
-              name: s.name,
-              elevation: Number(s.elevation ?? 0),
-              elementCount: s.elementCount ?? 0,
-              guid: s.guid ?? null,
-              elevationSource: s.elevation_source ?? 'unknown',
-            }));
+            storeys = dbStoreys
+              .map((s: any) => ({
+                id: s.id,
+                name: s.name,
+                elevation: Number(s.elevation ?? 0),
+                // Use live count if available; fall back to stored value
+                elementCount: liveCountsByStorey.has(s.name)
+                  ? liveCountsByStorey.get(s.name)!
+                  : (s.elementCount ?? 0),
+                guid: s.guid ?? null,
+                elevationSource: s.elevation_source ?? 'unknown',
+              }))
+              // Only return storeys that have at least one element in the DB
+              .filter((s: any) => s.elementCount > 0);
           }
         }
       } catch (e) {
