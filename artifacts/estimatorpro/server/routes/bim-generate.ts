@@ -618,6 +618,22 @@ bimGenerateRouter.post("/bim/models/:modelId/build-model", async (req: Request, 
       const allDocs = await storage.getDocumentsByProject(pid);
       const qto = new RealQTOProcessor();
 
+      // ── Pre-build cleanup ──────────────────────────────────────────────────
+      // Remove all elements that belong to floors we are NOT building.
+      // This prevents stale data from old extractions showing up in the viewer.
+      const floorsSet = new Set(floors);
+      const allExisting = await storage.getBimElements(modelId);
+      const outOfScope = allExisting.filter((e: any) =>
+        e.storeyName && !floorsSet.has(e.storeyName)
+      );
+      if (outOfScope.length > 0) {
+        logger.info(`[build-model] Pre-build: deleting ${outOfScope.length} elements from out-of-scope floors`);
+        for (const el of outOfScope) {
+          await storage.deleteBimElement(el.id).catch(() => {});
+        }
+        totalDeleted += outOfScope.length;
+      }
+
       for (const floorName of floors) {
         const staticFloor = RealQTOProcessor.FLOOR_ELEVATIONS[floorName];
         if (!staticFloor) {
