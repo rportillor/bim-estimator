@@ -19,6 +19,12 @@ interface ProgressData {
     assembliesCreated?: number;
     elementsBuilt?: number;
   };
+  // Build-model pipeline fields
+  floor?: string;
+  layer?: string;
+  step?: number;
+  totalSteps?: number;
+  totalElements?: number;
 }
 
 const MIN_RETRY_MS = 1_500;
@@ -65,6 +71,12 @@ export function useSSEProgress(modelId: string | null, enabled: boolean = true) 
           documentsProcessed: raw.documentsProcessed,
           totalDocuments:     raw.totalDocuments,
           details:  raw.details,
+          // Build-model pipeline fields — passed through unchanged
+          floor:        raw.floor,
+          layer:        raw.layer,
+          step:         raw.step,
+          totalSteps:   raw.totalSteps,
+          totalElements: raw.totalElements,
         };
         console.log(`📊 SSE Progress: ${Math.round(pd.progress * 100)}% - ${pd.message}`);
         setData(pd);

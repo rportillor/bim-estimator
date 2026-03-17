@@ -88,29 +88,46 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
     if ((dbStatus === 'generating' || dbStatus === 'processing') && !generatingLocal) {
       setGeneratingLocal(true);
 
-      // Seed ssePercent from the last stored progress so the bar isn't frozen at 0%
+      // Parse metadata once
       const meta =
         typeof latestModel?.metadata === 'string'
           ? (() => { try { return JSON.parse(latestModel.metadata); } catch { return {}; } })()
           : (latestModel?.metadata as Record<string, any> || {});
+
+      // Restore build-model progress if this was a build-model pipeline
+      if (meta.buildPhase === 'running') {
+        setBuildingModel(true);
+        if (meta.buildCurrentFloor) setBuildCurrentFloor(meta.buildCurrentFloor);
+        if (meta.buildCurrentLayer) setBuildCurrentLayer(meta.buildCurrentLayer);
+        if (typeof meta.buildStep === 'number') setBuildStep(meta.buildStep);
+        if (typeof meta.buildTotalSteps === 'number') setBuildTotalSteps(meta.buildTotalSteps);
+        if (typeof meta.buildTotalElements === 'number') setBuildTotalElements(meta.buildTotalElements);
+      }
+
+      // Seed ssePercent from the last stored progress so the bar isn't frozen at 0%
       if (typeof meta.progress === 'number' && meta.progress > 0) {
         setSsePercent(Math.round(meta.progress * 100));
         setSseMsg(meta.message || 'Resuming…');
       }
 
-      // Use the earliest stage startedAt from the server's pipeline state so the
-      // timer survives page refreshes and shows the true elapsed time.
-      let ps = latestModel?.pipelineState as Record<string, any> | string | undefined;
-      if (typeof ps === 'string') { try { ps = JSON.parse(ps); } catch { ps = undefined; } }
-      const timings: Record<string, { startedAt?: string }> = (ps as any)?.stageTimings ?? {};
-      const starts = Object.values(timings)
-        .map(t => t?.startedAt ? new Date(t.startedAt).getTime() : Infinity)
-        .filter(t => t !== Infinity);
-      const earliest = starts.length > 0 ? Math.min(...starts) : Date.now();
-      startedAtRef.current = new Date(earliest).toISOString();
+      // Restore the build start time so the elapsed timer is accurate after page refresh
+      if (meta.buildStartedAt) {
+        startedAtRef.current = meta.buildStartedAt;
+      } else {
+        // Fallback: use the earliest stage timing from the classic pipeline state
+        let ps = latestModel?.pipelineState as Record<string, any> | string | undefined;
+        if (typeof ps === 'string') { try { ps = JSON.parse(ps); } catch { ps = undefined; } }
+        const timings: Record<string, { startedAt?: string }> = (ps as any)?.stageTimings ?? {};
+        const starts = Object.values(timings)
+          .map(t => t?.startedAt ? new Date(t.startedAt).getTime() : Infinity)
+          .filter(t => t !== Infinity);
+        const earliest = starts.length > 0 ? Math.min(...starts) : Date.now();
+        startedAtRef.current = new Date(earliest).toISOString();
+      }
     }
     if (dbStatus === 'completed' || dbStatus === 'failed' || dbStatus === 'error') {
       setGeneratingLocal(false);
+      setBuildingModel(false);
     }
   }, [dbStatus]);
 
@@ -152,13 +169,12 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
     if (sseProgress.details?.currentBatch != null) setCurrentBatch(sseProgress.details.currentBatch);
     if (sseProgress.details?.totalBatches != null) setTotalBatches(sseProgress.details.totalBatches);
 
-    // Build-model specific progress fields
-    const raw = sseProgress as any;
-    if (raw.floor) setBuildCurrentFloor(raw.floor);
-    if (raw.layer) setBuildCurrentLayer(raw.layer);
-    if (raw.step != null) setBuildStep(raw.step);
-    if (raw.totalSteps != null) setBuildTotalSteps(raw.totalSteps);
-    if (raw.totalElements != null) setBuildTotalElements(raw.totalElements);
+    // Build-model specific progress fields (now typed in ProgressData)
+    if (sseProgress.floor) setBuildCurrentFloor(sseProgress.floor);
+    if (sseProgress.layer) setBuildCurrentLayer(sseProgress.layer);
+    if (sseProgress.step != null) setBuildStep(sseProgress.step);
+    if (sseProgress.totalSteps != null) setBuildTotalSteps(sseProgress.totalSteps);
+    if (sseProgress.totalElements != null) setBuildTotalElements(sseProgress.totalElements);
 
     if (sseProgress.status === 'completed') {
       setGeneratingLocal(false);
@@ -256,7 +272,7 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
         method: 'POST',
         headers,
         credentials: 'include',
-        body: JSON.stringify({}),
+        body: JSON.stringify({ floors: ['P1'] }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ message: `HTTP ${res.status}` }));
@@ -278,15 +294,19 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
     },
   });
 
+  // Currently scoped to P1 (underground parking) — 9 layers total
+  const BUILD_FLOORS = ['P1'];
+  const BUILD_TOTAL_STEPS = 9; // 1 floor × 9 layers
+
   const handleBuildModel = () => {
     setBuildingModel(true);
     setBuildStep(0);
-    setBuildTotalSteps(54);
+    setBuildTotalSteps(BUILD_TOTAL_STEPS);
     setBuildTotalElements(0);
-    setBuildCurrentFloor('');
+    setBuildCurrentFloor('P1');
     setBuildCurrentLayer('');
     setSsePercent(2);
-    setSseMsg('Starting build pipeline…');
+    setSseMsg('Starting P1 build pipeline…');
     startedAtRef.current = new Date().toISOString();
     buildMutation.mutate();
   };
@@ -506,23 +526,24 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
 
             {/* Steps summary — different for build vs generate */}
             {buildingModel ? (
-              <div className="grid grid-cols-6 gap-1 text-center text-xs">
-                {['P1', 'Ground', 'Floor2', 'Floor3', 'MPH', 'Roof'].map((floor) => {
-                  const floorOrder = ['P1', 'Ground', 'Floor2', 'Floor3', 'MPH', 'Roof'];
-                  const floorIdx = floorOrder.indexOf(floor);
-                  const currentFloorIdx = floorOrder.indexOf(buildCurrentFloor);
-                  const done = floorIdx < currentFloorIdx;
-                  const active = floorIdx === currentFloorIdx;
-                  return (
-                    <div key={floor} className={`p-1.5 rounded text-[10px] font-medium ${
-                      done   ? 'bg-green-100 text-green-700' :
-                      active ? 'bg-blue-100 text-blue-700' :
-                               'bg-gray-50 text-gray-400'
-                    }`}>
-                      {done ? '✓ ' : ''}{floor}
-                    </div>
-                  );
-                })}
+              <div className="space-y-1">
+                <p className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Layers — P1 Underground Parking</p>
+                <div className="grid grid-cols-3 gap-1 text-center text-xs">
+                  {['gridlines', 'perimeter_walls', 'interior_walls', 'columns', 'slabs', 'doors', 'windows', 'stairs', 'mep'].map((lyr, i) => {
+                    const currentIdx = ['gridlines', 'perimeter_walls', 'interior_walls', 'columns', 'slabs', 'doors', 'windows', 'stairs', 'mep'].indexOf(buildCurrentLayer);
+                    const done   = i < currentIdx;
+                    const active = i === currentIdx;
+                    return (
+                      <div key={lyr} className={`p-1.5 rounded text-[10px] font-medium ${
+                        done   ? 'bg-green-100 text-green-700' :
+                        active ? 'bg-blue-100 text-blue-700' :
+                                 'bg-gray-50 text-gray-400'
+                      }`}>
+                        {done ? '✓ ' : ''}{lyr.replace(/_/g, ' ')}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             ) : (
               <div className="grid grid-cols-3 gap-2 text-center text-xs text-gray-500">
@@ -573,8 +594,8 @@ export default function BIMIntegrationCard({ projectId }: BIMIntegrationCardProp
                 data-testid="button-build-full-model"
               >
                 {buildingModel
-                  ? <><Loader2 className="h-4 w-4 animate-spin" />Building…</>
-                  : <><Layers className="h-4 w-4" />Build Full Model</>
+                  ? <><Loader2 className="h-4 w-4 animate-spin" />Building P1…</>
+                  : <><Layers className="h-4 w-4" />Build P1 Model</>
                 }
               </Button>
               <Button variant="outline" onClick={handleExport} className="flex items-center gap-2" data-testid="button-download-ifc">

@@ -578,6 +578,7 @@ bimGenerateRouter.post("/bim/models/:modelId/build-model", async (req: Request, 
     : RealQTOProcessor.LAYER_ORDER;
 
   const totalSteps = floors.length * layers.length;
+  const buildStartedAt = new Date().toISOString();
 
   logger.info(`[build-model] Starting — ${floors.length} floors × ${layers.length} layers = ${totalSteps} steps`);
 
@@ -596,6 +597,22 @@ bimGenerateRouter.post("/bim/models/:modelId/build-model", async (req: Request, 
     let step = 0;
     let totalExtracted = 0;
     let totalDeleted = 0;
+
+    // Mark model as 'generating' so the UI can detect it survived a page refresh
+    await storage.updateBimModel(modelId, { status: 'generating' as any });
+    await (storage as any).updateBimModelMetadata?.(modelId, {
+      buildPhase:      'running',
+      buildStep:       0,
+      buildTotalSteps: totalSteps,
+      buildFloors:     floors,
+      buildLayers:     layers,
+      buildStartedAt,
+      buildCurrentFloor: floors[0] ?? '',
+      buildCurrentLayer: '',
+      buildPct:        0,
+      progress:        0,
+      message:         'Build pipeline started…',
+    });
 
     try {
       const allDocs = await storage.getDocumentsByProject(pid);
@@ -618,11 +635,25 @@ bimGenerateRouter.post("/bim/models/:modelId/build-model", async (req: Request, 
           step++;
           const pct = Math.round((step / totalSteps) * 98); // cap at 98 — 100 reserved for done
 
-          // Publish start-of-layer progress
+          const layerMsg = `${floorName} / ${layer.replace(/_/g, ' ')} (${step}/${totalSteps})…`;
+
+          // Persist progress to DB so page refreshes can restore it
+          await (storage as any).updateBimModelMetadata?.(modelId, {
+            buildPhase:        'running',
+            buildStep:         step,
+            buildTotalSteps:   totalSteps,
+            buildCurrentFloor: floorName,
+            buildCurrentLayer: layer,
+            buildPct:          pct,
+            progress:          pct / 100,
+            message:           layerMsg,
+          });
+
+          // Publish start-of-layer progress via SSE
           publish(modelId, {
             pct,
             phase: 'running',
-            message: `${floorName} / ${layer} (${step}/${totalSteps})…`,
+            message: layerMsg,
             floor: floorName,
             layer,
             step,
@@ -739,24 +770,49 @@ bimGenerateRouter.post("/bim/models/:modelId/build-model", async (req: Request, 
         }
       }
 
-      // All done
+      // All done — persist completion state and restore model status
       const finalCount = (await storage.getBimElements(modelId)).length;
+      const doneMsg = `Build complete — ${finalCount} elements across ${floors.length} floor(s)`;
       logger.info(`[build-model] Complete — ${totalExtracted} extracted, ${totalDeleted} deleted, ${finalCount} total elements`);
+
+      await storage.updateBimModel(modelId, { status: 'completed' as any, elementCount: finalCount });
+      await (storage as any).updateBimModelMetadata?.(modelId, {
+        buildPhase:      'complete',
+        buildStep:       totalSteps,
+        buildTotalSteps: totalSteps,
+        buildPct:        100,
+        progress:        1,
+        message:         doneMsg,
+        buildCompletedAt: new Date().toISOString(),
+        buildTotalExtracted: totalExtracted,
+        buildTotalElements:  finalCount,
+      });
+
       publish(modelId, {
         pct: 100,
         phase: 'complete',
-        message: `Build complete — ${finalCount} elements across ${floors.length} floors`,
+        message: doneMsg,
         totalExtracted,
         totalDeleted,
         totalElements: finalCount,
       });
 
     } catch (err: any) {
+      const errMsg = `Build pipeline failed: ${err?.message || 'unknown error'}`;
       logger.error(`[build-model] Pipeline failed: ${err?.message}`);
+
+      await storage.updateBimModel(modelId, { status: 'failed' as any });
+      await (storage as any).updateBimModelMetadata?.(modelId, {
+        buildPhase: 'error',
+        buildError: err?.message || 'unknown',
+        message:    errMsg,
+        progress:   0,
+      });
+
       publish(modelId, {
         pct: 0,
         phase: 'error',
-        message: `Build pipeline failed: ${err?.message || 'unknown error'}`,
+        message: errMsg,
       });
     }
   })().catch(() => {}); // swallow unhandled promise rejection — errors are published above
