@@ -1268,47 +1268,77 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         //   realLocation.z → Three.js Y (elevation)     ← up axis
         // ══════════════════════════════════════════════════════════════════
         if (type === 'grid_line') {
-          const gd = e.geometry || {};
+          const gd        = e.geometry || {};
           const axis      = String(gd.axis || 'Y');
           const coord     = Number(gd.coordinate_m ?? 0);
           const startM    = Number(gd.start_m ?? 0);
           const endM      = Number(gd.end_m ?? 0);
+          const angleDeg  = Number(gd.angle_deg ?? 0);
+          const angleRad  = angleDeg * (Math.PI / 180);
           const label     = String(gd.label || '?');
+          const isAngled  = Math.abs(angleDeg) > 0.01;
           const rl        = gd.location?.realLocation || {};
-          // elevation from realLocation.z (new convention)
           const elevRaw   = Number(rl.z ?? 0);
           const elevCC    = coerceWithDatum(0, 0, elevRaw);
           const floorY    = elevCC.z; // Three.js Y (up)
 
-          // Build the two endpoints in Three.js space
-          // Three.js X = east-west, Three.js Y = elevation, Three.js Z = north-south
+          // ── Build the two endpoints in Three.js space ──────────────────────
+          // Three.js X = east-west (building X)
+          // Three.js Y = elevation (building Z)
+          // Three.js Z = north-south (building Y)
+          //
+          // Perpendicular lines:
+          //   axis='X' → runs north-south at fixed east-west position (coord)
+          //   axis='Y' → runs east-west at fixed north-south position (coord)
+          //
+          // Angled lines (angle_deg ≠ 0):
+          //   The line is rotated angle_deg degrees from its primary direction.
+          //   For axis='X' (normally north-south): rotating eastward by angle_deg
+          //     dX (east) = span × sin(angleRad)
+          //     dZ (north) = span × cos(angleRad)
+          //   For axis='Y' (normally east-west): rotating northward by angle_deg
+          //     dX (east) = span × cos(angleRad)
+          //     dZ (north) = span × sin(angleRad)
           let pt1: THREE.Vector3, pt2: THREE.Vector3;
-          if (axis === 'Y') {
-            // Y-axis line: fixed north-south (coord), runs east-west (startM → endM)
-            pt1 = new THREE.Vector3(startM, floorY, coord);
-            pt2 = new THREE.Vector3(endM,   floorY, coord);
+          const span = endM - startM;
+
+          if (isAngled) {
+            if (axis === 'X') {
+              // Angled X-family line: base at X=coord, starts at Z=startM, tilts eastward
+              pt1 = new THREE.Vector3(coord,                         floorY, startM);
+              pt2 = new THREE.Vector3(coord + span * Math.sin(angleRad), floorY, startM + span * Math.cos(angleRad));
+            } else {
+              // Angled Y-family line: base at Z=coord, starts at X=startM, tilts northward
+              pt1 = new THREE.Vector3(startM,                         floorY, coord);
+              pt2 = new THREE.Vector3(startM + span * Math.cos(angleRad), floorY, coord + span * Math.sin(angleRad));
+            }
           } else {
-            // X-axis line: fixed east-west (coord), runs north-south (startM → endM)
-            pt1 = new THREE.Vector3(coord, floorY, startM);
-            pt2 = new THREE.Vector3(coord, floorY, endM);
+            if (axis === 'Y') {
+              // Y-family: fixed north-south position (coord), runs east-west
+              pt1 = new THREE.Vector3(startM, floorY, coord);
+              pt2 = new THREE.Vector3(endM,   floorY, coord);
+            } else {
+              // X-family: fixed east-west position (coord), runs north-south
+              pt1 = new THREE.Vector3(coord, floorY, startM);
+              pt2 = new THREE.Vector3(coord, floorY, endM);
+            }
           }
 
           const pts = new Float32Array([pt1.x, pt1.y, pt1.z, pt2.x, pt2.y, pt2.z]);
           const lineGeo = new THREE.BufferGeometry();
           lineGeo.setAttribute('position', new THREE.BufferAttribute(pts, 3));
-          const lineMat = new THREE.LineBasicMaterial({
-            color: axis === 'X' ? 0xFF6600 : 0xFFCC00, // orange for X-axis, yellow for Y-axis
-            linewidth: 1,
-          });
+          // Colour: angled lines → magenta to stand out; X-family → orange; Y-family → yellow
+          const lineColor = isAngled ? 0xFF00FF : (axis === 'X' ? 0xFF6600 : 0xFFCC00);
+          const lineMat = new THREE.LineBasicMaterial({ color: lineColor, linewidth: isAngled ? 2 : 1 });
           const line = new THREE.Line(lineGeo, lineMat);
-          line.userData = { elementId: e.id, type: 'grid_line', label, axis };
+          line.userData = { elementId: e.id, type: 'grid_line', label, axis, angleDeg };
           root.add(line);
 
           // Bubble label at the far end of the line
           const labelCanvas = document.createElement('canvas');
           labelCanvas.width = 64; labelCanvas.height = 32;
           const ctx2d = labelCanvas.getContext('2d')!;
-          ctx2d.fillStyle = axis === 'X' ? '#FF6600' : '#FFCC00';
+          ctx2d.fillStyle = isAngled ? '#FF00FF' : (axis === 'X' ? '#FF6600' : '#FFCC00');
           ctx2d.fillRect(0, 0, 64, 32);
           ctx2d.fillStyle = '#000000';
           ctx2d.font = 'bold 18px sans-serif';
@@ -1318,13 +1348,11 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           const labelTex = new THREE.CanvasTexture(labelCanvas);
           const labelSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTex, depthTest: false }));
           labelSprite.scale.set(0.8, 0.4, 1);
-          labelSprite.position.copy(pt2).add(new THREE.Vector3(
-            axis === 'Y' ? 0.5 : 0,
-            0.3,
-            axis === 'X' ? 0.5 : 0
-          ));
+          // Offset label slightly beyond pt2 in the direction the line travels
+          const dir = pt2.clone().sub(pt1).normalize();
+          labelSprite.position.copy(pt2).addScaledVector(dir, 0.8).add(new THREE.Vector3(0, 0.3, 0));
           root.add(labelSprite);
-          continue; // grid lines are lines, not meshes — skip box rendering
+          continue; // grid lines render as THREE.Line — skip box fallback
         }
 
         // 🏗️ COMPREHENSIVE BOQ ELEMENT DETECTION
