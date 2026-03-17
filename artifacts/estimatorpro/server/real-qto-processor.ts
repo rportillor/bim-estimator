@@ -3619,6 +3619,42 @@ Return JSON ONLY:
       logger.info(`[extractLayer] Cache HIT for ${floor.name}/${layer} — forceRefresh=true, re-running Claude`);
     }
 
+    // ── Gridlines: try direct PDF text parser first (faster + more accurate) ──
+    if (layer === 'gridlines') {
+      try {
+        const { parseGridlinesFromPdf } = await import('./utils/gridline-pdf-parser');
+        logger.info(`[extractLayer] Attempting direct PDF text parse for gridlines`);
+        // Prefer the floor plan PDF (A101 = parking plan); fall back to first buffer
+        const planEntry = pdfBuffers.find(b =>
+          /A101|parking|plan/i.test(path.basename(b.key))
+        ) ?? pdfBuffers[0];
+        const planBuf = planEntry?.buf;
+        logger.info(`[extractLayer] Using PDF for gridlines: ${path.basename(planEntry?.key ?? 'none')}`);
+        if (planBuf) {
+          const parsed = await parseGridlinesFromPdf(planBuf);
+          if (parsed && parsed.confidence === 'high' && parsed.grid_lines.length >= 5) {
+            logger.info(`[extractLayer] PDF text parser succeeded: ${parsed.grid_lines.length} gridlines. Notes: ${parsed.notes.join('; ')}`);
+            const result = { grid_lines: parsed.grid_lines };
+            // Cache the result
+            for (const { key } of pdfBuffers) {
+              const docInfo = docByKey.get(key);
+              if (docInfo?.id) {
+                const updated = { ...(docInfo.analysisResult ?? {}), [cacheKey]: result };
+                try {
+                  await _stor.updateDocument(docInfo.id, { analysisResult: updated });
+                  docInfo.analysisResult = updated;
+                } catch { /* non-fatal */ }
+              }
+            }
+            return this.parseLayerResponse(result, layer, floor);
+          }
+          logger.info(`[extractLayer] PDF text parser insufficient (${parsed?.grid_lines.length ?? 0} lines, confidence=${parsed?.confidence}) — falling back to Claude. Notes: ${parsed?.notes?.join('; ')}`);
+        }
+      } catch (e: any) {
+        logger.warn(`[extractLayer] PDF text parser error: ${e?.message} — falling back to Claude`);
+      }
+    }
+
     // ── Call Claude ───────────────────────────────────────────────────────────
     logger.info(`[extractLayer] Cache MISS — calling Claude for ${floor.name}/${layer}`);
     let projectName = 'The Moorings on Cameron Lake';
