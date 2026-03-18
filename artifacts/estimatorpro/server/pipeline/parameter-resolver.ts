@@ -2,6 +2,9 @@
 // Deterministic parameter resolution engine.
 // Resolves candidate parameters from schedule, assembly, and grid data.
 // NO Claude/AI calls — purely lookup-based with fuzzy matching.
+//
+// Grid positions come from the AUTHORITATIVE source: moorings-grid-constants.ts
+// When available, these override any grid positions from Claude/PDF parser.
 
 import type {
   ScheduleData,
@@ -10,6 +13,8 @@ import type {
   GridData,
   GridAxis,
 } from './stage-types';
+
+import { MOORINGS_GRIDLINES, type GridlineDefinition } from '../../shared/moorings-grid-constants';
 
 import type {
   CandidateSet,
@@ -198,11 +203,36 @@ function buildWallAssemblyMap(assemblies: AssemblyData): Map<string, AssemblyDef
   return map;
 }
 
-function buildGridMap(gridlines: GridAxis[]): Map<string, number> {
+/**
+ * Build a grid position lookup map.
+ * PRIMARY SOURCE: moorings-grid-constants.ts (hardcoded from PDF dimension text)
+ * FALLBACK: pipeline grid data (from Claude/PDF parser)
+ *
+ * The constants are authoritative because they were derived by reading the
+ * actual dimension strings between gridlines on the drawing. The pipeline
+ * grid data is from AI/parser extraction which may have errors.
+ */
+function buildGridMap(
+  pipelineGridlines: GridAxis[],
+  axis: 'X' | 'Y',
+): Map<string, number> {
   const map = new Map<string, number>();
-  for (const g of gridlines) {
-    map.set(g.label.toUpperCase().replace(/\s+/g, ''), g.position_m);
+
+  // PRIMARY: use hardcoded constants (authoritative — from PDF dimension text)
+  for (const g of MOORINGS_GRIDLINES) {
+    if (g.axis === axis) {
+      map.set(g.label.toUpperCase().replace(/\s+/g, ''), g.coord);
+    }
   }
+
+  // FALLBACK: if constants didn't have a label, try pipeline data
+  for (const g of pipelineGridlines) {
+    const key = g.label.toUpperCase().replace(/\s+/g, '');
+    if (!map.has(key)) {
+      map.set(key, g.position_m);
+    }
+  }
+
   return map;
 }
 
@@ -471,8 +501,10 @@ export function resolveParameters(
   const doorSchedule = buildDoorScheduleMap(schedules);
   const windowSchedule = buildWindowScheduleMap(schedules);
   const wallAssemblies = buildWallAssemblyMap(assemblies);
-  const gridAlpha = buildGridMap(grid.alphaGridlines);
-  const gridNumeric = buildGridMap(grid.numericGridlines);
+  // Alpha gridlines (A-L, CL, M-Y) map to EW positions → axis='X' in constants
+  // Numeric gridlines (1-9, 10-19) map to NS positions → axis='Y' in constants
+  const gridAlpha = buildGridMap(grid.alphaGridlines, 'X');
+  const gridNumeric = buildGridMap(grid.numericGridlines, 'Y');
   const storeyMap = buildStoreyMap(candidates.storeys);
 
   // Determine the drawing unit system — if not explicitly provided, use schedule units.
