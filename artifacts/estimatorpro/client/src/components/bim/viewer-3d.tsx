@@ -1943,21 +1943,27 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         );
         oldLabels?.forEach(l => three.current?.scene.remove(l));
 
-        // Add axis orientation labels at world origin (Grid A-9)
-        // Three.js: X = Grid Letters (EW, east), Y = Up, Z = Grid Numbers (NS, north)
-        const xLabel = createGridLabel('Grid A→ (X)', '#FF3333', 22);
+        // Axis labels use PDF drawing convention (A101):
+        //   X  = East-West      (positive → east)       Three.js X
+        //   Y  = North-South    (positive → north)      Three.js Z  ← swapped!
+        //   Z  = Elevation      (positive → up)         Three.js Y  ← swapped!
+        // The Three.js engine uses Y-up internally, but all labels and user-facing
+        // coordinates are expressed in PDF convention so they match the drawings.
+        const xLabel = createGridLabel('X+ (East)', '#FF3333', 22);
         xLabel.name = 'axisLabelX';
         xLabel.position.set(axisScale * 1.3, 0.2, 0);
         xLabel.scale.setScalar(axisScale * 0.4);
         three.current?.scene.add(xLabel);
 
-        const yLabel = createGridLabel('Up (Y)', '#33CC33', 22);
+        // Three.js Y = PDF Z (elevation/up)
+        const yLabel = createGridLabel('Z+ (Elevation)', '#33CC33', 22);
         yLabel.name = 'axisLabelY';
-        yLabel.position.set(0, axisScale * 1.2, 0);
+        yLabel.position.set(0.3, axisScale * 1.2, 0);
         yLabel.scale.setScalar(axisScale * 0.4);
         three.current?.scene.add(yLabel);
 
-        const zLabel = createGridLabel('Grid 9→1 (Z)', '#3333FF', 22);
+        // Three.js Z = PDF Y (north-south, positive = north toward Grid 1)
+        const zLabel = createGridLabel('Y+ (North)', '#3333FF', 22);
         zLabel.name = 'axisLabelZ';
         zLabel.position.set(0, 0.2, axisScale * 1.3);
         zLabel.scale.setScalar(axisScale * 0.4);
@@ -2110,6 +2116,16 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
             WebkitTouchCallout: 'none' as any
           }}
         />
+
+        {/* ── Coordinate system legend (PDF A101 convention) ───────────────── */}
+        <div className="absolute bottom-14 right-3 bg-black/70 text-white text-[10px] leading-relaxed rounded px-2.5 py-2 font-mono pointer-events-none select-none">
+          <div className="font-semibold text-[10px] text-slate-300 mb-1 uppercase tracking-wide">Coordinates (PDF A101)</div>
+          <div><span className="text-red-400 font-bold">■</span> X = E–W &nbsp;(+ east)</div>
+          <div><span className="text-blue-400 font-bold">■</span> Y = N–S &nbsp;(+ north)</div>
+          <div><span className="text-green-400 font-bold">■</span> Z = Elev (+ up)</div>
+          <div className="mt-1 text-slate-400 text-[9px]">Origin: Grid A-9 = (0, 0, 0)</div>
+        </div>
+
         {/* ✅ Mobile-friendly large touch controls for iPhone */}
         <div className="absolute left-3 bottom-3 flex gap-2">
           <Button 
