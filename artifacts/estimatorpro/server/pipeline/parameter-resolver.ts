@@ -14,7 +14,9 @@ import type {
   GridAxis,
 } from './stage-types';
 
-import { MOORINGS_GRIDLINES, computeGridIntersection, type GridlineDefinition } from '../../shared/moorings-grid-constants';
+import { computeGridIntersection, type GridlineDefinition } from '../../shared/grid-types';
+// Project-specific grid data — will be replaced by parser output for generic projects
+import { MOORINGS_GRIDLINES } from '../../shared/moorings-grid-constants';
 
 import type {
   CandidateSet,
@@ -313,9 +315,9 @@ function resolveGridPosition(
   const alphaKey = gridRef.alpha.toUpperCase().replace(/\s+/g, '');
   const numericKey = gridRef.numeric.toUpperCase().replace(/\s+/g, '');
 
-  // Try exact intersection computation first (handles angled grids correctly)
-  // Uses MOORINGS_GRIDLINES as default — future projects pass their own gridlines
-  const intersection = computeGridIntersection(alphaKey, numericKey);
+  // Try exact intersection computation (handles angled grids correctly)
+  // Uses MOORINGS_GRIDLINES as default — future projects will pass their own parsed gridlines
+  const intersection = computeGridIntersection(alphaKey, numericKey, MOORINGS_GRIDLINES);
   if (intersection) {
     return {
       x: intersection.ew + offset.x,

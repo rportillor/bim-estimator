@@ -22,7 +22,7 @@
  * 10. User confirmation: presented to user for final approval
  */
 
-import type { GridlineDefinition } from '../../shared/moorings-grid-constants';
+import type { GridlineDefinition } from '../../shared/grid-types';
 
 // ---------------------------------------------------------------------------
 // Public interfaces (backward-compatible)

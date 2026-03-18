@@ -30,6 +30,8 @@
  *   Grid 19 NS = −30.088 (southern wing boundary; used as start_m for M–Y and CL lines)
  */
 
+// GridlineDefinition type is also defined in grid-types.ts for generic use.
+// This file keeps its own copy for the project-specific constants.
 export interface GridlineDefinition {
   label: string;
   axis: 'X' | 'Y';
