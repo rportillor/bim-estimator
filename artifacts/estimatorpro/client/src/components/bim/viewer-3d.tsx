@@ -616,7 +616,9 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
     const renderGen = (renderGenRef.current = (renderGenRef.current ?? 0) + 1);
     
     const {scene,camera,controls} = three.current;
-    // clear previous (keep helpers)
+    // clear previous — remove everything except the initial GridHelper and AxesHelper.
+    // This includes any previously rendered static gridlines (sg:*), element meshes,
+    // labels, and debug objects. The static gridlines will be re-added at the end.
     for(let i=scene.children.length-1;i>=0;i--){
       const c = scene.children[i]; if(!(c instanceof THREE.GridHelper) && !(c instanceof THREE.AxesHelper)) scene.remove(c);
     }
@@ -1856,7 +1858,76 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         three.current?.scene.add(labelSprite);
       }
       console.log(`[3D Viewer] Rendered ${MOORINGS_GRIDLINES.length} static gridlines at Y=${staticFloorY.toFixed(2)}`);
-      
+
+      // ── GRID INTERSECTION MARKERS ──────────────────────────────────────
+      // Compute and render a small sphere at each valid grid intersection.
+      // Only where gridlines physically cross (extents overlap).
+      const alphaLines = MOORINGS_GRIDLINES.filter(g => g.axis === 'X');
+      const numericLines = MOORINGS_GRIDLINES.filter(g => g.axis === 'Y');
+      let intersectionCount = 0;
+
+      for (const alpha of alphaLines) {
+        for (const numeric of numericLines) {
+          // Extent overlap check
+          const tol = 5;
+          const aMin = Math.min(alpha.start_m, alpha.end_m) - tol;
+          const aMax = Math.max(alpha.start_m, alpha.end_m) + tol;
+          const nMin = Math.min(numeric.start_m, numeric.end_m) - tol;
+          const nMax = Math.max(numeric.start_m, numeric.end_m) + tol;
+          if (alpha.coord < nMin || alpha.coord > nMax) continue;
+          if (numeric.coord < aMin || numeric.coord > aMax) continue;
+
+          // Compute intersection
+          const tanA = Math.tan(alpha.angle_deg * (Math.PI / 180));
+          const tanN = Math.tan(numeric.angle_deg * (Math.PI / 180));
+          const denom = 1 + tanA * tanN;
+          if (Math.abs(denom) < 1e-10) continue;
+          const ns = (numeric.coord + (numeric.start_m - alpha.coord) * tanN) / denom;
+          const ew = alpha.coord + ns * tanA;
+
+          // Verify intersection is within extents
+          if (ew < nMin || ew > nMax || ns < aMin || ns > aMax) continue;
+
+          // Render intersection marker — small sphere
+          const markerGeo = new THREE.SphereGeometry(0.3, 8, 6);
+          const isAngled = Math.abs(alpha.angle_deg) > 0.01 || Math.abs(numeric.angle_deg) > 0.01;
+          const markerColor = isAngled ? 0xFF00FF : 0x00FF00;
+          const markerMat = new THREE.MeshBasicMaterial({ color: markerColor, transparent: true, opacity: 0.7 });
+          const marker = new THREE.Mesh(markerGeo, markerMat);
+          marker.position.set(ew, staticFloorY + 0.1, ns);
+          marker.name = `sg:int:${alpha.label}-${numeric.label}`;
+          marker.userData = {
+            type: 'grid_intersection',
+            label: `${alpha.label}-${numeric.label}`,
+            ew: Math.round(ew * 1000) / 1000,
+            ns: Math.round(ns * 1000) / 1000,
+            z: staticFloorY,
+          };
+          three.current?.scene.add(marker);
+
+          // Label at intersection — small text showing "A-9" etc.
+          const intCanvas = document.createElement('canvas');
+          intCanvas.width = 96; intCanvas.height = 24;
+          const intCtx = intCanvas.getContext('2d')!;
+          intCtx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+          intCtx.fillRect(0, 0, 96, 24);
+          intCtx.fillStyle = '#FFFFFF';
+          intCtx.font = '12px monospace';
+          intCtx.textAlign = 'center';
+          intCtx.textBaseline = 'middle';
+          intCtx.fillText(`${alpha.label}-${numeric.label}`, 48, 12);
+          const intTex = new THREE.CanvasTexture(intCanvas);
+          const intSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: intTex, depthTest: false }));
+          intSprite.scale.set(1.2, 0.3, 1);
+          intSprite.position.set(ew, staticFloorY + 0.5, ns);
+          intSprite.name = `sg:int:${alpha.label}-${numeric.label}:lbl`;
+          three.current?.scene.add(intSprite);
+
+          intersectionCount++;
+        }
+      }
+      console.log(`[3D Viewer] Rendered ${intersectionCount} grid intersection markers`);
+
       // Update axes positioning - place at ground level (Y=0)
       const axes = three.current?.scene.getObjectByName("axes") as THREE.AxesHelper;
       if (axes) {

@@ -12,6 +12,8 @@
 |-----|------|--------|---------|
 | 1.0 | 2026-03-18 | Replit Agent | Initial document — architecture, fixed issues, pending work |
 | 1.1 | 2026-03-18 | Replit Agent | Aligned with TRANSFER-TO-REPLIT.md Rev 1.1; confirmed pipeline files present; updated known issues |
+| 1.2 | 2026-03-18 | Claude Code | Grid intersection markers added to viewer-3d.tsx (commit ace4f15) |
+| 1.3 | 2026-03-18 | Replit Agent | Applied commit ace4f15 to Replit workspace; updated in-progress status |
 
 ---
 
@@ -106,9 +108,9 @@ artifacts/
 
 ## 3. Issues Currently In Progress
 
-### 3.1 Visual verification of all 47 gridlines in browser ← ACTIVE
-**Status:** Static renderer deployed and Vite hot-reloaded. Browser screenshot not yet taken.
-**Next step:** Load BIM viewer for P1 floor, confirm 47 lines with correct colours (EW orange, NS yellow, angled/wing/CL magenta) and labels.
+### 3.1 Visual verification of all 47 gridlines + intersection markers ← ACTIVE
+**Status:** Static renderer deployed. Claude Code (commit ace4f15) added grid intersection markers — green spheres at orthogonal intersections, magenta at angled ones, with `A-9` style labels. Applied to Replit workspace via GitHub pull. Vite HMR confirmed. Browser reload required to trigger render.
+**Next step:** Load BIM viewer for P1 floor. Confirm 47 lines render with correct colours. Confirm intersection markers appear — console should log `Rendered X grid intersection markers`. Cross-check origin: A-9 dot should sit at Three.js `(0, -4.65, 0)`. Compare visually against A101 drawing.
 
 ### 3.2 Element coordinate alignment with grid
 **Status:** Diagnosed. Elements in the DB were placed using Claude's visual estimation of PDF coordinates, not grid references. They will not align with the A/9=(0,0,0) grid origin.
