@@ -135,14 +135,19 @@ export const MOORINGS_GRIDLINES: GridlineDefinition[] = [
  *
  * Solving simultaneously gives the intersection.
  */
+/**
+ * Generic grid intersection — works for ANY project's gridlines.
+ * Pass the gridline array explicitly, or omit to use MOORINGS_GRIDLINES as default.
+ */
 export function computeGridIntersection(
   alphaLabel: string,
   numericLabel: string,
+  gridlines: GridlineDefinition[] = MOORINGS_GRIDLINES,
 ): { ew: number; ns: number } | null {
-  const alpha = MOORINGS_GRIDLINES.find(
+  const alpha = gridlines.find(
     g => g.axis === 'X' && g.label.toUpperCase() === alphaLabel.toUpperCase()
   );
-  const numeric = MOORINGS_GRIDLINES.find(
+  const numeric = gridlines.find(
     g => g.axis === 'Y' && g.label.toUpperCase() === numericLabel.toUpperCase()
   );
 
@@ -174,8 +179,8 @@ export function computeGridIntersection(
 /**
  * Look up a gridline definition by label.
  */
-export function getGridline(label: string): GridlineDefinition | undefined {
-  return MOORINGS_GRIDLINES.find(
+export function getGridline(label: string, gridlines: GridlineDefinition[] = MOORINGS_GRIDLINES): GridlineDefinition | undefined {
+  return gridlines.find(
     g => g.label.toUpperCase() === label.toUpperCase()
   );
 }

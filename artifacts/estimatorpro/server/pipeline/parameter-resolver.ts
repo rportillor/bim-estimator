@@ -314,6 +314,7 @@ function resolveGridPosition(
   const numericKey = gridRef.numeric.toUpperCase().replace(/\s+/g, '');
 
   // Try exact intersection computation first (handles angled grids correctly)
+  // Uses MOORINGS_GRIDLINES as default — future projects pass their own gridlines
   const intersection = computeGridIntersection(alphaKey, numericKey);
   if (intersection) {
     return {
