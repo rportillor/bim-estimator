@@ -58,6 +58,41 @@ bimElementCrudRouter.get(
 );
 
 // ═════════════════════════════════════════════════════════════════════════════
+// DELETE /api/bim/models/:modelId/elements/grid-lines — Remove all grid_line
+// elements from the DB. Gridlines are rendered from static constants
+// (moorings-grid-constants.ts), not from the DB.
+// ═════════════════════════════════════════════════════════════════════════════
+
+bimElementCrudRouter.delete(
+  '/api/bim/models/:modelId/elements/grid-lines',
+  async (req: Request, res: Response) => {
+    try {
+      const { modelId } = req.params;
+      const raw = await storage.getBimElements(modelId);
+      const gridElements = (raw || []).filter(
+        (e: any) => (e.elementType || '').toLowerCase() === 'grid_line'
+      );
+
+      let deleted = 0;
+      for (const el of gridElements) {
+        await storage.deleteBimElement(el.id);
+        deleted++;
+      }
+
+      console.log(`Cleaned ${deleted} grid_line elements from model ${modelId}`);
+      return res.json({
+        success: true,
+        deleted,
+        message: `Removed ${deleted} grid_line elements. Gridlines are rendered from static constants.`,
+      });
+    } catch (error: any) {
+      console.error('Error cleaning grid_line elements:', error);
+      return res.status(500).json({ error: `Failed to clean grid elements: ${error?.message}` });
+    }
+  },
+);
+
+// ═════════════════════════════════════════════════════════════════════════════
 // POST /api/bim/models/:modelId/elements — Create a new element
 // ═════════════════════════════════════════════════════════════════════════════
 

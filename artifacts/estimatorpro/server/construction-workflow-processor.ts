@@ -2786,30 +2786,11 @@ Return ALL grid lines you find matching these specific characteristics:
         const result = this.parseJSONResponse(responseText);
         
         if (result?.grid_lines) {
-          logger.info(`   ðŸŽ¯ Found ${result.grid_lines.length} grid lines in page ${i+1}`);
-          
-          // Convert to Element format
-          for (const gridLine of result.grid_lines) {
-            const element: Element = {
-              id: `${gridLine.id}_${Date.now()}`,
-              type: 'grid_line',
-              assemblies: [], // Grid lines don't have assemblies
-              location: `Floor Plan - ${doc.filename}`,
-              properties: {
-                direction: gridLine.direction,
-                label: gridLine.label,
-                confidence: gridLine.confidence || 'medium',
-                source_document: doc.filename,
-                page: i + 1
-              },
-              geometry: {
-                position: gridLine.estimated_position || { x: 0, y: 0, z: 0 },
-                type: 'line',
-                direction: gridLine.direction
-              }
-            };
-            gridElements.push(element);
-          }
+          // GRID LINES ARE RENDERED FROM STATIC CONSTANTS (moorings-grid-constants.ts).
+          // Do NOT create grid_line elements — they conflict with the authoritative
+          // static renderer. Log for reference only.
+          logger.info(`   Grid lines found in page ${i+1}: ${result.grid_lines.length} ` +
+            `(NOT stored — static constants are authoritative)`);
         }
       } catch (error) {
         logger.error(`Failed to extract grids from page ${i+1}:`, error);

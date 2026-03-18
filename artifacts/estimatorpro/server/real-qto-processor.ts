@@ -3429,27 +3429,12 @@ Return JSON ONLY:
     // All elements MUST follow { x: eastWest, y: northSouth, z: elevation }
     // ─────────────────────────────────────────────────────────────────────
     if (layer === 'gridlines') {
-      for (const g of (result?.grid_lines ?? [])) {
-        const len = Math.abs((g.end_m ?? 0) - (g.start_m ?? 0));
-        const midSpan = ((g.start_m ?? 0) + (g.end_m ?? 0)) / 2;
-        // For Y-axis lines (run east-west): east-west = midSpan, north-south = coordinate_m
-        // For X-axis lines (run north-south): east-west = coordinate_m, north-south = midSpan
-        const planX = g.axis === 'Y' ? midSpan        : (g.coordinate_m ?? 0);
-        const planY = g.axis === 'Y' ? (g.coordinate_m ?? 0) : midSpan;
-        elements.push({
-          id: randomUUID(), elementType: 'grid_line',
-          name: `Grid ${g.label}`,
-          storeyName: floor.name,
-          geometry: JSON.stringify({
-            type: 'grid_line', label: g.label, axis: g.axis,
-            coordinate_m: g.coordinate_m, start_m: g.start_m, end_m: g.end_m, angle_deg: g.angle_deg ?? 0,
-            dimensions: { length: len, height: 0.05, depth: 0.05, area: 0, volume: 0 },
-            location: { realLocation: { x: planX, y: planY, z: elev } },
-          }),
-          properties: JSON.stringify({ label: g.label, axis: g.axis, coordinateM: g.coordinate_m }),
-          quantity: 1, unit: 'EA',
-        } as any);
-      }
+      // GRID LINES ARE RENDERED FROM STATIC CONSTANTS (moorings-grid-constants.ts).
+      // Do NOT insert grid_line elements into the DB — they conflict with the
+      // authoritative static renderer. The PDF parser results are used only for
+      // verification/logging, not for element storage.
+      logger.info(`[extractLayer] Gridline layer requested — skipping DB insertion. ` +
+        `Gridlines are rendered from static constants (${(result?.grid_lines ?? []).length} parsed for reference).`);
     } else if (layer === 'perimeter_walls' || layer === 'interior_walls') {
       const key = layer === 'perimeter_walls' ? 'perimeter_walls' : 'interior_walls';
       const elType = layer === 'perimeter_walls' ? 'exterior_wall' : 'interior_wall';
