@@ -452,15 +452,15 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
     controls.panSpeed = 1.5;
     controls.rotateSpeed = 0.5;
 
-    // AutoCAD-style mouse button mapping:
-    //   Left drag   → orbit/rotate
-    //   Middle drag → pan (screen-space X + Y)
-    //   Right drag  → pan (alternative, also common in CAD apps)
+    // Navigation mapping — optimised for plan view:
+    //   Left drag   → pan in all directions (hold + slide anywhere)
+    //   Middle drag → zoom (dolly)
+    //   Right drag  → orbit/rotate (for 3D views)
     //   Scroll      → zoom
     controls.mouseButtons = {
-      LEFT:   THREE.MOUSE.ROTATE,
-      MIDDLE: THREE.MOUSE.PAN,
-      RIGHT:  THREE.MOUSE.PAN,
+      LEFT:   THREE.MOUSE.PAN,
+      MIDDLE: THREE.MOUSE.DOLLY,
+      RIGHT:  THREE.MOUSE.ROTATE,
     };
 
     // Screen-space panning: pan moves in the camera's XY plane (all directions),
