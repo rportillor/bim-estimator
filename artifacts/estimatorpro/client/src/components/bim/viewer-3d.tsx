@@ -2028,6 +2028,10 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         const fl        = staticFloorY + 0.3;
         const EXT_GREY  = new THREE.LineBasicMaterial({ color: 0xAAAAAA, transparent: true, opacity: 0.7 });
         const DIM_GREY  = new THREE.LineBasicMaterial({ color: 0x666666, transparent: true, opacity: 0.9 });
+        // Wing dimension chains use CAD-standard blue annotation colour + depthTest:false
+        // so they always render on top of gridlines (same as a CAD annotation layer)
+        const EXT_BLUE  = new THREE.LineBasicMaterial({ color: 0x4488CC, transparent: true, opacity: 0.85, depthTest: false });
+        const DIM_BLUE  = new THREE.LineBasicMaterial({ color: 0x1155AA, transparent: true, opacity: 1.0,  depthTest: false });
 
         // Helper: add a 2-point line
         const addLine2 = (ax:number,ay:number,az:number, bx:number,by:number,bz:number, mat:THREE.Material) => {
@@ -2122,15 +2126,15 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
             });
 
             // Chain line: first → last attachment (runs perp to M-Y = in mySE direction)
-            addLine2(myAtt[0].chainX, fl, myAtt[0].chainZ, myAtt[myAtt.length-1].chainX, fl, myAtt[myAtt.length-1].chainZ, DIM_GREY);
+            addLine2(myAtt[0].chainX, fl, myAtt[0].chainZ, myAtt[myAtt.length-1].chainX, fl, myAtt[myAtt.length-1].chainZ, DIM_BLUE);
 
             for (const att of myAtt) {
               // Extension line: gap from gridline end → past chain line (with overshoot)
               addLine2(att.refX + EXT_GAP*mySE_x, fl, att.refZ + EXT_GAP*mySE_z,
-                       att.chainX + EXT_OVERSHOOT*mySE_x, fl, att.chainZ + EXT_OVERSHOOT*mySE_z, EXT_GREY);
+                       att.chainX + EXT_OVERSHOOT*mySE_x, fl, att.chainZ + EXT_OVERSHOOT*mySE_z, EXT_BLUE);
               // Tick perpendicular to extension (along chain direction = myDir)
               addLine2(att.chainX - TICK_H*myDir_x, fl, att.chainZ - TICK_H*myDir_z,
-                       att.chainX + TICK_H*myDir_x, fl, att.chainZ + TICK_H*myDir_z, DIM_GREY);
+                       att.chainX + TICK_H*myDir_x, fl, att.chainZ + TICK_H*myDir_z, DIM_BLUE);
             }
 
             for (let i = 0; i < myAtt.length - 1; i++) {
@@ -2158,15 +2162,15 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
             });
 
             // Chain line: Grid-10 → Grid-19 attachment (runs perp to 10-19 = in n19NE direction)
-            addLine2(n19Att[0].chainX, fl, n19Att[0].chainZ, n19Att[n19Att.length-1].chainX, fl, n19Att[n19Att.length-1].chainZ, DIM_GREY);
+            addLine2(n19Att[0].chainX, fl, n19Att[0].chainZ, n19Att[n19Att.length-1].chainX, fl, n19Att[n19Att.length-1].chainZ, DIM_BLUE);
 
             for (const att of n19Att) {
               // Extension line: gap from gridline end → past chain line (with overshoot)
               addLine2(att.refX + EXT_GAP*n19NE_x, fl, att.refZ + EXT_GAP*n19NE_z,
-                       att.chainX + EXT_OVERSHOOT*n19NE_x, fl, att.chainZ + EXT_OVERSHOOT*n19NE_z, EXT_GREY);
+                       att.chainX + EXT_OVERSHOOT*n19NE_x, fl, att.chainZ + EXT_OVERSHOOT*n19NE_z, EXT_BLUE);
               // Tick along chain direction (= 10-19 line direction = n19Dir)
               addLine2(att.chainX - TICK_H*n19Dir_x, fl, att.chainZ - TICK_H*n19Dir_z,
-                       att.chainX + TICK_H*n19Dir_x, fl, att.chainZ + TICK_H*n19Dir_z, DIM_GREY);
+                       att.chainX + TICK_H*n19Dir_x, fl, att.chainZ + TICK_H*n19Dir_z, DIM_BLUE);
             }
 
             for (let i = 0; i < n19Att.length - 1; i++) {
