@@ -448,9 +448,10 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
     controls.enablePan = true;
     controls.enableZoom = true;
     controls.enableRotate = true;
-    controls.zoomSpeed = 1.2;
+    controls.zoomSpeed = 3.0;
     controls.panSpeed = 1.5;
     controls.rotateSpeed = 0.5;
+    controls.minDistance = 0.5;   // allow zooming in very close
 
     // Navigation mapping — optimised for plan view:
     //   Left drag   → pan in all directions (hold + slide anywhere)
@@ -1997,11 +1998,11 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([ax,ay,az,bx,by,bz]),3));
           three.current?.scene.add(new THREE.Line(geo, mat));
         };
-        // Helper: spacing label between two points on a chain
+        // Helper: spacing label — centred ON the dimension chain line (professional standard)
         const addSpacingLbl = (dist_mm:number, x:number, z:number, name:string) => {
-          const lbl = createGridLabel(`${dist_mm}`, '#333333', 15);
+          const lbl = createGridLabel(`${dist_mm}`, '#222222', 15);
           lbl.scale.set(3.5, 1.6, 1);
-          lbl.position.set(x, staticFloorY + 2, z);
+          lbl.position.set(x, staticFloorY + 0.5, z);  // ON the chain line, slight Y lift
           lbl.name = name;
           three.current?.scene.add(lbl);
         };
@@ -2025,7 +2026,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         }
         for (let i = 0; i < allEWLines.length - 1; i++) {
           const a = allEWLines[i], b = allEWLines[i+1];
-          addSpacingLbl(Math.round((b.coord - a.coord)*1000), (a.coord+b.coord)/2, SOUTH_Z + 1, `sg:dchain:ew:${i}`);
+          addSpacingLbl(Math.round((b.coord - a.coord)*1000), (a.coord+b.coord)/2, SOUTH_Z, `sg:dchain:ew:${i}`);
         }
 
         // ── WEST chain: rectangular number lines (1–9) ───────────────────────
@@ -2042,7 +2043,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         }
         for (let i = 0; i < rectNSLines.length - 1; i++) {
           const a = rectNSLines[i], b = rectNSLines[i+1];
-          addSpacingLbl(Math.round((b.coord - a.coord)*1000), WEST_X - 2.5, -(a.coord+b.coord)/2, `sg:dchain:ns:${i}`);
+          addSpacingLbl(Math.round((b.coord - a.coord)*1000), WEST_X, -(a.coord+b.coord)/2, `sg:dchain:ns:${i}`);
         }
 
         // ── EAST chain: wing number lines (10–19) ────────────────────────────
@@ -2078,7 +2079,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
             const az = eastPts[i].eastZ, bz = eastPts[i+1].eastZ;
             // perpendicular spacing between adjacent wing lines in real space = |NS diff| / cos(angle)
             const nsD = Math.abs(eastPts[i+1].g.coord - eastPts[i].g.coord);
-            addSpacingLbl(Math.round(nsD * 1000), EAST_X + 2.5, (az+bz)/2, `sg:dchain:wing:${i}`);
+            addSpacingLbl(Math.round(nsD * 1000), EAST_X, (az+bz)/2, `sg:dchain:wing:${i}`);
           }
         }
       }
