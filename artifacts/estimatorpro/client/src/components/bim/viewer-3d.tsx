@@ -616,7 +616,9 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
     const renderGen = (renderGenRef.current = (renderGenRef.current ?? 0) + 1);
     
     const {scene,camera,controls} = three.current;
-    // clear previous (keep helpers)
+    // clear previous — remove everything except the initial GridHelper and AxesHelper.
+    // This includes any previously rendered static gridlines (sg:*), element meshes,
+    // labels, and debug objects. The static gridlines will be re-added at the end.
     for(let i=scene.children.length-1;i>=0;i--){
       const c = scene.children[i]; if(!(c instanceof THREE.GridHelper) && !(c instanceof THREE.AxesHelper)) scene.remove(c);
     }
