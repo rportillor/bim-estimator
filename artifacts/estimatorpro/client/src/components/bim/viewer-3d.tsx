@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { ZoomIn, ZoomOut, Home, Layers, Eye, EyeOff, AlertTriangle, Map as MapIcon } from "lucide-react";
 import type { UnitSystem } from "./unit-utils";
-import { MOORINGS_GRIDLINES } from "./moorings-grid-constants";
+import { MOORINGS_GRIDLINES, WING_ANG } from "./moorings-grid-constants";
 
 export interface ViewerProps {
   ifcUrl?: string;
@@ -2007,29 +2007,27 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           three.current?.scene.add(lbl);
         };
 
-        // ── SOUTH chain: ALL letter lines (A–L rect + M–Y wing) ──────────────
-        // All axis='X' lines pass through NS=0 at EW=g.coord regardless of angle.
-        const allEWLines = MOORINGS_GRIDLINES
-          .filter(g => g.axis === 'X' && !isCLLine(g))
-          .sort((a, b) => a.coord - b.coord);
+        // ── SOUTH chain: rectangular letter lines A–L only ───────────────────
+        // L and M are NOT consecutive — the wing has a separate origin.
+        // L = 41.999 m, M = 45.671 m: these belong to different grid families.
         function isCLLine(g:{label:string}) { return g.label==='CLa'||g.label==='CL'||g.label==='CLb'; }
+        const rectEWLines = MOORINGS_GRIDLINES
+          .filter(g => g.axis === 'X' && Math.abs(g.angle_deg) < 0.01 && !isCLLine(g))
+          .sort((a, b) => a.coord - b.coord);
 
-        if (allEWLines.length >= 2) {
-          addLine2(allEWLines[0].coord, fl, SOUTH_Z, allEWLines[allEWLines.length-1].coord, fl, SOUTH_Z, DIM_GREY);
+        if (rectEWLines.length >= 2) {
+          addLine2(rectEWLines[0].coord, fl, SOUTH_Z, rectEWLines[rectEWLines.length-1].coord, fl, SOUTH_Z, DIM_GREY);
         }
-        for (const g of allEWLines) {
-          // Extension line: gridline south end (NS=0, Z=0) → dim chain (Z=SOUTH_Z)
-          // Add a small gap (1m) before reaching the chain to look professional
-          addLine2(g.coord, fl, 1,       g.coord, fl, SOUTH_Z - 1, EXT_GREY);
-          // Tick at chain level
+        for (const g of rectEWLines) {
+          addLine2(g.coord, fl, 1,             g.coord, fl, SOUTH_Z - 1, EXT_GREY);
           addLine2(g.coord, fl, SOUTH_Z - 0.8, g.coord, fl, SOUTH_Z + 0.8, DIM_GREY);
         }
-        for (let i = 0; i < allEWLines.length - 1; i++) {
-          const a = allEWLines[i], b = allEWLines[i+1];
+        for (let i = 0; i < rectEWLines.length - 1; i++) {
+          const a = rectEWLines[i], b = rectEWLines[i+1];
           addSpacingLbl(Math.round((b.coord - a.coord)*1000), (a.coord+b.coord)/2, SOUTH_Z, `sg:dchain:ew:${i}`);
         }
 
-        // ── WEST chain: rectangular number lines (1–9) ───────────────────────
+        // ── WEST chain: rectangular number lines 1–9 ─────────────────────────
         const rectNSLines = MOORINGS_GRIDLINES
           .filter(g => g.axis === 'Y' && Math.abs(g.angle_deg) < 0.01)
           .sort((a, b) => a.coord - b.coord);
@@ -2046,40 +2044,99 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           addSpacingLbl(Math.round((b.coord - a.coord)*1000), WEST_X, -(a.coord+b.coord)/2, `sg:dchain:ns:${i}`);
         }
 
-        // ── EAST chain: wing number lines (10–19) ────────────────────────────
-        // Wing lines are east of the rect building. Each line's east end is its pt2.
-        // We project them onto an east-side chain.
-        const wingNSLines = MOORINGS_GRIDLINES
-          .filter(g => g.axis === 'Y' && Math.abs(g.angle_deg) > 0.01)
-          .sort((a, b) => a.coord - b.coord);  // sort by NS (coord = NS at EW=start_m)
+        // ── ANGLED CHAINS for wing lines ──────────────────────────────────────
+        // Chains run perpendicular to the gridlines (standard drawing practice).
+        // Extension lines are parallel to the gridlines.
+        // Perpendicular spacing = |Δcoord| / sqrt(1+tan²θ)  for M-Y
+        //                       = |Δconst| / sqrt(1+tan²θ)  for 10-19 (const = coord + start_m*tanW)
+        {
+          const tanW = Math.tan(WING_ANG * (Math.PI / 180));   // tan(27.16°) ≈ 0.512
+          const norm = Math.sqrt(1 + tanW * tanW);              // ≈ 1.1235
 
-        if (wingNSLines.length >= 1) {
-          const EAST_X = Math.max(...wingNSLines.map(g => g.end_m)) + 5;
-          const tanWing = Math.tan(wingNSLines[0].angle_deg * (Math.PI / 180));
+          // M-Y perpendicular direction (SE, away from building): (1, 0, tanW)/norm
+          const mySE_x = 1/norm,    mySE_z = tanW/norm;
+          // M-Y gridline direction (going north along line): (tanW, 0, -1)/norm
+          const myDir_x = tanW/norm, myDir_z = -1/norm;
 
-          // Chain line
-          const eastZs = wingNSLines.map(g => -(g.coord - (g.end_m - g.start_m) * tanWing));
-          const chainZ1 = Math.min(...eastZs), chainZ2 = Math.max(...eastZs);
-          addLine2(EAST_X, fl, chainZ1, EAST_X, fl, chainZ2, DIM_GREY);
+          // 10-19 perpendicular direction (NE, away from wing): (tanW, 0, -1)/norm = same as myDir!
+          // (90° CW from the 10-19 direction (1, 0, tanW))
+          const n19NE_x = tanW/norm,  n19NE_z = -1/norm;
+          // 10-19 gridline direction: (1, 0, tanW)/norm
+          const n19Dir_x = 1/norm,    n19Dir_z = tanW/norm;
 
-          for (const g of wingNSLines) {
-            const tanA2 = Math.tan(g.angle_deg * (Math.PI / 180));
-            const eastZ = -(g.coord - (g.end_m - g.start_m) * tanA2);
-            // Extension line from line's east end to the east chain
-            addLine2(g.end_m + 1, fl, eastZ, EAST_X - 1, fl, eastZ, EXT_GREY);
-            addLine2(EAST_X - 0.8, fl, eastZ, EAST_X + 0.8, fl, eastZ, DIM_GREY);
+          const CHAIN_OFFSET = 6; // metres perp from reference endpoints
+          const TICK_H = 0.8;     // tick half-length along chain
+
+          // ── M-Y chain (SE of wing south boundary) ──────────────────────────
+          const wingLetterLines = MOORINGS_GRIDLINES
+            .filter(g => g.axis === 'X' && Math.abs(g.angle_deg - WING_ANG) < 0.1)
+            .sort((a, b) => a.coord - b.coord);  // west (M) → east (Y)
+
+          if (wingLetterLines.length >= 2) {
+            // Reference: south end of each M-Y line (start_m end)
+            const myAtt = wingLetterLines.map(g => {
+              const refX = g.coord + g.start_m * tanW;  // Three.js X of south end
+              const refZ = -g.start_m;                   // Three.js Z of south end
+              return { g, refX, refZ,
+                chainX: refX + CHAIN_OFFSET * mySE_x,
+                chainZ: refZ + CHAIN_OFFSET * mySE_z };
+            });
+
+            // Chain line: first → last attachment (runs perp to M-Y = in mySE direction)
+            addLine2(myAtt[0].chainX, fl, myAtt[0].chainZ, myAtt[myAtt.length-1].chainX, fl, myAtt[myAtt.length-1].chainZ, DIM_GREY);
+
+            for (const att of myAtt) {
+              // Extension line: from south end (with 0.5m gap) → chain attachment (with 0.5m gap)
+              addLine2(att.refX + 0.5*mySE_x, fl, att.refZ + 0.5*mySE_z,
+                       att.chainX - 0.5*mySE_x, fl, att.chainZ - 0.5*mySE_z, EXT_GREY);
+              // Tick perpendicular to extension (along chain direction = myDir)
+              addLine2(att.chainX - TICK_H*myDir_x, fl, att.chainZ - TICK_H*myDir_z,
+                       att.chainX + TICK_H*myDir_x, fl, att.chainZ + TICK_H*myDir_z, DIM_GREY);
+            }
+
+            for (let i = 0; i < myAtt.length - 1; i++) {
+              const a = myAtt[i], b = myAtt[i+1];
+              // Perpendicular spacing = |coordB − coordA| / norm
+              const spacing_mm = Math.round(Math.abs(b.g.coord - a.g.coord) / norm * 1000);
+              addSpacingLbl(spacing_mm, (a.chainX+b.chainX)/2, (a.chainZ+b.chainZ)/2, `sg:dchain:my:${i}`);
+            }
           }
-          // Spacing labels — sorted by Z position on east chain
-          const eastPts = wingNSLines.map(g => {
-            const tanA2 = Math.tan(g.angle_deg * (Math.PI / 180));
-            return { g, eastZ: -(g.coord - (g.end_m - g.start_m) * tanA2) };
-          }).sort((a, b) => a.eastZ - b.eastZ);
 
-          for (let i = 0; i < eastPts.length - 1; i++) {
-            const az = eastPts[i].eastZ, bz = eastPts[i+1].eastZ;
-            // perpendicular spacing between adjacent wing lines in real space = |NS diff| / cos(angle)
-            const nsD = Math.abs(eastPts[i+1].g.coord - eastPts[i].g.coord);
-            addSpacingLbl(Math.round(nsD * 1000), EAST_X, (az+bz)/2, `sg:dchain:wing:${i}`);
+          // ── 10-19 chain (NE of wing east boundary) ─────────────────────────
+          const wingNumberLines = MOORINGS_GRIDLINES
+            .filter(g => g.axis === 'Y' && Math.abs(g.angle_deg - WING_ANG) < 0.1)
+            .sort((a, b) => b.coord - a.coord);  // north (10) → south (19)
+
+          if (wingNumberLines.length >= 2) {
+            // Reference: east end of each 10-19 line (end_m end)
+            const n19Att = wingNumberLines.map(g => {
+              const nsAtEnd = g.coord - (g.end_m - g.start_m) * tanW;
+              const refX = g.end_m;
+              const refZ = -nsAtEnd;
+              return { g, refX, refZ,
+                chainX: refX + CHAIN_OFFSET * n19NE_x,
+                chainZ: refZ + CHAIN_OFFSET * n19NE_z };
+            });
+
+            // Chain line: Grid-10 → Grid-19 attachment (runs perp to 10-19 = in n19NE direction)
+            addLine2(n19Att[0].chainX, fl, n19Att[0].chainZ, n19Att[n19Att.length-1].chainX, fl, n19Att[n19Att.length-1].chainZ, DIM_GREY);
+
+            for (const att of n19Att) {
+              addLine2(att.refX + 0.5*n19NE_x, fl, att.refZ + 0.5*n19NE_z,
+                       att.chainX - 0.5*n19NE_x, fl, att.chainZ - 0.5*n19NE_z, EXT_GREY);
+              // Tick along chain direction (= 10-19 line direction = n19Dir)
+              addLine2(att.chainX - TICK_H*n19Dir_x, fl, att.chainZ - TICK_H*n19Dir_z,
+                       att.chainX + TICK_H*n19Dir_x, fl, att.chainZ + TICK_H*n19Dir_z, DIM_GREY);
+            }
+
+            for (let i = 0; i < n19Att.length - 1; i++) {
+              const a = n19Att[i], b = n19Att[i+1];
+              // Perpendicular spacing = |Δconst| / norm  (const = coord + start_m*tanW)
+              const cA = a.g.coord + a.g.start_m * tanW;
+              const cB = b.g.coord + b.g.start_m * tanW;
+              const spacing_mm = Math.round(Math.abs(cA - cB) / norm * 1000);
+              addSpacingLbl(spacing_mm, (a.chainX+b.chainX)/2, (a.chainZ+b.chainZ)/2, `sg:dchain:1019:${i}`);
+            }
           }
         }
       }
