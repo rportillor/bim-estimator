@@ -383,6 +383,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
   const [visibleStoreys,setVisibleStoreys]=useState<Set<string>>(new Set());
   const [showFloorPanel,setShowFloorPanel]=useState(false);
   const loadAbortController = useRef<AbortController|null>(null);
+  const renderGenRef = useRef<number>(0);
   const transformControls = useRef<BIMTransformControls|null>(null);
   const moveDebounceTimer = useRef<ReturnType<typeof setTimeout>|null>(null);
 
@@ -605,11 +606,13 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
   useEffect(()=>{
     if(!ready || !modelId || !three.current || isLoading) return;
     
-    // Cancel any previous load
+    // Cancel any previous load and assign a new render generation token.
+    // The async closure captures renderGen and aborts if a newer render started.
     if(loadAbortController.current) {
       loadAbortController.current.abort();
     }
     loadAbortController.current = new AbortController();
+    const renderGen = (renderGenRef.current = (renderGenRef.current ?? 0) + 1);
     
     const {scene,camera,controls} = three.current;
     // clear previous (keep helpers)
@@ -619,6 +622,8 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
     const root = new THREE.Group(); scene.add(root);
 
     (async ()=>{
+      // Guard: if a newer render has started since this one, abort silently.
+      if(renderGenRef.current !== renderGen) return;
       setIsLoading(true);
       // ✅ AUTHENTICATION FIX: Use proper auth token like rest of the app
       const token = localStorage.getItem("auth_token");
@@ -1253,45 +1258,36 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           const floorY    = elevCC.z; // Three.js Y (up)
 
           // ── Build the two endpoints in Three.js space ──────────────────────
-          // Three.js X = east-west (building X)
-          // Three.js Y = elevation (building Z)
-          // Three.js Z = north-south (building Y)
+          // Three.js X = east (building EW)
+          // Three.js Y = up  (building elevation)
+          // Three.js Z = north (building NS, positive = north of grid9)
           //
-          // Perpendicular lines:
-          //   axis='X' → runs north-south at fixed east-west position (coord)
-          //   axis='Y' → runs east-west at fixed north-south position (coord)
+          // Coordinate conventions from the parser:
           //
-          // Angled lines (angle_deg ≠ 0):
-          //   The line is rotated angle_deg degrees from its primary direction.
-          //   For axis='X' (normally north-south): rotating eastward by angle_deg
-          //     dX (east) = span × sin(angleRad)
-          //     dZ (north) = span × cos(angleRad)
-          //   For axis='Y' (normally east-west): rotating northward by angle_deg
-          //     dX (east) = span × cos(angleRad)
-          //     dZ (north) = span × sin(angleRad)
+          //   axis='X' (NS-running lines: A–L, CL, M–Y)
+          //     coord    = absolute EW position at NS=0 (grid9)
+          //     startM   = NS value of the southern bound (e.g. grid19 NS = −30.088)
+          //     endM     = NS value of the northern bound (e.g. grid10 NS = +14.819)
+          //     angle    = clockwise rotation from NS towards east
+          //     Geometry: as NS increases northward, EW shifts east by tan(angle)
+          //     → pt = (coord + NS × tan(θ), y, NS)
+          //
+          //   axis='Y' (EW-running lines: 1–9, 10–19)
+          //     coord    = NS position at EW = startM  (= M_ew@grid9 for 10–19)
+          //     startM   = western EW bound (A=0 for 1–9; M_ew for 10–19)
+          //     endM     = eastern EW bound (L_ew for 1–9; Y_ew for 10–19)
+          //     Geometry: as EW increases, NS shifts south by tan(angle)
+          //     → at EW=e: NS = coord − (e − startM) × tan(θ)
+          //     → pt1 = (startM, y, coord), pt2 = (endM, y, coord − (endM−startM) × tan(θ))
           let pt1: THREE.Vector3, pt2: THREE.Vector3;
-          const span = endM - startM;
+          const tanA = Math.tan(angleRad);
 
-          if (isAngled) {
-            if (axis === 'X') {
-              // Angled X-family line: base at X=coord, starts at Z=startM, tilts eastward
-              pt1 = new THREE.Vector3(coord,                         floorY, startM);
-              pt2 = new THREE.Vector3(coord + span * Math.sin(angleRad), floorY, startM + span * Math.cos(angleRad));
-            } else {
-              // Angled Y-family line: base at Z=coord, starts at X=startM, tilts northward
-              pt1 = new THREE.Vector3(startM,                         floorY, coord);
-              pt2 = new THREE.Vector3(startM + span * Math.cos(angleRad), floorY, coord + span * Math.sin(angleRad));
-            }
+          if (axis === 'X') {
+            pt1 = new THREE.Vector3(coord + startM * tanA, floorY, startM);
+            pt2 = new THREE.Vector3(coord + endM   * tanA, floorY, endM);
           } else {
-            if (axis === 'Y') {
-              // Y-family: fixed north-south position (coord), runs east-west
-              pt1 = new THREE.Vector3(startM, floorY, coord);
-              pt2 = new THREE.Vector3(endM,   floorY, coord);
-            } else {
-              // X-family: fixed east-west position (coord), runs north-south
-              pt1 = new THREE.Vector3(coord, floorY, startM);
-              pt2 = new THREE.Vector3(coord, floorY, endM);
-            }
+            pt1 = new THREE.Vector3(startM, floorY, coord);
+            pt2 = new THREE.Vector3(endM,   floorY, coord - (endM - startM) * tanA);
           }
 
           const pts = new Float32Array([pt1.x, pt1.y, pt1.z, pt2.x, pt2.y, pt2.z]);

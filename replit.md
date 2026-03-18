@@ -70,9 +70,30 @@ pnpm --filter @workspace/estimatorpro run dev
 pnpm --filter @workspace/estimatorpro run db:push
 ```
 
+## BIM Gridline System (The Moorings, P1)
+
+### Geometry conventions (Three.js)
+- X = east-west (EW), Z = north-south (NS, +north), Y = elevation (up)
+- Origin: Grid A (EW=0), Grid 9 (NS=0), P1 elevation = −4.65 m
+
+### Parser (gridline-pdf-parser.ts)
+- `layer = 'gridlines'` in `real-qto-processor.ts`
+- Key values: M_ew@grid9=45.671m, grid10_NS=14.819m, grid19_NS=−30.088m, Y_ew=87.472m, L_ew=41.999m
+- Wing angle: 27.16° (two 13.58° turns from bearing 166.42°)
+- After server restart, always `forceRefresh:true` via POST `/extract-layer`
+
+### Viewer formula (viewer-3d.tsx)
+```
+axis='X': pt1=(coord + startM·tanA, y, startM), pt2=(coord + endM·tanA, y, endM)
+axis='Y': pt1=(startM, y, coord),               pt2=(endM, y, coord − (endM−startM)·tanA)
+```
+- `coord` for X-family = EW position at NS=0; `startM`/`endM` = NS world values
+- `coord` for Y-family = NS at EW=startM; `startM`/`endM` = EW world values
+- Works for any angle (0° rectangular, 13.58° CL, 27.16° wing)
+
 ## Version History
 
-- v15.31 — Full audit fixes: auth, webhook, rate engine, deploy config
+- v15.31 — Full audit fixes: auth, webhook, rate engine, deploy config; BIM gridline formula fixed
 - v14.36 — Dead code elimination (11 files removed, 0 TS errors)
 - v14.35 — Complete hardcoded-value audit (no project-specific fallbacks)
 
