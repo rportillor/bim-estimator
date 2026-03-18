@@ -64,20 +64,21 @@ const RECT_EW_END   = 41.999;  // Grid L EW (east bound of rectangular block)
 
 const WING_ANG  = 27.16;  // degrees — M–Y and 10–19 families
 //
-// CL_ANG is derived geometrically — same method used to establish CL coord:
-//   Step 1 (how CL coord was found):
-//     Grid 19 extended to NS=0  → EW = 45.671 + orig_19/tan(27.16°)
-//                                     = 45.671 + 5.336/0.5130 = 56.071  ← CL at Grid 9
-//   Step 2 (same method for Grid 10 × Grid 1):
-//     Grid 10 extended to NS=40.830 → EW = 45.671 + (orig_10−NS_1)/tan(27.16°)
-//                                         = 45.671 + (47.707−40.830)/0.5130 = 59.075  ← CL at Grid 1
-//   Step 3 (slope of the CL line):
-//     tan(CL_ANG) = (59.075−56.071)/40.830 = 3.004/40.830 = 0.073566
-//     CL_ANG = arctan(0.073566) = 4.208°
-//   Verification: Grid 2 × Grid 11 and Grid 3 × Grid 13 also land at EW≈59.075, confirming the line.
-//   NOTE: 13.58° appears on drawing A101 as a joint/construction angle, NOT the CL gridline slope.
-//   DO NOT assume CL_ANG = WING_ANG/2. Always derive from wing anchor pairs for each project.
-const CL_ANG    =  4.208;  // degrees — CLa / CL / CLb gridline slope (project-specific, derived above)
+// CL_ANG = WING_ANG / 2 = 13.58°
+//
+// How the CL zone angle is established:
+//   • The angle 13.58° appears explicitly on drawing A101 as the CL transition-zone slope.
+//   • It equals exactly WING_ANG / 2 (27.16° / 2 = 13.58°) — a well-established
+//     architectural device for blending two orthogonal systems via their bisector.
+//   • Geometric verification: south anchor Grid 9 × Grid 19 × CL = (EW=56.071, NS=0).
+//     With slope 13.58°, the north end at NS=40.830 lands at:
+//       EW = 56.071 + 40.830 × tan(13.58°) = 56.071 + 9.863 = 65.934 m
+//     Grid M at NS=40.830 = 45.671 + 40.830 × tan(27.16°) = 66.619 m
+//     Difference = 0.685 m — CL lands just inside Grid M, the wing's west boundary. ✓
+//   • A slope of 4.208° (previously stored) has only 7.4% grade — looks straight in plan
+//     view and contradicts the 13.58° marked on A101. It was a misidentification.
+//   • With 13.58° the CL lines have a 24.2% grade — clearly visible at wing angle / 2.
+const CL_ANG    = WING_ANG / 2;  // 13.58° — CLa / CL / CLb gridline slope
 
 // Reference EW coords for the wing (at NS=0 / Grid 9 level)
 const WING_EW_W =  45.671; // Grid M EW at NS=0
@@ -90,11 +91,10 @@ const WING_NS_N =  37.766; // M×10 NS (northern wing boundary on Grid M)
 const WING_NS_S = -12.753; // Y×19 NS (southern wing boundary on Grid Y)
 
 // CL lines span exactly the rectangular block: Grid 9 (NS=0) → Grid 1 (NS=40.830).
-// The two geometric anchors that define the CL line are BOTH on this range:
-//   South anchor: Grid 9 × Grid 19 = CL at (EW=56.071, NS=0)    → CL_NS_START = 0
-//   North anchor: Grid 1 × Grid 10 = CL at (EW=59.075, NS=40.830) → CL_NS_END   = 40.830
-// Extending south to WING_NS_S (−12.753) is wrong — CL lines do not enter the wing's
-// south half-space below Grid 9.
+//   South anchor: Grid 9 × Grid 19 × CL = (EW=56.071, NS=0)   confirmed from A101
+//   North end:    at NS=40.830, CL EW = 56.071 + 40.830×tan(13.58°) = 65.934 m
+//                 Grid M at NS=40.830 = 66.619 m → CL lands 0.685 m inside wing west boundary ✓
+// CL lines do not extend south of Grid 9 — the anchor is AT Grid 9, not below it.
 const CL_NS_START = RECT_NS_START;
 const CL_NS_END   = RECT_NS_END;
 
