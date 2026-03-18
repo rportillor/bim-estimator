@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { ZoomIn, ZoomOut, Home, Layers, Eye, EyeOff, AlertTriangle } from "lucide-react";
 import type { UnitSystem } from "./unit-utils";
+import { MOORINGS_GRIDLINES } from "./moorings-grid-constants";
 
 export interface ViewerProps {
   ifcUrl?: string;
@@ -1243,82 +1244,9 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         //   realLocation.z → Three.js Y (elevation)     ← up axis
         // ══════════════════════════════════════════════════════════════════
         if (type === 'grid_line') {
-          const gd        = e.geometry || {};
-          const axis      = String(gd.axis || 'Y');
-          const coord     = Number(gd.coordinate_m ?? 0);
-          const startM    = Number(gd.start_m ?? 0);
-          const endM      = Number(gd.end_m ?? 0);
-          const angleDeg  = Number(gd.angle_deg ?? 0);
-          const angleRad  = angleDeg * (Math.PI / 180);
-          const label     = String(gd.label || '?');
-          const isAngled  = Math.abs(angleDeg) > 0.01;
-          const rl        = gd.location?.realLocation || {};
-          const elevRaw   = Number(rl.z ?? 0);
-          const elevCC    = coerceWithDatum(0, 0, elevRaw);
-          const floorY    = elevCC.z; // Three.js Y (up)
-
-          // ── Build the two endpoints in Three.js space ──────────────────────
-          // Three.js X = east (building EW)
-          // Three.js Y = up  (building elevation)
-          // Three.js Z = north (building NS, positive = north of grid9)
-          //
-          // Coordinate conventions from the parser:
-          //
-          //   axis='X' (NS-running lines: A–L, CL, M–Y)
-          //     coord    = absolute EW position at NS=0 (grid9)
-          //     startM   = NS value of the southern bound (e.g. grid19 NS = −30.088)
-          //     endM     = NS value of the northern bound (e.g. grid10 NS = +14.819)
-          //     angle    = clockwise rotation from NS towards east
-          //     Geometry: as NS increases northward, EW shifts east by tan(angle)
-          //     → pt = (coord + NS × tan(θ), y, NS)
-          //
-          //   axis='Y' (EW-running lines: 1–9, 10–19)
-          //     coord    = NS position at EW = startM  (= M_ew@grid9 for 10–19)
-          //     startM   = western EW bound (A=0 for 1–9; M_ew for 10–19)
-          //     endM     = eastern EW bound (L_ew for 1–9; Y_ew for 10–19)
-          //     Geometry: as EW increases, NS shifts south by tan(angle)
-          //     → at EW=e: NS = coord − (e − startM) × tan(θ)
-          //     → pt1 = (startM, y, coord), pt2 = (endM, y, coord − (endM−startM) × tan(θ))
-          let pt1: THREE.Vector3, pt2: THREE.Vector3;
-          const tanA = Math.tan(angleRad);
-
-          if (axis === 'X') {
-            pt1 = new THREE.Vector3(coord + startM * tanA, floorY, startM);
-            pt2 = new THREE.Vector3(coord + endM   * tanA, floorY, endM);
-          } else {
-            pt1 = new THREE.Vector3(startM, floorY, coord);
-            pt2 = new THREE.Vector3(endM,   floorY, coord - (endM - startM) * tanA);
-          }
-
-          const pts = new Float32Array([pt1.x, pt1.y, pt1.z, pt2.x, pt2.y, pt2.z]);
-          const lineGeo = new THREE.BufferGeometry();
-          lineGeo.setAttribute('position', new THREE.BufferAttribute(pts, 3));
-          // Colour: angled lines → magenta to stand out; X-family → orange; Y-family → yellow
-          const lineColor = isAngled ? 0xFF00FF : (axis === 'X' ? 0xFF6600 : 0xFFCC00);
-          const lineMat = new THREE.LineBasicMaterial({ color: lineColor, linewidth: isAngled ? 2 : 1 });
-          const line = new THREE.Line(lineGeo, lineMat);
-          line.userData = { elementId: e.id, type: 'grid_line', label, axis, angleDeg };
-          root.add(line);
-
-          // Bubble label at the far end of the line
-          const labelCanvas = document.createElement('canvas');
-          labelCanvas.width = 64; labelCanvas.height = 32;
-          const ctx2d = labelCanvas.getContext('2d')!;
-          ctx2d.fillStyle = isAngled ? '#FF00FF' : (axis === 'X' ? '#FF6600' : '#FFCC00');
-          ctx2d.fillRect(0, 0, 64, 32);
-          ctx2d.fillStyle = '#000000';
-          ctx2d.font = 'bold 18px sans-serif';
-          ctx2d.textAlign = 'center';
-          ctx2d.textBaseline = 'middle';
-          ctx2d.fillText(label, 32, 16);
-          const labelTex = new THREE.CanvasTexture(labelCanvas);
-          const labelSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTex, depthTest: false }));
-          labelSprite.scale.set(0.8, 0.4, 1);
-          // Offset label slightly beyond pt2 in the direction the line travels
-          const dir = pt2.clone().sub(pt1).normalize();
-          labelSprite.position.copy(pt2).addScaledVector(dir, 0.8).add(new THREE.Vector3(0, 0.3, 0));
-          root.add(labelSprite);
-          continue; // grid lines render as THREE.Line — skip box fallback
+          // Grid lines are rendered from hardcoded constants (MOORINGS_GRIDLINES) in the static
+          // grid section below — no DB dependency needed. Skip DB-driven rendering here.
+          continue;
         }
 
         // 🏗️ COMPREHENSIVE BOQ ELEMENT DETECTION
@@ -1868,42 +1796,66 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         size: {x: size.x.toFixed(2), y: size.y.toFixed(2), z: size.z.toFixed(2)}
       });
       
-      // CONSTRUCTION GRID RENDERING
-      // grid_line BIM elements are rendered as THREE.Line objects above in the main element loop.
-      // This fallback renders a heuristic grid from wall/column positions when no grid_line
-      // elements are present (e.g., floors not yet extracted).
-      const oldGrids = three.current?.scene.children.filter(child =>
-        child.name?.includes("grid") || child.name?.includes("Grid")
+      // ── STATIC STRUCTURAL GRID (The Moorings) ──────────────────────────────
+      // All 47 gridlines are rendered directly from hardcoded constants — no DB,
+      // no parser, no AI.  The floor Y is inferred from the elements in the scene.
+
+      // Remove any previously rendered static gridlines
+      const toRemove = three.current?.scene.children.filter(c =>
+        typeof c.name === 'string' && c.name.startsWith('sg:')
+      ) ?? [];
+      toRemove.forEach(c => three.current?.scene.remove(c));
+
+      // Infer floor elevation from elements (fall back to 0 = ground if none present)
+      const anyEl = (elements as any[]).find(
+        (e: any) => e.geometry?.location?.realLocation?.z !== undefined
       );
-      oldGrids?.forEach(grd => three.current?.scene.remove(grd));
+      const staticFloorElevRaw = anyEl
+        ? Number(anyEl.geometry.location.realLocation.z)
+        : 0;
+      const staticFloorY = coerceWithDatum(0, 0, staticFloorElevRaw).z;
 
-      const hasElementGridLines = elements.some((e: any) => e.elementType === 'grid_line');
-      if (!hasElementGridLines && gridAnalysis.xs.length > 0 && gridAnalysis.ys.length > 0) {
-        // Fallback: analysis-based heuristic grid (no labels)
-        const gridMaterial = new THREE.LineBasicMaterial({ color: 0x444444, opacity: 0.6, transparent: true });
-        const gridPoints: THREE.Vector3[] = [];
-
-        const gMinZ = Math.min(...gridAnalysis.ys) - 5;
-        const gMaxZ = Math.max(...gridAnalysis.ys) + 5;
-        for(const x of gridAnalysis.xs) {
-          gridPoints.push(new THREE.Vector3(x, 0, gMinZ));
-          gridPoints.push(new THREE.Vector3(x, 0, gMaxZ));
+      for (const g of MOORINGS_GRIDLINES) {
+        const tanA     = Math.tan(g.angle_deg * (Math.PI / 180));
+        const isAngled = Math.abs(g.angle_deg) > 0.01;
+        let pt1: THREE.Vector3, pt2: THREE.Vector3;
+        if (g.axis === 'X') {
+          pt1 = new THREE.Vector3(g.coord + g.start_m * tanA, staticFloorY, g.start_m);
+          pt2 = new THREE.Vector3(g.coord + g.end_m   * tanA, staticFloorY, g.end_m);
+        } else {
+          pt1 = new THREE.Vector3(g.start_m, staticFloorY, g.coord);
+          pt2 = new THREE.Vector3(g.end_m,   staticFloorY, g.coord - (g.end_m - g.start_m) * tanA);
         }
+        const pts    = new Float32Array([pt1.x, pt1.y, pt1.z, pt2.x, pt2.y, pt2.z]);
+        const lineGeo = new THREE.BufferGeometry();
+        lineGeo.setAttribute('position', new THREE.BufferAttribute(pts, 3));
+        const lineColor = isAngled ? 0xFF00FF : (g.axis === 'X' ? 0xFF6600 : 0xFFCC00);
+        const lineMat   = new THREE.LineBasicMaterial({ color: lineColor });
+        const line      = new THREE.Line(lineGeo, lineMat);
+        line.name       = `sg:${g.label}`;
+        line.userData   = { type: 'grid_line', label: g.label, axis: g.axis, angleDeg: g.angle_deg };
+        three.current?.scene.add(line);
 
-        const gMinX = Math.min(...gridAnalysis.xs) - 5;
-        const gMaxX = Math.max(...gridAnalysis.xs) + 5;
-        for(const z of gridAnalysis.ys) {
-          gridPoints.push(new THREE.Vector3(gMinX, 0, z));
-          gridPoints.push(new THREE.Vector3(gMaxX, 0, z));
-        }
-
-        const gridGeometry = new THREE.BufferGeometry().setFromPoints(gridPoints);
-        const gridLines = new THREE.LineSegments(gridGeometry, gridMaterial);
-        gridLines.name = "analysisGrid";
-        three.current?.scene.add(gridLines);
-
-        console.log(`[3D Viewer] Rendered analysis grid: ${gridAnalysis.xs.length} x ${gridAnalysis.ys.length} lines`);
+        // Bubble label at pt2
+        const lc = document.createElement('canvas');
+        lc.width = 64; lc.height = 32;
+        const ctx2d = lc.getContext('2d')!;
+        ctx2d.fillStyle = isAngled ? '#FF00FF' : (g.axis === 'X' ? '#FF6600' : '#FFCC00');
+        ctx2d.fillRect(0, 0, 64, 32);
+        ctx2d.fillStyle = '#000000';
+        ctx2d.font = 'bold 18px sans-serif';
+        ctx2d.textAlign = 'center';
+        ctx2d.textBaseline = 'middle';
+        ctx2d.fillText(g.label, 32, 16);
+        const labelTex    = new THREE.CanvasTexture(lc);
+        const labelSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTex, depthTest: false }));
+        labelSprite.scale.set(0.8, 0.4, 1);
+        const dir = pt2.clone().sub(pt1).normalize();
+        labelSprite.position.copy(pt2).addScaledVector(dir, 0.8).add(new THREE.Vector3(0, 0.3, 0));
+        labelSprite.name = `sg:${g.label}:lbl`;
+        three.current?.scene.add(labelSprite);
       }
+      console.log(`[3D Viewer] Rendered ${MOORINGS_GRIDLINES.length} static gridlines at Y=${staticFloorY.toFixed(2)}`);
       
       // Update axes positioning - place at ground level (Y=0)
       const axes = three.current?.scene.getObjectByName("axes") as THREE.AxesHelper;
