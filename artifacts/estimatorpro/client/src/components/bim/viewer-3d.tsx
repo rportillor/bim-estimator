@@ -2047,9 +2047,14 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       // Always restore Y-up before setting camera position — Plan View changes
       // camera.up to (0,0,1) and that persists across re-renders without this reset.
       camera.up.set(0, 1, 0);
-      // 🎯 IMPROVED CAMERA POSITIONING: Better view for building scale
-      const cameraDistance = Math.max(diag * 0.8, 50); // Minimum 50m distance
-      const cameraOffset = new THREE.Vector3(1, 0.8, 1.2).normalize().multiplyScalar(cameraDistance);
+      // 🎯 CAMERA POSITIONING: Place camera SOUTH-WEST of building, looking north-east.
+      // This gives the standard architectural south-looking-north orientation:
+      //   • Grid 1 (north, Three.js Z=+40.83) appears at the TOP of the screen  ✓
+      //   • Grid 9 (south reference, Z=0) appears at the BOTTOM               ✓
+      //   • East (X+) appears to the right, elevation (Y+) appears up           ✓
+      // Offset (-0.4, 0.8, -1.2): west-slightly, high, south → looks NE.
+      const cameraDistance = Math.max(diag * 0.8, 50);
+      const cameraOffset = new THREE.Vector3(-0.4, 0.8, -1.2).normalize().multiplyScalar(cameraDistance);
       camera.position.copy(center).add(cameraOffset);
       
       // Ensure camera can see the full building
@@ -2231,10 +2236,11 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
               // Restore standard 3D view: Y is up (Three.js convention)
               // This undoes any camera.up change made by Plan View
               camera.up.set(0, 1, 0);
-              // Oblique NE perspective, elevated enough to see the full building
+              // Camera SW of building, looking NE → north (Grid 1) at top, south (Grid 9) at bottom
               const dist = Math.max(s.x, s.z) * 0.9 + 20;
               controls.target.set(c.x, c.y, c.z);
-              camera.position.set(c.x + dist * 0.65, c.y + dist * 0.5, c.z + dist * 0.85);
+              const sw = new THREE.Vector3(-0.4, 0.8, -1.2).normalize().multiplyScalar(dist);
+              camera.position.set(c.x + sw.x, c.y + sw.y, c.z + sw.z);
               controls.update();
               camera.updateProjectionMatrix();
             }}
