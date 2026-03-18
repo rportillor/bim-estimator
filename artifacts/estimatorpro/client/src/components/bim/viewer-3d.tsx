@@ -1788,6 +1788,26 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         console.log(`[3D Viewer] Rendered ${meshRenderedCount} elements with real mesh geometry, ${boxFallbackCount} with box fallback`);
       }
 
+      // Expand the bounding box to cover the FULL grid extent (wing + CL lines reach
+      // further than the element footprint).  Without this the camera ends up too close
+      // to the south and Grid 19's south-east tip (Z≈+49 m) falls behind the camera.
+      // We use the same axis→Three.js mapping as the gridline renderer:
+      //   axis='X':  pt = (coord + NS*tanA, 0, -NS)          NS = start_m or end_m
+      //   axis='Y':  pt = (EW,              0, -(coord - (EW-start_m)*tanA))
+      for (const _g of MOORINGS_GRIDLINES) {
+        const _tanA = Math.tan(_g.angle_deg * (Math.PI / 180));
+        let _p1x: number, _p1z: number, _p2x: number, _p2z: number;
+        if (_g.axis === 'X') {
+          _p1x = _g.coord + _g.start_m * _tanA;  _p1z = -_g.start_m;
+          _p2x = _g.coord + _g.end_m   * _tanA;  _p2z = -_g.end_m;
+        } else {
+          _p1x = _g.start_m;  _p1z = -_g.coord;
+          _p2x = _g.end_m;    _p2z = -(_g.coord - (_g.end_m - _g.start_m) * _tanA);
+        }
+        box.expandByPoint(new THREE.Vector3(_p1x, 0, _p1z));
+        box.expandByPoint(new THREE.Vector3(_p2x, 0, _p2z));
+      }
+
       // frame with safety net for tiny scenes
       const size = box.getSize(new THREE.Vector3());
       const diag = Math.max(10, size.length(), 30); // ensure at least ~30m diag for camera
@@ -2029,7 +2049,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         three.current?.scene.add(yLabel);
 
         // Three.js Z = PDF Y (north-south, positive = north toward Grid 1)
-        const zLabel = createGridLabel('Y+ (North)', '#3333FF', 22);
+        const zLabel = createGridLabel('Y- (North)', '#3333FF', 22);
         zLabel.name = 'axisLabelZ';
         zLabel.position.set(0, 0.2, axisScale * 1.3);
         zLabel.scale.setScalar(axisScale * 0.4);
