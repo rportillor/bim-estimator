@@ -5,7 +5,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import { BIMTransformControls, type TransformResult } from "./transform-controls";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { ZoomIn, ZoomOut, Home, Layers, Eye, EyeOff, AlertTriangle, Map } from "lucide-react";
+import { ZoomIn, ZoomOut, Home, Layers, Eye, EyeOff, AlertTriangle, Map as MapIcon } from "lucide-react";
 import type { UnitSystem } from "./unit-utils";
 import { MOORINGS_GRIDLINES } from "./moorings-grid-constants";
 
@@ -1830,7 +1830,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       const COL_Y_HEX   = 0xCC7700;  const COL_Y_CSS   = '#CC7700';
       const COL_ANG_HEX = 0xAA00CC;  const COL_ANG_CSS = '#AA00CC';
       const TICK_STEP   = 5;   // metres between dimension ticks
-      const TICK_HALF   = 0.5; // half-length of perpendicular tick (metres)
+      const TICK_HALF   = 2.0; // half-length of perpendicular tick (metres) — 4m total, visible from plan view
 
       for (const g of MOORINGS_GRIDLINES) {
         const tanA     = Math.tan(g.angle_deg * (Math.PI / 180));
@@ -1872,9 +1872,9 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         ctx2d.fillText(g.label, 32, 16);
         const labelTex    = new THREE.CanvasTexture(lc);
         const labelSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTex, depthTest: false }));
-        labelSprite.scale.set(0.8, 0.4, 1);
+        labelSprite.scale.set(4, 2, 1);  // 4m × 2m — visible from plan-view distance (~90m)
         const dir = pt2.clone().sub(pt1).normalize();
-        labelSprite.position.copy(pt2).addScaledVector(dir, 0.8).add(new THREE.Vector3(0, 0.3, 0));
+        labelSprite.position.copy(pt2).addScaledVector(dir, 3).add(new THREE.Vector3(0, 1, 0));
         labelSprite.name = `sg:${g.label}:lbl`;
         three.current?.scene.add(labelSprite);
 
@@ -1913,11 +1913,11 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           // X-axis (NS-running): param = PDF-Y (NS from Grid 9); show as "Ym"
           // Y-axis (EW-running): param = PDF-X (EW from Grid A); show as "Xm"
           const dimLabel = createGridLabel(`${param}m`, colCss, 18);
-          dimLabel.scale.set(0.7, 0.35, 1);
+          dimLabel.scale.set(3, 1.5, 1);  // 3m × 1.5m — visible from plan-view distance
           // Place label at the positive-perp side, slightly above floor
           dimLabel.position.copy(tickPt)
-            .addScaledVector(perp, TICK_HALF + 0.55)
-            .add(new THREE.Vector3(0, 0.18, 0));
+            .addScaledVector(perp, TICK_HALF + 2)
+            .add(new THREE.Vector3(0, 1, 0));
           dimLabel.name = `sg:${g.label}:dim:${param}`;
           three.current?.scene.add(dimLabel);
         }
@@ -2248,18 +2248,20 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
               const s = buildingSizeRef.current;
               // Height: enough to see the full building footprint with some margin
               const height = Math.max(s.x, s.z) * 0.9 + 20;
-              // Target: building centroid at floor level (PDF Z = P1 elevation)
+              // Target: building centroid at floor level
               controls.target.set(c.x, c.y, c.z);
-              // Camera directly above, looking straight down
-              camera.position.set(c.x, c.y + height, c.z);
-              // North (Three.js Z+, PDF Y+) must point "up" on screen
+              // Camera nearly overhead — tiny Z offset avoids the pole/gimbal-lock
+              // singularity that happens at exactly θ=π (straight down).
+              // With camera.up=(0,0,1), north (Three.js Z+) points "up" on screen,
+              // east (Three.js X+) points right — matches the PDF plan orientation.
               camera.up.set(0, 0, 1);
+              camera.position.set(c.x, c.y + height, c.z + 0.001);
               controls.update();
               camera.updateProjectionMatrix();
             }}
             data-testid="button-plan-view"
           >
-            <Map className="h-5 w-5 text-blue-600"/>
+            <MapIcon className="h-5 w-5 text-blue-600"/>
           </Button>
         </div>
       </CardContent>
