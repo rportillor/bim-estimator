@@ -5,7 +5,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import { BIMTransformControls, type TransformResult } from "./transform-controls";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { ZoomIn, ZoomOut, Home, Layers, Eye, EyeOff, AlertTriangle } from "lucide-react";
+import { ZoomIn, ZoomOut, Home, Layers, Eye, EyeOff, AlertTriangle, Map } from "lucide-react";
 import type { UnitSystem } from "./unit-utils";
 import { MOORINGS_GRIDLINES } from "./moorings-grid-constants";
 
@@ -387,6 +387,9 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
   const renderGenRef = useRef<number>(0);
   const transformControls = useRef<BIMTransformControls|null>(null);
   const moveDebounceTimer = useRef<ReturnType<typeof setTimeout>|null>(null);
+  // Building bounding box stored after each load so camera buttons can use it
+  const buildingCenterRef = useRef<THREE.Vector3>(new THREE.Vector3(21, -4.65, 9.95));
+  const buildingSizeRef = useRef<THREE.Vector3>(new THREE.Vector3(84, 5, 55));
 
   // ── Constraint-propagating move handler ──────────────────────────────────
   const handleElementMove = useCallback((result: TransformResult) => {
@@ -1789,6 +1792,8 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       const size = box.getSize(new THREE.Vector3());
       const diag = Math.max(10, size.length(), 30); // ensure at least ~30m diag for camera
       const center = box.getCenter(new THREE.Vector3());
+      buildingCenterRef.current.copy(center);
+      buildingSizeRef.current.copy(size);
 
       // Building should now be properly centered around origin
       console.log(`🎯 Building centered at:`, {
@@ -2163,6 +2168,33 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
             data-testid="button-reset-view"
           >
             <Home className="h-5 w-5"/>
+          </Button>
+
+          {/* Plan View — top-down, north (PDF Y+) pointing up, matching drawing orientation */}
+          <Button
+            size="lg"
+            variant="outline"
+            className="md:size-8 lg:size-10 bg-blue-50/90 hover:bg-blue-100 shadow-lg touch-manipulation border-blue-300"
+            title="Plan View — top-down, north up (matches PDF drawing)"
+            onClick={()=>{
+              if(!three.current) return;
+              const {camera, controls} = three.current;
+              const c = buildingCenterRef.current;
+              const s = buildingSizeRef.current;
+              // Height: enough to see the full building footprint with some margin
+              const height = Math.max(s.x, s.z) * 0.9 + 20;
+              // Target: building centroid at floor level (PDF Z = P1 elevation)
+              controls.target.set(c.x, c.y, c.z);
+              // Camera directly above, looking straight down
+              camera.position.set(c.x, c.y + height, c.z);
+              // North (Three.js Z+, PDF Y+) must point "up" on screen
+              camera.up.set(0, 0, 1);
+              controls.update();
+              camera.updateProjectionMatrix();
+            }}
+            data-testid="button-plan-view"
+          >
+            <Map className="h-5 w-5 text-blue-600"/>
           </Button>
         </div>
       </CardContent>
