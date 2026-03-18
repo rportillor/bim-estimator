@@ -10,8 +10,10 @@
 | Rev | Date | Author | Changes |
 |-----|------|--------|---------|
 | 1.0 | 2026-03-18 | Claude Code | Initial assessment — gridlines, element coordinate problem, IR pipeline plan |
-| 1.1 | 2026-03-18 | Replit Agent | Reviewed and corrected Section 4; confirmed pipeline files already in v16 |
-| 2.0 | 2026-03-18 | Claude Code | Complete rewrite — all fixes applied, generic parser, intersection system, element placement types |
+| 1.1 | 2026-03-18 | Replit Agent | Reviewed and corrected Section 4; confirmed pipeline files already in v16; verified anchor values |
+| 1.2 | 2026-03-18 | Claude Code | Added grid intersection markers to viewer-3d.tsx (commit ace4f15, +70 lines) |
+| 1.3 | 2026-03-18 | Replit Agent | Pulled commit ace4f15; Vite HMR confirmed; browser reload required |
+| 2.0 | 2026-03-18 | Claude Code | Complete rewrite — all 7 fixes, generic parser, intersection system, element placement types, construction phases |
 
 ---
 
@@ -212,7 +214,30 @@ Thickness, width, height come from correlated documents (assemblies, schedules, 
 
 ---
 
-## 8. What Replit Should Do Next
+## 8. Grid Intersection Markers (Rev 1.2 / 1.3)
+
+### What Claude Code added (commit ace4f15):
+- Computes all valid intersections from MOORINGS_GRIDLINES
+- Green spheres at orthogonal intersections, magenta at angled
+- Label sprites showing grid reference (A-9, M-10, etc.)
+- Extent overlap check prevents invalid intersections
+- Console logs intersection count
+
+### What Replit Agent did (Rev 1.3):
+- Pulled and applied to workspace
+- Vite HMR confirmed
+- Browser reload needed to render markers
+
+### How to verify:
+1. Load BIM viewer → P1 floor
+2. Green dots at rectangular intersections (A-L × 1-9)
+3. Magenta dots at wing/CL intersections
+4. Console: `Rendered X grid intersection markers` (expect ~200-300)
+5. Origin A-9 should be at Three.js (0, -4.65, 0)
+
+---
+
+## 9. What Replit Should Do Next
 
 1. Pull `estimatorpro-v16` branch
 2. Run `npm install` (pdf.js-extract added)
