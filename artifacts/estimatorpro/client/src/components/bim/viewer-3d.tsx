@@ -1822,34 +1822,50 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         : 0;
       const staticFloorY = coerceWithDatum(0, 0, staticFloorElevRaw).z;
 
+      // ── Colour scheme (PDF convention):
+      //   X-axis lines (letter grid A–Y, running N–S): blue  (#1177CC)
+      //   Y-axis lines (number grid 1–19, running E–W): amber (#CC7700)
+      //   Wing / angled lines (27.16° and 13.58°):     magenta (#AA00CC)
+      const COL_X_HEX   = 0x1177CC;  const COL_X_CSS   = '#1177CC';
+      const COL_Y_HEX   = 0xCC7700;  const COL_Y_CSS   = '#CC7700';
+      const COL_ANG_HEX = 0xAA00CC;  const COL_ANG_CSS = '#AA00CC';
+      const TICK_STEP   = 5;   // metres between dimension ticks
+      const TICK_HALF   = 0.5; // half-length of perpendicular tick (metres)
+
       for (const g of MOORINGS_GRIDLINES) {
         const tanA     = Math.tan(g.angle_deg * (Math.PI / 180));
         const isAngled = Math.abs(g.angle_deg) > 0.01;
+        const colHex   = isAngled ? COL_ANG_HEX : (g.axis === 'X' ? COL_X_HEX : COL_Y_HEX);
+        const colCss   = isAngled ? COL_ANG_CSS : (g.axis === 'X' ? COL_X_CSS : COL_Y_CSS);
+
+        // ── Endpoints ─────────────────────────────────────────────────────────
         let pt1: THREE.Vector3, pt2: THREE.Vector3;
         if (g.axis === 'X') {
+          // NS-running letter lines: sweep parameter is NS (start_m → end_m)
           pt1 = new THREE.Vector3(g.coord + g.start_m * tanA, staticFloorY, g.start_m);
           pt2 = new THREE.Vector3(g.coord + g.end_m   * tanA, staticFloorY, g.end_m);
         } else {
+          // EW-running number lines: sweep parameter is EW (start_m → end_m)
           pt1 = new THREE.Vector3(g.start_m, staticFloorY, g.coord);
           pt2 = new THREE.Vector3(g.end_m,   staticFloorY, g.coord - (g.end_m - g.start_m) * tanA);
         }
-        const pts    = new Float32Array([pt1.x, pt1.y, pt1.z, pt2.x, pt2.y, pt2.z]);
+
+        // ── Main gridline ──────────────────────────────────────────────────────
+        const pts     = new Float32Array([pt1.x, pt1.y, pt1.z, pt2.x, pt2.y, pt2.z]);
         const lineGeo = new THREE.BufferGeometry();
         lineGeo.setAttribute('position', new THREE.BufferAttribute(pts, 3));
-        const lineColor = isAngled ? 0xFF00FF : (g.axis === 'X' ? 0xFF6600 : 0xFFCC00);
-        const lineMat   = new THREE.LineBasicMaterial({ color: lineColor });
-        const line      = new THREE.Line(lineGeo, lineMat);
-        line.name       = `sg:${g.label}`;
-        line.userData   = { type: 'grid_line', label: g.label, axis: g.axis, angleDeg: g.angle_deg };
+        const line    = new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: colHex }));
+        line.name     = `sg:${g.label}`;
+        line.userData = { type: 'grid_line', label: g.label, axis: g.axis, angleDeg: g.angle_deg };
         three.current?.scene.add(line);
 
-        // Bubble label at pt2
+        // ── Grid-label bubble at far end ───────────────────────────────────────
         const lc = document.createElement('canvas');
         lc.width = 64; lc.height = 32;
         const ctx2d = lc.getContext('2d')!;
-        ctx2d.fillStyle = isAngled ? '#FF00FF' : (g.axis === 'X' ? '#FF6600' : '#FFCC00');
+        ctx2d.fillStyle = colCss;
         ctx2d.fillRect(0, 0, 64, 32);
-        ctx2d.fillStyle = '#000000';
+        ctx2d.fillStyle = '#FFFFFF';
         ctx2d.font = 'bold 18px sans-serif';
         ctx2d.textAlign = 'center';
         ctx2d.textBaseline = 'middle';
@@ -1861,6 +1877,50 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         labelSprite.position.copy(pt2).addScaledVector(dir, 0.8).add(new THREE.Vector3(0, 0.3, 0));
         labelSprite.name = `sg:${g.label}:lbl`;
         three.current?.scene.add(labelSprite);
+
+        // ── Dimension ticks every TICK_STEP metres ─────────────────────────────
+        // perp = unit vector perpendicular to the line, horizontal in XZ plane
+        const perp = new THREE.Vector3(-dir.z, 0, dir.x);
+        const pMin = Math.min(g.start_m, g.end_m);
+        const pMax = Math.max(g.start_m, g.end_m);
+        const firstTick = Math.ceil(pMin / TICK_STEP) * TICK_STEP;
+
+        for (let param = firstTick; param <= pMax + 0.001; param += TICK_STEP) {
+          // 3D position of this tick along the gridline
+          let tickPt: THREE.Vector3;
+          if (g.axis === 'X') {
+            // param = NS coordinate; EW shifts by tanA per metre NS
+            tickPt = new THREE.Vector3(g.coord + param * tanA, staticFloorY, param);
+          } else {
+            // param = EW coordinate; NS shifts by -tanA per metre EW from start_m
+            tickPt = new THREE.Vector3(param, staticFloorY, g.coord - (param - g.start_m) * tanA);
+          }
+
+          // Tick mark — short line perpendicular to the gridline
+          const tA = tickPt.clone().addScaledVector(perp,  TICK_HALF);
+          const tB = tickPt.clone().addScaledVector(perp, -TICK_HALF);
+          const tickGeo = new THREE.BufferGeometry();
+          tickGeo.setAttribute('position', new THREE.BufferAttribute(
+            new Float32Array([tA.x, tA.y, tA.z, tB.x, tB.y, tB.z]), 3
+          ));
+          const tick = new THREE.Line(tickGeo,
+            new THREE.LineBasicMaterial({ color: colHex, transparent: true, opacity: 0.75 })
+          );
+          tick.name = `sg:${g.label}:tk:${param}`;
+          three.current?.scene.add(tick);
+
+          // Dimension label — the architectural coordinate along this axis
+          // X-axis (NS-running): param = PDF-Y (NS from Grid 9); show as "Ym"
+          // Y-axis (EW-running): param = PDF-X (EW from Grid A); show as "Xm"
+          const dimLabel = createGridLabel(`${param}m`, colCss, 18);
+          dimLabel.scale.set(0.7, 0.35, 1);
+          // Place label at the positive-perp side, slightly above floor
+          dimLabel.position.copy(tickPt)
+            .addScaledVector(perp, TICK_HALF + 0.55)
+            .add(new THREE.Vector3(0, 0.18, 0));
+          dimLabel.name = `sg:${g.label}:dim:${param}`;
+          three.current?.scene.add(dimLabel);
+        }
       }
       console.log(`[3D Viewer] Rendered ${MOORINGS_GRIDLINES.length} static gridlines at Y=${staticFloorY.toFixed(2)}`);
 
@@ -2122,13 +2182,18 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           }}
         />
 
-        {/* ── Coordinate system legend (PDF A101 convention) ───────────────── */}
-        <div className="absolute bottom-14 right-3 bg-black/70 text-white text-[10px] leading-relaxed rounded px-2.5 py-2 font-mono pointer-events-none select-none">
+        {/* ── Coordinate system + gridline colour legend ───────────────────── */}
+        <div className="absolute bottom-14 right-3 bg-black/75 text-white text-[10px] leading-relaxed rounded px-2.5 py-2 font-mono pointer-events-none select-none">
           <div className="font-semibold text-[10px] text-slate-300 mb-1 uppercase tracking-wide">Coordinates (PDF A101)</div>
           <div><span className="text-red-400 font-bold">■</span> X = E–W &nbsp;(+ east)</div>
           <div><span className="text-blue-400 font-bold">■</span> Y = N–S &nbsp;(+ north)</div>
           <div><span className="text-green-400 font-bold">■</span> Z = Elev (+ up)</div>
           <div className="mt-1 text-slate-400 text-[9px]">Origin: Grid A-9 = (0, 0, 0)</div>
+          <div className="mt-1.5 border-t border-slate-600 pt-1 font-semibold text-[10px] text-slate-300 uppercase tracking-wide">Gridlines</div>
+          <div><span style={{color:'#4499EE'}} className="font-bold">■</span> A–Y &nbsp;letter grid (N–S)</div>
+          <div><span style={{color:'#EE9922'}} className="font-bold">■</span> 1–19 number grid (E–W)</div>
+          <div><span style={{color:'#CC44EE'}} className="font-bold">■</span> Wing / angled (27.16°)</div>
+          <div className="text-slate-400 text-[9px] mt-0.5">Ticks every 5 m</div>
         </div>
 
         {/* ✅ Mobile-friendly large touch controls for iPhone */}
