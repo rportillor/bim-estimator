@@ -1852,7 +1852,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       const COL_Y_HEX   = 0xCC7700;  const COL_Y_CSS   = '#CC7700';
       const COL_ANG_HEX = 0xAA00CC;  const COL_ANG_CSS = '#AA00CC';
       const COL_CL_HEX  = 0x00AA88;  const COL_CL_CSS  = '#00AA88';
-      const TICK_STEP   = 5;   // metres between dimension ticks
+      const TICK_STEP   = 10;  // metres between dimension ticks
       const TICK_HALF   = 2.0; // half-length of perpendicular tick (metres) — 4m total, visible from plan view
 
       for (const g of MOORINGS_GRIDLINES) {
@@ -1899,7 +1899,11 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         const labelSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTex, depthTest: false }));
         labelSprite.scale.set(4, 2, 1);  // 4m × 2m — visible from plan-view distance (~90m)
         const dir = pt2.clone().sub(pt1).normalize();
-        labelSprite.position.copy(pt2).addScaledVector(dir, 3).add(new THREE.Vector3(0, 1, 0));
+        // axis='Y' (1–9 number lines): label goes to the WEST (left) end of the line
+        // all others (letter lines, wing, CL): label goes to the far (north) end
+        const lblRef = g.axis === 'Y' ? pt1 : pt2;
+        const lblFwd = g.axis === 'Y' ? -1 : 1;
+        labelSprite.position.copy(lblRef).addScaledVector(dir, lblFwd * 3).add(new THREE.Vector3(0, 1, 0));
         labelSprite.name = `sg:${g.label}:lbl`;
         three.current?.scene.add(labelSprite);
 
@@ -1934,17 +1938,23 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           tick.name = `sg:${g.label}:tk:${param}`;
           three.current?.scene.add(tick);
 
-          // Dimension label — the architectural coordinate along this axis
-          // X-axis (NS-running): param = PDF-Y (NS from Grid 9); show as "Ym"
-          // Y-axis (EW-running): param = PDF-X (EW from Grid A); show as "Xm"
-          const dimLabel = createGridLabel(`${param}m`, colCss, 18);
-          dimLabel.scale.set(3, 1.5, 1);  // 3m × 1.5m — visible from plan-view distance
-          // Place label at the positive-perp side, slightly above floor
-          dimLabel.position.copy(tickPt)
-            .addScaledVector(perp, TICK_HALF + 2)
-            .add(new THREE.Vector3(0, 1, 0));
-          dimLabel.name = `sg:${g.label}:dim:${param}`;
-          three.current?.scene.add(dimLabel);
+          // Dimension labels — professional drawing style:
+          //   Only on Grid A (NS scale bar, west side) and Grid 9 (EW scale bar, south side).
+          //   All other gridlines show tick marks only (no scattered labels).
+          if (g.label === 'A' || g.label === '9') {
+            const DIM_OFFSET = 4;  // metres outside the building perimeter
+            const dimLabel = createGridLabel(`${param}m`, '#999999', 16);
+            dimLabel.scale.set(3, 1.5, 1);
+            if (g.label === 'A') {
+              // Grid A is the west boundary — NS scale bar runs along its west side
+              dimLabel.position.set(-DIM_OFFSET, staticFloorY + 1, -param);
+            } else {
+              // Grid 9 is the south boundary — EW scale bar runs along its south side
+              dimLabel.position.set(param, staticFloorY + 1, DIM_OFFSET);
+            }
+            dimLabel.name = `sg:${g.label}:dim:${param}`;
+            three.current?.scene.add(dimLabel);
+          }
         }
       }
       console.log(`[3D Viewer] Rendered ${MOORINGS_GRIDLINES.length} static gridlines at Y=${staticFloorY.toFixed(2)}`);
