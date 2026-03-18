@@ -121,6 +121,66 @@ export const MOORINGS_GRIDLINES: GridlineDefinition[] = [
 ];
 
 /**
+ * Compute the intersection point of two gridlines (one alpha, one numeric).
+ * Returns the real-world (EW, NS) coordinates where the two lines cross.
+ *
+ * For straight grids (angle=0): intersection is simply (alpha.coord, numeric.coord).
+ * For angled grids: the intersection requires solving two parametric line equations.
+ *
+ * Alpha gridline (axis='X'): EW = coord + NS * tan(angle)
+ *   → This is a line in (EW, NS) space: EW = alpha.coord + NS * tan(alpha.angle)
+ *
+ * Numeric gridline (axis='Y'): NS = coord - (EW - start_m) * tan(angle)
+ *   → Rearranged: NS = coord - EW * tan(numeric.angle) + start_m * tan(numeric.angle)
+ *
+ * Solving simultaneously gives the intersection.
+ */
+export function computeGridIntersection(
+  alphaLabel: string,
+  numericLabel: string,
+): { ew: number; ns: number } | null {
+  const alpha = MOORINGS_GRIDLINES.find(
+    g => g.axis === 'X' && g.label.toUpperCase() === alphaLabel.toUpperCase()
+  );
+  const numeric = MOORINGS_GRIDLINES.find(
+    g => g.axis === 'Y' && g.label.toUpperCase() === numericLabel.toUpperCase()
+  );
+
+  if (!alpha || !numeric) return null;
+
+  const tanAlpha = Math.tan(alpha.angle_deg * (Math.PI / 180));
+  const tanNumeric = Math.tan(numeric.angle_deg * (Math.PI / 180));
+
+  // Alpha line: EW = alpha.coord + NS * tanAlpha
+  // Numeric line: NS = numeric.coord - (EW - numeric.start_m) * tanNumeric
+  //             = numeric.coord - EW * tanNumeric + numeric.start_m * tanNumeric
+
+  // Substituting alpha into numeric:
+  // NS = numeric.coord - (alpha.coord + NS * tanAlpha) * tanNumeric + numeric.start_m * tanNumeric
+  // NS = numeric.coord - alpha.coord * tanNumeric - NS * tanAlpha * tanNumeric + numeric.start_m * tanNumeric
+  // NS + NS * tanAlpha * tanNumeric = numeric.coord - alpha.coord * tanNumeric + numeric.start_m * tanNumeric
+  // NS * (1 + tanAlpha * tanNumeric) = numeric.coord + (numeric.start_m - alpha.coord) * tanNumeric
+  // NS = (numeric.coord + (numeric.start_m - alpha.coord) * tanNumeric) / (1 + tanAlpha * tanNumeric)
+
+  const denom = 1 + tanAlpha * tanNumeric;
+  if (Math.abs(denom) < 1e-10) return null; // Parallel lines — no intersection
+
+  const ns = (numeric.coord + (numeric.start_m - alpha.coord) * tanNumeric) / denom;
+  const ew = alpha.coord + ns * tanAlpha;
+
+  return { ew, ns };
+}
+
+/**
+ * Look up a gridline definition by label.
+ */
+export function getGridline(label: string): GridlineDefinition | undefined {
+  return MOORINGS_GRIDLINES.find(
+    g => g.label.toUpperCase() === label.toUpperCase()
+  );
+}
+
+/**
  * Returns a map of label → computed 3D endpoints (in Three.js space).
  * Three.js: X = east, Y = elevation (pass floorY), Z = north.
  *

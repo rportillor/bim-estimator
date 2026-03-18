@@ -14,7 +14,7 @@ import type {
   GridAxis,
 } from './stage-types';
 
-import { MOORINGS_GRIDLINES, type GridlineDefinition } from '../../shared/moorings-grid-constants';
+import { MOORINGS_GRIDLINES, computeGridIntersection, type GridlineDefinition } from '../../shared/moorings-grid-constants';
 
 import type {
   CandidateSet,
@@ -290,6 +290,18 @@ function fuzzyLookup<T>(map: Map<string, T>, raw: string): { value: T; matchedKe
 // Grid position resolution
 // ---------------------------------------------------------------------------
 
+/**
+ * Resolve a grid reference to absolute (EW, NS) coordinates.
+ *
+ * For STRAIGHT grids: intersection = (alpha.coord, numeric.coord) — simple lookup.
+ * For ANGLED grids (wing M-Y, 10-19): the intersection point depends on BOTH
+ * gridlines' angles. Grid M at grid 12 is NOT at (M.coord, 12.coord) — it's at
+ * the point where the two angled lines actually cross.
+ *
+ * Uses computeGridIntersection() which solves the parametric line equations.
+ *
+ * Returns {x: EW, y: NS} — x maps to Three.js X, y maps to Three.js Z.
+ */
 function resolveGridPosition(
   gridRef: { alpha: string; numeric: string } | null,
   offset: { x: number; y: number },
@@ -301,6 +313,16 @@ function resolveGridPosition(
   const alphaKey = gridRef.alpha.toUpperCase().replace(/\s+/g, '');
   const numericKey = gridRef.numeric.toUpperCase().replace(/\s+/g, '');
 
+  // Try exact intersection computation first (handles angled grids correctly)
+  const intersection = computeGridIntersection(alphaKey, numericKey);
+  if (intersection) {
+    return {
+      x: intersection.ew + offset.x,
+      y: intersection.ns + offset.y,
+    };
+  }
+
+  // Fallback: simple lookup (for grids not in the constants)
   const alphaPos = gridAlpha.get(alphaKey);
   const numericPos = gridNumeric.get(numericKey);
 

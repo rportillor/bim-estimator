@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:www.designingbuildings.co.uk)",
+      "WebFetch(domain:biblus.accasoftware.com)",
+      "WebFetch(domain:bimfix.blogspot.com)",
+      "Bash(cd:*)"
+    ]
+  }
+}
