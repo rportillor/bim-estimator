@@ -1906,20 +1906,32 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         line.userData = { type: 'grid_line', label: g.label, axis: g.axis, angleDeg: g.angle_deg };
         three.current?.scene.add(line);
 
-        // ── Grid-label bubble at far end ───────────────────────────────────────
+        // ── Grid-label bubble: CIRCLE (standard architectural drawing symbol) ──
+        const BPIX = 80;  // square canvas size (px)
+        const BRAD = 34;  // circle radius (px)
         const lc = document.createElement('canvas');
-        lc.width = 64; lc.height = 32;
+        lc.width = BPIX; lc.height = BPIX;
         const ctx2d = lc.getContext('2d')!;
+        ctx2d.clearRect(0, 0, BPIX, BPIX);
+        // Filled circle
+        ctx2d.beginPath();
+        ctx2d.arc(BPIX/2, BPIX/2, BRAD, 0, Math.PI * 2);
         ctx2d.fillStyle = colCss;
-        ctx2d.fillRect(0, 0, 64, 32);
+        ctx2d.fill();
+        // White ring border
+        ctx2d.lineWidth = 4;
+        ctx2d.strokeStyle = 'rgba(255,255,255,0.95)';
+        ctx2d.stroke();
+        // Text — scale font to fit label length
+        const bFontSize = g.label.length <= 1 ? 30 : g.label.length <= 2 ? 24 : 17;
         ctx2d.fillStyle = '#FFFFFF';
-        ctx2d.font = 'bold 18px sans-serif';
+        ctx2d.font = `bold ${bFontSize}px sans-serif`;
         ctx2d.textAlign = 'center';
         ctx2d.textBaseline = 'middle';
-        ctx2d.fillText(g.label, 32, 16);
+        ctx2d.fillText(g.label, BPIX/2, BPIX/2);
         const labelTex    = new THREE.CanvasTexture(lc);
         const labelSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTex, depthTest: false }));
-        labelSprite.scale.set(4, 2, 1);  // 4m × 2m — visible from plan-view distance (~90m)
+        labelSprite.scale.set(4, 4, 1);  // 4m × 4m square → renders as circle
         const dir = pt2.clone().sub(pt1).normalize();
         // axis='Y' non-angled (1–9 rectangular number lines): label goes to WEST (left) end
         // axis='Y' angled (10–19 wing lines) + letter lines + CL: label goes to the far end (pt2)
@@ -1948,19 +1960,6 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
             tickPt = new THREE.Vector3(param, staticFloorY, -(g.coord - (param - g.start_m) * tanA));
           }
 
-          // Tick mark — short line perpendicular to the gridline
-          const tA = tickPt.clone().addScaledVector(perp,  TICK_HALF);
-          const tB = tickPt.clone().addScaledVector(perp, -TICK_HALF);
-          const tickGeo = new THREE.BufferGeometry();
-          tickGeo.setAttribute('position', new THREE.BufferAttribute(
-            new Float32Array([tA.x, tA.y, tA.z, tB.x, tB.y, tB.z]), 3
-          ));
-          const tick = new THREE.Line(tickGeo,
-            new THREE.LineBasicMaterial({ color: colHex, transparent: true, opacity: 0.75 })
-          );
-          tick.name = `sg:${g.label}:tk:${param}`;
-          three.current?.scene.add(tick);
-
           // Dimension labels — professional drawing style:
           //   Only on Grid A (NS scale bar, west side) and Grid 9 (EW scale bar, south side).
           //   All other gridlines show tick marks only (no scattered labels).
@@ -1986,70 +1985,101 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       // Professional drawing style — spacing values (mm) between adjacent lines,
       // shown along two perimeter dimension strings: south (EW) and west (NS).
       {
-        const SOUTH_Z   =  6;   // metres south of Grid 9 (south boundary = Z 0)
-        const WEST_X    = -7;   // metres west  of Grid A (west  boundary = X 0)
-        const EXT_GREY  = new THREE.LineBasicMaterial({ color: 0xAAAAAA, transparent: true, opacity: 0.6 });
-        const DIM_GREY  = new THREE.LineBasicMaterial({ color: 0x888888, transparent: true, opacity: 0.8 });
+        const SOUTH_Z   =  7;   // metres south of Grid 9 (south boundary = Z 0)
+        const WEST_X    = -8;   // metres west  of Grid A (west  boundary = X 0)
+        const fl        = staticFloorY + 0.3;
+        const EXT_GREY  = new THREE.LineBasicMaterial({ color: 0xAAAAAA, transparent: true, opacity: 0.7 });
+        const DIM_GREY  = new THREE.LineBasicMaterial({ color: 0x666666, transparent: true, opacity: 0.9 });
 
-        // Sorted rectangular letter lines (axis='X', non-angled) by EW coordinate
-        const ewLines = MOORINGS_GRIDLINES
-          .filter(g => g.axis === 'X' && Math.abs(g.angle_deg) < 0.01)
-          .sort((a, b) => a.coord - b.coord);
-
-        // Sorted rectangular number lines (axis='Y', non-angled) by NS coordinate
-        const nsLines = MOORINGS_GRIDLINES
-          .filter(g => g.axis === 'Y' && Math.abs(g.angle_deg) < 0.01)
-          .sort((a, b) => a.coord - b.coord);
-
-        // Helper: add a 2-point line to the scene
+        // Helper: add a 2-point line
         const addLine2 = (ax:number,ay:number,az:number, bx:number,by:number,bz:number, mat:THREE.Material) => {
           const geo = new THREE.BufferGeometry();
           geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([ax,ay,az,bx,by,bz]),3));
           three.current?.scene.add(new THREE.Line(geo, mat));
         };
-
-        // ── EW dimension chain (south of building) ───────────────────────────
-        // Horizontal chain line connecting all extension line tips
-        if (ewLines.length >= 2) {
-          addLine2(ewLines[0].coord, staticFloorY+0.3, SOUTH_Z,
-                   ewLines[ewLines.length-1].coord, staticFloorY+0.3, SOUTH_Z, DIM_GREY);
-        }
-        for (const g of ewLines) {
-          // Extension line: from building south edge (Z=0) down to dim chain (Z=SOUTH_Z)
-          addLine2(g.coord, staticFloorY+0.3, 0, g.coord, staticFloorY+0.3, SOUTH_Z, EXT_GREY);
-        }
-        // Spacing labels midway between adjacent EW lines
-        for (let i = 0; i < ewLines.length - 1; i++) {
-          const a = ewLines[i], b = ewLines[i+1];
-          const dist_mm = Math.round((b.coord - a.coord) * 1000);
-          const midX = (a.coord + b.coord) / 2;
-          const lbl = createGridLabel(`${dist_mm}`, '#444444', 15);
+        // Helper: spacing label between two points on a chain
+        const addSpacingLbl = (dist_mm:number, x:number, z:number, name:string) => {
+          const lbl = createGridLabel(`${dist_mm}`, '#333333', 15);
           lbl.scale.set(3.5, 1.6, 1);
-          lbl.position.set(midX, staticFloorY + 1.5, SOUTH_Z + 0.5);
-          lbl.name = `sg:dchain:ew:${i}`;
+          lbl.position.set(x, staticFloorY + 2, z);
+          lbl.name = name;
           three.current?.scene.add(lbl);
+        };
+
+        // ── SOUTH chain: ALL letter lines (A–L rect + M–Y wing) ──────────────
+        // All axis='X' lines pass through NS=0 at EW=g.coord regardless of angle.
+        const allEWLines = MOORINGS_GRIDLINES
+          .filter(g => g.axis === 'X' && !isCLLine(g))
+          .sort((a, b) => a.coord - b.coord);
+        function isCLLine(g:{label:string}) { return g.label==='CLa'||g.label==='CL'||g.label==='CLb'; }
+
+        if (allEWLines.length >= 2) {
+          addLine2(allEWLines[0].coord, fl, SOUTH_Z, allEWLines[allEWLines.length-1].coord, fl, SOUTH_Z, DIM_GREY);
+        }
+        for (const g of allEWLines) {
+          // Extension line: gridline south end (NS=0, Z=0) → dim chain (Z=SOUTH_Z)
+          // Add a small gap (1m) before reaching the chain to look professional
+          addLine2(g.coord, fl, 1,       g.coord, fl, SOUTH_Z - 1, EXT_GREY);
+          // Tick at chain level
+          addLine2(g.coord, fl, SOUTH_Z - 0.8, g.coord, fl, SOUTH_Z + 0.8, DIM_GREY);
+        }
+        for (let i = 0; i < allEWLines.length - 1; i++) {
+          const a = allEWLines[i], b = allEWLines[i+1];
+          addSpacingLbl(Math.round((b.coord - a.coord)*1000), (a.coord+b.coord)/2, SOUTH_Z + 1, `sg:dchain:ew:${i}`);
         }
 
-        // ── NS dimension chain (west of building) ────────────────────────────
-        // Vertical chain line connecting all extension line tips
-        if (nsLines.length >= 2) {
-          addLine2(WEST_X, staticFloorY+0.3, -nsLines[0].coord,
-                   WEST_X, staticFloorY+0.3, -nsLines[nsLines.length-1].coord, DIM_GREY);
+        // ── WEST chain: rectangular number lines (1–9) ───────────────────────
+        const rectNSLines = MOORINGS_GRIDLINES
+          .filter(g => g.axis === 'Y' && Math.abs(g.angle_deg) < 0.01)
+          .sort((a, b) => a.coord - b.coord);
+
+        if (rectNSLines.length >= 2) {
+          addLine2(WEST_X, fl, -rectNSLines[0].coord, WEST_X, fl, -rectNSLines[rectNSLines.length-1].coord, DIM_GREY);
         }
-        for (const g of nsLines) {
-          // Extension line: from building west edge (X=0) out to dim chain (X=WEST_X)
-          addLine2(0, staticFloorY+0.3, -g.coord, WEST_X, staticFloorY+0.3, -g.coord, EXT_GREY);
+        for (const g of rectNSLines) {
+          addLine2(-1, fl, -g.coord, WEST_X + 1, fl, -g.coord, EXT_GREY);
+          addLine2(WEST_X - 0.8, fl, -g.coord, WEST_X + 0.8, fl, -g.coord, DIM_GREY);
         }
-        // Spacing labels midway between adjacent NS lines
-        for (let i = 0; i < nsLines.length - 1; i++) {
-          const a = nsLines[i], b = nsLines[i+1];
-          const dist_mm = Math.round((b.coord - a.coord) * 1000);
-          const midZ = (a.coord + b.coord) / 2;
-          const lbl = createGridLabel(`${dist_mm}`, '#444444', 15);
-          lbl.scale.set(3.5, 1.6, 1);
-          lbl.position.set(WEST_X - 2, staticFloorY + 1.5, -midZ);
-          lbl.name = `sg:dchain:ns:${i}`;
-          three.current?.scene.add(lbl);
+        for (let i = 0; i < rectNSLines.length - 1; i++) {
+          const a = rectNSLines[i], b = rectNSLines[i+1];
+          addSpacingLbl(Math.round((b.coord - a.coord)*1000), WEST_X - 2.5, -(a.coord+b.coord)/2, `sg:dchain:ns:${i}`);
+        }
+
+        // ── EAST chain: wing number lines (10–19) ────────────────────────────
+        // Wing lines are east of the rect building. Each line's east end is its pt2.
+        // We project them onto an east-side chain.
+        const wingNSLines = MOORINGS_GRIDLINES
+          .filter(g => g.axis === 'Y' && Math.abs(g.angle_deg) > 0.01)
+          .sort((a, b) => a.coord - b.coord);  // sort by NS (coord = NS at EW=start_m)
+
+        if (wingNSLines.length >= 1) {
+          const EAST_X = Math.max(...wingNSLines.map(g => g.end_m)) + 5;
+          const tanWing = Math.tan(wingNSLines[0].angle_deg * (Math.PI / 180));
+
+          // Chain line
+          const eastZs = wingNSLines.map(g => -(g.coord - (g.end_m - g.start_m) * tanWing));
+          const chainZ1 = Math.min(...eastZs), chainZ2 = Math.max(...eastZs);
+          addLine2(EAST_X, fl, chainZ1, EAST_X, fl, chainZ2, DIM_GREY);
+
+          for (const g of wingNSLines) {
+            const tanA2 = Math.tan(g.angle_deg * (Math.PI / 180));
+            const eastZ = -(g.coord - (g.end_m - g.start_m) * tanA2);
+            // Extension line from line's east end to the east chain
+            addLine2(g.end_m + 1, fl, eastZ, EAST_X - 1, fl, eastZ, EXT_GREY);
+            addLine2(EAST_X - 0.8, fl, eastZ, EAST_X + 0.8, fl, eastZ, DIM_GREY);
+          }
+          // Spacing labels — sorted by Z position on east chain
+          const eastPts = wingNSLines.map(g => {
+            const tanA2 = Math.tan(g.angle_deg * (Math.PI / 180));
+            return { g, eastZ: -(g.coord - (g.end_m - g.start_m) * tanA2) };
+          }).sort((a, b) => a.eastZ - b.eastZ);
+
+          for (let i = 0; i < eastPts.length - 1; i++) {
+            const az = eastPts[i].eastZ, bz = eastPts[i+1].eastZ;
+            // perpendicular spacing between adjacent wing lines in real space = |NS diff| / cos(angle)
+            const nsD = Math.abs(eastPts[i+1].g.coord - eastPts[i].g.coord);
+            addSpacingLbl(Math.round(nsD * 1000), EAST_X + 2.5, (az+bz)/2, `sg:dchain:wing:${i}`);
+          }
         }
       }
 
