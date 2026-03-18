@@ -1911,7 +1911,10 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
 
       // Prefer confirmed pipeline grid data (has labels and angles) over
       // analysis-based heuristic grids.
-      const hasPipelineGrid = pipelineGrid &&
+      // BUT: if the model already has grid_line elements (extracted via extract-layer),
+      // those are authoritative — suppress the pipeline grid to avoid duplicates.
+      const hasElementGridLines = elements.some((e: any) => e.elementType === 'grid_line');
+      const hasPipelineGrid = !hasElementGridLines && pipelineGrid &&
         (pipelineGrid.alphaGridlines.length > 0 || pipelineGrid.numericGridlines.length > 0);
 
       if (hasPipelineGrid && pipelineGrid) {
