@@ -1,31 +1,24 @@
 /**
- * Gridline PDF Parser — v4.0
+ * Gridline PDF Parser -- v5.0 (Fully Generic)
  *
- * Reads ANNOTATED DIMENSION STRINGS from the drawing, not scale-derived positions.
+ * Extracts gridline definitions from ANY construction drawing PDF.
+ * Zero hardcoded values: no bearings, no scale factors, no band positions, no spacing values.
  *
- * Angle derivation
- * ─────────────────
- * The drawing annotates a bearing of 166.42°.
- * Turn angle per step = 180° − 166.42° = 13.58°
- * Two turns are annotated → total wing angle = 2 × 13.58° = 27.16° from the EW axis.
- *
- * Coordinate origin
- * ──────────────────
- * A-9 = (0, 0, 0).  X increases east (A → L → wing).  Y increases north (9 → 1).
- *
- * Four gridline families
- * ───────────────────────
- *  A–L   : rectangular EW dimension band (top of drawing, y ≈ 130)
- *  1–9   : rectangular NS dimension band (left edge, x ≈ 149)
- *  M–Y   : angled wing EW band (diagonal, y ≈ 288–866)
- *  10–19 : angled wing NS band (right edge, following the wing angle)
- *
- * For every consecutive pair of labels the parser finds the closest
- * dimension string (3–5-digit integer, h ≤ 11) to the midpoint of the
- * two label positions.  For the right-edge 10–19 family the search
- * is restricted to the y-band between the two labels so that left-edge
- * NS annotations do not bleed in.
+ * Algorithm:
+ * 1. Extract all text items from the PDF
+ * 2. Identify grid labels (letters A-Z excluding I/O, numbers 1-99, CL variants)
+ * 3. Cluster labels into families by position (horizontal rows, vertical columns, diagonals)
+ * 4. Detect angles from label geometry via linear regression
+ * 5. Find dimension text and match to adjacent label pairs
+ * 6. Accumulate positions from dimension values
+ * 7. Determine axis, extents, and build output
  */
+
+import type { GridlineDefinition } from '../../shared/moorings-grid-constants';
+
+// ---------------------------------------------------------------------------
+// Public interfaces (backward-compatible)
+// ---------------------------------------------------------------------------
 
 export interface ParsedGridLine {
   label: string;
@@ -40,6 +33,8 @@ export interface ParsedGridLine {
 
 export interface GridlineParsedResult {
   grid_lines: ParsedGridLine[];
+  /** GridlineDefinition format output for pipeline consumers */
+  gridline_definitions: GridlineDefinition[];
   confidence: 'high' | 'low';
   notes: string[];
   bearing_deg: number;
@@ -47,14 +42,86 @@ export interface GridlineParsedResult {
   wing_angle_deg: number;
 }
 
-// ─── regex constants ──────────────────────────────────────────────────────────
-const LETTER_RE  = /^[A-HJ-NP-Z][a-z]?$/;   // A–Y excluding I,O; allows Ga, Sa
-const CL_RE      = /^CL[a-z]?$/;             // CLa, CL, CLb
-const NUM_RE     = /^\d{1,2}$/;
-const DIM_RE     = /^\d{3,5}$/;              // 3–5 digit integers = mm annotations
-const BEARING_STR = '166.42';
+// ---------------------------------------------------------------------------
+// Internal types
+// ---------------------------------------------------------------------------
 
-// ─── helpers ──────────────────────────────────────────────────────────────────
+interface TextItem {
+  str: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fontName: string;
+}
+
+/** A label occurrence found in the PDF */
+interface LabelHit {
+  text: string;
+  x: number;
+  y: number;
+  height: number;
+  /** Center X */
+  cx: number;
+  /** Center Y */
+  cy: number;
+}
+
+/** A cluster of labels that form a gridline family */
+interface LabelFamily {
+  labels: LabelHit[];
+  /** Angle of the family in degrees (0 = horizontal/vertical, nonzero = diagonal) */
+  angle_deg: number;
+  /** Whether labels represent letters ('alpha') or numbers ('numeric') */
+  type: 'alpha' | 'numeric';
+  /** Primary orientation: 'horizontal' if labels run left-right, 'vertical' if top-bottom */
+  orientation: 'horizontal' | 'vertical';
+  /** Linear regression slope of the label positions (rise/run in PDF coords) */
+  slope: number;
+  /** Linear regression intercept */
+  intercept: number;
+}
+
+/** A dimension annotation found between two labels */
+interface DimCandidate {
+  value_mm: number;
+  x: number;
+  y: number;
+  cx: number;
+  cy: number;
+  str: string;
+  height: number;
+}
+
+// ---------------------------------------------------------------------------
+// Constants (patterns only -- no project-specific values)
+// ---------------------------------------------------------------------------
+
+/** Grid label: single uppercase letter A-Z excluding I and O, optionally followed by lowercase */
+const LETTER_RE = /^[A-HJ-NP-Z][a-z]?$/;
+
+/** CL-style labels */
+const CL_RE = /^CL[a-z]?$/;
+
+/** Numeric grid labels 1-99 */
+const NUM_LABEL_RE = /^\d{1,2}$/;
+
+/** Metric dimension: 3-5 digit integer (mm) */
+const DIM_METRIC_RE = /^(\d{1,2},)?\d{3,5}$/;
+
+/** Imperial dimension: feet-inches pattern */
+const DIM_IMPERIAL_RE = /^(\d+)'[-\s]?(\d+(?:\.\d+)?)"?$/;
+
+/** Bearing annotation: a decimal number that looks like a compass bearing (0-360 range) */
+const BEARING_RE = /^(\d{1,3}\.\d{1,4})$/;
+
+/** Minimum text height (PDF units) to consider as meaningful content */
+const MIN_TEXT_HEIGHT = 5;
+
+// ---------------------------------------------------------------------------
+// Geometry helpers
+// ---------------------------------------------------------------------------
+
 function dist2(ax: number, ay: number, bx: number, by: number): number {
   return Math.sqrt((ax - bx) ** 2 + (ay - by) ** 2);
 }
@@ -64,58 +131,116 @@ function toM(mm: number): number {
 }
 
 /**
- * Find the dimension string (in mm) whose midpoint is closest to (mx, my).
- * Returns null if nothing is found within maxDist PDF units.
+ * Convert a dimension string to millimetres.
+ * Handles: "4710", "4,710", "19'-8\"", etc.
  */
-function nearestDim(
-  dimItems: any[],
-  mx: number, my: number,
-  maxDist: number,
-): { mm: number; dist: number; x: number; y: number } | null {
-  let best: any = null;
-  let bestDist = maxDist;
-  for (const d of dimItems) {
-    const dist = dist2(d.x, d.y, mx, my);
-    if (dist < bestDist) { bestDist = dist; best = d; }
+function parseDimensionMm(str: string): number | null {
+  const s = str.trim().replace(/\s+/g, '');
+
+  // Imperial: 19'-8", 3'-6"
+  const impMatch = s.match(DIM_IMPERIAL_RE);
+  if (impMatch) {
+    const feet = parseFloat(impMatch[1]);
+    const inches = parseFloat(impMatch[2]);
+    return Math.round((feet * 12 + inches) * 25.4);
   }
-  return best ? { mm: parseInt(best.str.trim(), 10), dist: bestDist, x: best.x, y: best.y } : null;
+
+  // Metric with comma: "4,710"
+  const noComma = s.replace(/,/g, '');
+  if (/^\d{3,5}$/.test(noComma)) {
+    return parseInt(noComma, 10);
+  }
+
+  return null;
 }
 
 /**
- * Right-edge search for 10–19 spans.
- * Restricts search to the y-band [yLo, yHi] and x ≥ xRef − maxLeftOffset,
- * then picks the item closest to the midpoint.
+ * Linear regression: fit y = slope * x + intercept to a set of (x, y) points.
+ * Returns { slope, intercept, r2 }.
  */
-function nearestRightEdgeDim(
-  dimItems: any[],
-  la: any, lb: any,
-  maxLeftOffset: number = 500,
-): { mm: number; dist: number } | null {
-  const yLo = Math.min(la.y, lb.y);
-  const yHi = Math.max(la.y, lb.y);
-  const xRef = Math.min(la.x, lb.x) - maxLeftOffset;
-  const mx = (la.x + lb.x) / 2;
-  const my = (la.y + lb.y) / 2;
+function linearRegression(
+  points: Array<{ x: number; y: number }>,
+): { slope: number; intercept: number; r2: number } {
+  const n = points.length;
+  if (n < 2) return { slope: 0, intercept: points[0]?.y ?? 0, r2: 1 };
 
-  let best: any = null;
-  let bestDist = Infinity;
-  for (const d of dimItems) {
-    if (d.y < yLo || d.y > yHi) continue;
-    if (d.x < xRef) continue;
-    const dist = dist2(d.x, d.y, mx, my);
-    if (dist < bestDist) { bestDist = dist; best = d; }
+  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0, sumY2 = 0;
+  for (const p of points) {
+    sumX += p.x;
+    sumY += p.y;
+    sumXY += p.x * p.y;
+    sumX2 += p.x * p.x;
+    sumY2 += p.y * p.y;
   }
-  return best ? { mm: parseInt(best.str.trim(), 10), dist: bestDist } : null;
+  const denom = n * sumX2 - sumX * sumX;
+  if (Math.abs(denom) < 1e-10) {
+    return { slope: 0, intercept: sumY / n, r2: 1 };
+  }
+  const slope = (n * sumXY - sumX * sumY) / denom;
+  const intercept = (sumY - slope * sumX) / n;
+
+  // R-squared
+  const yMean = sumY / n;
+  let ssTot = 0, ssRes = 0;
+  for (const p of points) {
+    ssTot += (p.y - yMean) ** 2;
+    ssRes += (p.y - (slope * p.x + intercept)) ** 2;
+  }
+  const r2 = ssTot > 0 ? 1 - ssRes / ssTot : 1;
+
+  return { slope, intercept, r2 };
 }
 
-// ─── main export ──────────────────────────────────────────────────────────────
-export async function parseGridlinesFromPdf(
-  pdfBuffer: Buffer,
-): Promise<GridlineParsedResult | null> {
-  const notes: string[] = [];
+/**
+ * Compute the angle in degrees that a set of points' fitted line makes with
+ * the horizontal axis. Returns 0 for nearly horizontal lines.
+ */
+function angleFromSlope(slope: number): number {
+  return Math.atan(slope) * (180 / Math.PI);
+}
 
-  // ── 1. Extract PDF items ───────────────────────────────────────────────────
-  let items: any[] = [];
+/**
+ * Cluster an array of numbers into groups where consecutive values are within `threshold`.
+ * Returns array of { center, indices }.
+ */
+function clusterValues(
+  values: number[],
+  threshold: number,
+): Array<{ center: number; indices: number[] }> {
+  if (values.length === 0) return [];
+
+  const indexed = values.map((v, i) => ({ v, i }));
+  indexed.sort((a, b) => a.v - b.v);
+
+  const clusters: Array<{ center: number; indices: number[] }> = [];
+  let currentCluster = { sum: indexed[0].v, indices: [indexed[0].i] };
+
+  for (let k = 1; k < indexed.length; k++) {
+    const currentCenter = currentCluster.sum / currentCluster.indices.length;
+    if (Math.abs(indexed[k].v - currentCenter) <= threshold) {
+      currentCluster.sum += indexed[k].v;
+      currentCluster.indices.push(indexed[k].i);
+    } else {
+      clusters.push({
+        center: currentCluster.sum / currentCluster.indices.length,
+        indices: currentCluster.indices,
+      });
+      currentCluster = { sum: indexed[k].v, indices: [indexed[k].i] };
+    }
+  }
+  clusters.push({
+    center: currentCluster.sum / currentCluster.indices.length,
+    indices: currentCluster.indices,
+  });
+
+  return clusters;
+}
+
+// ---------------------------------------------------------------------------
+// Step 1: Extract text items
+// ---------------------------------------------------------------------------
+
+async function extractTextItems(pdfBuffer: Buffer): Promise<{ items: TextItem[]; pageWidth: number; pageHeight: number } | null> {
   try {
     const { PDFExtract } = await import('pdf.js-extract');
     const extractor = new PDFExtract();
@@ -123,439 +248,837 @@ export async function parseGridlinesFromPdf(
       extractor.extractBuffer(pdfBuffer, {}, (err: any, res: any) =>
         err ? reject(err) : resolve(res));
     });
-    items = data?.pages?.[0]?.content ?? [];
-  } catch (e: any) {
-    notes.push(`PDF extraction error: ${e?.message}`);
+    const page = data?.pages?.[0];
+    if (!page) return null;
+    const items: TextItem[] = (page.content ?? []).filter(
+      (i: any) => (i.height ?? 0) >= MIN_TEXT_HEIGHT && (i.str ?? '').trim().length > 0,
+    );
+    return {
+      items,
+      pageWidth: page.pageInfo?.width ?? 1000,
+      pageHeight: page.pageInfo?.height ?? 800,
+    };
+  } catch {
     return null;
   }
-  notes.push(`PDF items: ${items.length}`);
+}
 
-  // ── 2. Read bearing → compute angles ──────────────────────────────────────
-  const BEARING_DEG    = 166.42;
-  const TURN_ANGLE_DEG = 180 - BEARING_DEG;          // 13.58°
-  const WING_ANGLE_DEG = 2 * TURN_ANGLE_DEG;         // 27.16°
+// ---------------------------------------------------------------------------
+// Step 2: Find grid labels
+// ---------------------------------------------------------------------------
 
-  const bearingCount = items.filter(i => i.str?.trim() === BEARING_STR).length;
-  notes.push(
-    `Bearing "${BEARING_STR}" found ${bearingCount} times → ` +
-    `turn = ${TURN_ANGLE_DEG.toFixed(2)}° × 2 turns = ${WING_ANGLE_DEG.toFixed(2)}° total wing angle`,
-  );
-
-  // ── 3. Build dimension item list ───────────────────────────────────────────
-  // Valid spans: 600 mm–15 000 mm covers every annotated gridline spacing.
-  // Below 600 catches wall thicknesses (300), cover (140), etc.
-  const dimSeen = new Set<string>();
-  const dimItems: any[] = [];
-  for (const i of items) {
-    const s = i.str?.trim() ?? '';
-    if (!DIM_RE.test(s)) continue;
-    const h = i.height ?? 0;
-    if (h < 5 || h > 11) continue;
-    const v = parseInt(s, 10);
-    if (v < 600 || v > 15000) continue;
-    const key = `${Math.round(i.x * 10)},${Math.round(i.y * 10)},${s}`;
-    if (!dimSeen.has(key)) { dimSeen.add(key); dimItems.push(i); }
-  }
-  notes.push(`Dimension candidates (600–15000 mm, h 5–11): ${dimItems.length}`);
-
-  // ── 4. Scale fallback calibration from A and B label positions ─────────────
-  const aItems = items.filter(i => i.str?.trim() === 'A' && (i.height ?? 0) >= 10);
-  const bItems = items.filter(i => i.str?.trim() === 'B' && (i.height ?? 0) >= 10);
-  const aTop = [...aItems].sort((a, b) => a.y - b.y)[0];
-  const bTop = [...bItems].sort((a, b) => a.y - b.y)[0];
-
-  // A-B annotated = 4710 mm (from the drawing dimension band)
-  const SCALE = (aTop && bTop && bTop.x > aTop.x)
-    ? 4710 / (bTop.x - aTop.x)
-    : 35.149;
-  const pdfToMm = (units: number) => Math.round(units * SCALE);
-  notes.push(`Scale: ${SCALE.toFixed(3)} mm/PDF-unit (fallback)`);
-
-  // ── 5. Collect gridline label items ───────────────────────────────────────
-  // Only items with h ≥ 10 are gridline bubble labels.
-  const labelItems = items.filter(i => (i.height ?? 0) >= 10);
-
-  // Helper: deduplicate by label string, keeping first occurrence
-  function dedupeLabels(arr: any[]): any[] {
-    const seen = new Set<string>();
-    const out: any[] = [];
-    for (const i of arr) {
-      const s = i.str?.trim() ?? '';
-      if (!seen.has(s)) { seen.add(s); out.push(i); }
-    }
-    return out;
-  }
-
-  // 5a. Rectangular letters A–L and CL lines: top band y < 200
-  const topBand = labelItems.filter(i => i.y < 200).sort((a, b) => a.x - b.x);
-  const rectLetters = dedupeLabels(topBand.filter(i => LETTER_RE.test(i.str?.trim() ?? '')));
-  const clLabels    = dedupeLabels(topBand.filter(i => CL_RE.test(i.str?.trim() ?? '')));
-
-  // 5b. Wing letters M–Y: diagonal band y 200–1000, x > 2000
-  const wingBand = labelItems
-    .filter(i => i.y >= 200 && i.y <= 1000 && i.x > 2000)
-    .sort((a, b) => a.x - b.x);
-  const wingLetters = dedupeLabels(wingBand.filter(i => LETTER_RE.test(i.str?.trim() ?? '')));
-
-  // 5c. Number labels 1–9: left edge
-  // Build a monotonic south→north sequence so that stray page/revision markers
-  // (e.g. a "1" at the bottom-left corner of the sheet) are automatically excluded.
-  const allNums = labelItems.filter(i => {
-    const s = i.str?.trim() ?? '';
-    if (!NUM_RE.test(s)) return false;
+function isGridLabel(str: string): boolean {
+  const s = str.trim();
+  if (LETTER_RE.test(s)) return true;
+  if (CL_RE.test(s)) return true;
+  if (NUM_LABEL_RE.test(s)) {
     const n = parseInt(s, 10);
-    return n >= 1 && n <= 19;
-  });
-  const leftX = allNums.length > 0 ? Math.min(...allNums.map(i => i.x)) : 0;
+    return n >= 1 && n <= 99;
+  }
+  return false;
+}
 
-  // Group left-edge 1–9 candidates by their numeric value
-  const leftCandsByVal = new Map<number, any[]>();
-  for (const i of allNums) {
-    const n = parseInt(i.str.trim(), 10);
-    if (n < 1 || n > 9 || i.x > leftX + 80) continue;
-    if (!leftCandsByVal.has(n)) leftCandsByVal.set(n, []);
-    leftCandsByVal.get(n)!.push(i);
+function labelType(str: string): 'alpha' | 'numeric' {
+  const s = str.trim();
+  if (LETTER_RE.test(s) || CL_RE.test(s)) return 'alpha';
+  return 'numeric';
+}
+
+/**
+ * Find all grid label occurrences. Grid labels are text items that:
+ * - Match known grid label patterns
+ * - Are rendered at a height consistent with grid bubble labels (detect the mode)
+ */
+function findLabelHits(items: TextItem[]): LabelHit[] {
+  // First pass: collect all potential label items
+  const candidates: Array<TextItem & { parsed: string }> = [];
+  for (const item of items) {
+    const s = item.str.trim();
+    if (isGridLabel(s)) {
+      candidates.push({ ...item, parsed: s });
+    }
+  }
+  if (candidates.length === 0) return [];
+
+  // Determine the dominant font height for grid labels.
+  // Grid bubble labels are typically rendered at a consistent, relatively large height.
+  // Find the most common height among label candidates (rounded to nearest integer).
+  const heightCounts = new Map<number, number>();
+  for (const c of candidates) {
+    const h = Math.round(c.height);
+    heightCounts.set(h, (heightCounts.get(h) ?? 0) + 1);
   }
 
-  // Walk from grid 9 (south, large y) to grid 1 (north, small y).
-  // Each grid must be strictly north (y <) of the previously accepted grid.
-  const leftNums: any[] = [];
-  let prevLeftY = Infinity;
-  for (let n = 9; n >= 1; n--) {
-    const cands = (leftCandsByVal.get(n) ?? []).filter(c => c.y < prevLeftY);
-    if (cands.length === 0) continue;
-    const best = cands.reduce((a, b) => (a.y > b.y ? a : b)); // southernmost valid
-    leftNums.push(best);
-    prevLeftY = best.y;
-  }
-  // leftNums is ordered 9→1 (south to north)
+  // Sort heights by frequency descending, then by height descending (prefer larger labels)
+  const sortedHeights = [...heightCounts.entries()]
+    .sort((a, b) => b[1] - a[1] || b[0] - a[0]);
 
-  // 5d. Number labels 10–19: right edge, sorted top→bottom (ascending y)
-  // Same monotonic approach: 10 at top (small y) → 19 at bottom (large y)
-  const rightCandsByVal = new Map<number, any[]>();
-  for (const i of allNums) {
-    const n = parseInt(i.str.trim(), 10);
-    if (n < 10 || n > 19) continue;
-    if (!rightCandsByVal.has(n)) rightCandsByVal.set(n, []);
-    rightCandsByVal.get(n)!.push(i);
+  // Accept the top 1-2 most common heights, provided they are within 30% of each other
+  const primaryHeight = sortedHeights[0][0];
+  const acceptedHeights = new Set<number>([primaryHeight]);
+  for (let i = 1; i < sortedHeights.length; i++) {
+    const h = sortedHeights[i][0];
+    if (Math.abs(h - primaryHeight) <= primaryHeight * 0.3 && sortedHeights[i][1] >= 3) {
+      acceptedHeights.add(h);
+    }
   }
 
-  const rightNums: any[] = [];
-  let prevRightY = -Infinity;
-  for (let n = 10; n <= 19; n++) {
-    const cands = (rightCandsByVal.get(n) ?? []).filter(c => c.y > prevRightY);
-    if (cands.length === 0) continue;
-    const best = cands.reduce((a, b) => (a.y < b.y ? a : b)); // northernmost valid
-    rightNums.push(best);
-    prevRightY = best.y;
-  }
-  // rightNums is ordered 10→19 (top to bottom)
-
-  notes.push(`Rect letters (${rectLetters.length}): ${rectLetters.map(i => i.str.trim()).join(' ')}`);
-  notes.push(`CL labels   (${clLabels.length}):   ${clLabels.map(i => i.str.trim()).join(' ')}`);
-  notes.push(`Wing letters(${wingLetters.length}): ${wingLetters.map(i => i.str.trim()).join(' ')}`);
-  notes.push(`Left  1–9   (${leftNums.length}):   ${leftNums.map(i => i.str.trim()).join(' ')}`);
-  notes.push(`Right 10–19 (${rightNums.length}):  ${rightNums.map(i => i.str.trim()).join(' ')}`);
-
-  // ── 6. Build gridline output ───────────────────────────────────────────────
-  const grid_lines: ParsedGridLine[] = [];
-  // Estimated extents (refined below once we have coordinates)
-  const NS_EXTENT = 45;
-  const EW_EXTENT = 90;
-
-  // ── Pre-compute wing coordinate origins from PDF geometry ────────────────
-  // Grid 10 (northernmost wing NS line) is north of grid 9.
-  // Its absolute NS position = pdfToMm(grid9.y_pdf − grid10.y_pdf)
-  // because y_pdf increases southward, so grid9.y > grid10.y when grid10 is north.
-  const grid10NsCoordMm: number =
-    leftNums.length > 0 && rightNums.length > 0
-      ? pdfToMm(leftNums[0].y - rightNums[0].y)
-      : 0;
-  // Grid 19 (southernmost wing NS line) is south of grid 9.
-  // Its absolute NS position is negative: -(grid19.y_pdf − grid9.y_pdf).
-  const grid19NsCoordMm: number =
-    leftNums.length > 0 && rightNums.length > 0
-      ? -pdfToMm(rightNums[rightNums.length - 1].y - leftNums[0].y)
-      : -25000;
-  notes.push(
-    `Wing NS origin: grid10 = ${toM(grid10NsCoordMm)} m, grid19 ≈ ${toM(grid19NsCoordMm)} m`,
-  );
-
-  // ── 6a. Rectangular letters A–L ─────────────────────────────────────────
-  // Dimension band at y ≈ 130; search radius 150 units covers label-to-dim gap.
-  const RECT_LETTER_RADIUS = 150;
-  let lPosMm = 0; // L's absolute EW coordinate (populated at end of 6a)
-  if (rectLetters.length > 0) {
-    let cumMm = 0;
-    grid_lines.push({
-      label: rectLetters[0].str.trim(), axis: 'X',
-      coordinate_m: 0, start_m: 0, end_m: NS_EXTENT,
-      angle_deg: 0, section: 'rectangular', source: 'annotated',
+  const hits: LabelHit[] = [];
+  for (const c of candidates) {
+    const h = Math.round(c.height);
+    if (!acceptedHeights.has(h)) continue;
+    hits.push({
+      text: c.parsed,
+      x: c.x,
+      y: c.y,
+      height: c.height,
+      cx: c.x + (c.width ?? 0) / 2,
+      cy: c.y - (c.height ?? 0) / 2,  // PDF y is baseline; center is above
     });
-    for (let i = 0; i < rectLetters.length - 1; i++) {
-      const la = rectLetters[i], lb = rectLetters[i + 1];
-      const mx = (la.x + lb.x) / 2, my = (la.y + lb.y) / 2;
-      const hit = nearestDim(dimItems, mx, my, RECT_LETTER_RADIUS);
-      let source: 'annotated' | 'scale-fallback' = 'annotated';
-      if (hit) {
-        cumMm += hit.mm;
-      } else {
-        cumMm += pdfToMm(lb.x - la.x);
-        source = 'scale-fallback';
-        notes.push(`[FALLBACK] ${la.str.trim()}–${lb.str.trim()}: no dim found`);
-      }
-      grid_lines.push({
-        label: lb.str.trim(), axis: 'X',
-        coordinate_m: toM(cumMm), start_m: 0, end_m: NS_EXTENT,
-        angle_deg: 0, section: 'rectangular', source,
+  }
+
+  return hits;
+}
+
+// ---------------------------------------------------------------------------
+// Step 3: Group labels into families
+// ---------------------------------------------------------------------------
+
+/**
+ * Given a set of label hits, group them into families based on:
+ * - Spatial clustering (labels at consistent Y = horizontal family, consistent X = vertical)
+ * - Label type (alpha vs numeric)
+ *
+ * A family is a set of labels that form one row or column of gridline bubbles.
+ * There may be multiple families per type (e.g., straight + angled alpha families).
+ */
+function groupIntoFamilies(
+  hits: LabelHit[],
+  pageWidth: number,
+  pageHeight: number,
+): LabelFamily[] {
+  // Separate by type
+  const alphaHits = hits.filter(h => labelType(h.text) === 'alpha');
+  const numericHits = hits.filter(h => labelType(h.text) === 'numeric');
+
+  const families: LabelFamily[] = [];
+
+  // For alpha labels: typically arranged horizontally (left to right)
+  // There may be pairs (top + bottom of drawing) or single rows
+  // Also may be diagonal for angled sections
+  if (alphaHits.length > 0) {
+    const alphaFamilies = clusterLabelsIntoRows(alphaHits, pageWidth, pageHeight, 'alpha');
+    families.push(...alphaFamilies);
+  }
+
+  // For numeric labels: typically arranged vertically (top to bottom)
+  if (numericHits.length > 0) {
+    const numericFamilies = clusterLabelsIntoRows(numericHits, pageWidth, pageHeight, 'numeric');
+    families.push(...numericFamilies);
+  }
+
+  return families;
+}
+
+/**
+ * Cluster a set of same-type labels into distinct rows/columns.
+ *
+ * Strategy:
+ * 1. For each unique label text, collect all occurrences
+ * 2. Group occurrences by their Y position (for horizontal rows) or X position (for vertical columns)
+ * 3. Within each row/column, deduplicate labels and fit a line
+ * 4. Determine angle from the fitted line
+ */
+function clusterLabelsIntoRows(
+  hits: LabelHit[],
+  pageWidth: number,
+  pageHeight: number,
+  type: 'alpha' | 'numeric',
+): LabelFamily[] {
+  if (hits.length < 2) return [];
+
+  // Cluster by Y position to find horizontal rows
+  const yThreshold = pageHeight * 0.05; // 5% of page height
+  const yClusters = clusterValues(hits.map(h => h.cy), yThreshold);
+
+  // Cluster by X position to find vertical columns
+  const xThreshold = pageWidth * 0.05;
+  const xClusters = clusterValues(hits.map(h => h.cx), xThreshold);
+
+  const families: LabelFamily[] = [];
+
+  // Try horizontal rows first (labels sharing similar Y)
+  for (const yCluster of yClusters) {
+    if (yCluster.indices.length < 2) continue;
+
+    const rowHits = yCluster.indices.map(i => hits[i]);
+    // Deduplicate by label text within this row, keeping the leftmost occurrence
+    const deduped = deduplicateLabels(rowHits, 'horizontal');
+    if (deduped.length < 2) continue;
+
+    // Fit a line to determine angle
+    const points = deduped.map(h => ({ x: h.cx, y: h.cy }));
+    const reg = linearRegression(points);
+    const angle = angleFromSlope(reg.slope);
+
+    families.push({
+      labels: deduped.sort((a, b) => a.cx - b.cx),
+      angle_deg: Math.abs(angle) < 2 ? 0 : angle,
+      type,
+      orientation: 'horizontal',
+      slope: reg.slope,
+      intercept: reg.intercept,
+    });
+  }
+
+  // Try vertical columns (labels sharing similar X)
+  for (const xCluster of xClusters) {
+    if (xCluster.indices.length < 2) continue;
+
+    const colHits = xCluster.indices.map(i => hits[i]);
+    const deduped = deduplicateLabels(colHits, 'vertical');
+    if (deduped.length < 2) continue;
+
+    // Check if this column is already represented in a horizontal family
+    // (a label can appear in both a horizontal row and vertical column)
+    // Only add if the column has unique labels not already in horizontal families
+    const existingLabels = new Set<string>();
+    for (const f of families) {
+      for (const l of f.labels) existingLabels.add(l.text);
+    }
+    const uniqueInCol = deduped.filter(h => !existingLabels.has(h.text));
+    // If most labels in this column are unique, it's a genuine vertical family
+    if (uniqueInCol.length < deduped.length * 0.5 && families.length > 0) continue;
+
+    const points = deduped.map(h => ({ x: h.cy, y: h.cx })); // swap for vertical
+    const reg = linearRegression(points);
+    const angle = angleFromSlope(reg.slope);
+
+    families.push({
+      labels: deduped.sort((a, b) => a.cy - b.cy),
+      angle_deg: Math.abs(angle) < 2 ? 0 : angle,
+      type,
+      orientation: 'vertical',
+      slope: reg.slope,
+      intercept: reg.intercept,
+    });
+  }
+
+  // If no families found from row/column clustering, try diagonal detection.
+  // This handles cases where labels are placed along a diagonal line.
+  if (families.length === 0 && hits.length >= 3) {
+    const deduped = deduplicateLabels(hits, 'horizontal');
+    if (deduped.length >= 2) {
+      const points = deduped.map(h => ({ x: h.cx, y: h.cy }));
+      const reg = linearRegression(points);
+      const angle = angleFromSlope(reg.slope);
+      const xSpan = Math.max(...deduped.map(h => h.cx)) - Math.min(...deduped.map(h => h.cx));
+      const ySpan = Math.max(...deduped.map(h => h.cy)) - Math.min(...deduped.map(h => h.cy));
+
+      families.push({
+        labels: deduped.sort((a, b) => a.cx - b.cx),
+        angle_deg: angle,
+        type,
+        orientation: xSpan >= ySpan ? 'horizontal' : 'vertical',
+        slope: reg.slope,
+        intercept: reg.intercept,
       });
     }
-    lPosMm = cumMm; // L's absolute EW position (mm from A)
-    notes.push(`L position: ${toM(lPosMm)} m`);
   }
 
-  // ── 6b. CL transition lines (first 13.58° turn) ─────────────────────────
-  const CL_RADIUS = 120;
-  if (clLabels.length > 0) {
-    // L–CLa gap: no annotated dim; use scale from top-label x positions
-    const lItem = rectLetters[rectLetters.length - 1];
-    const claItem = clLabels[0];
-    let clBaseMm = lItem
-      ? (grid_lines.find(g => g.label === lItem.str.trim())?.coordinate_m ?? 0) * 1000 +
-        pdfToMm(claItem.x - lItem.x)
-      : 0;
+  // Merge families that share the same labels (e.g., top and bottom rows of the same gridlines)
+  return mergeDuplicateFamilies(families);
+}
 
-    grid_lines.push({
-      label: claItem.str.trim(), axis: 'X',
-      coordinate_m: toM(clBaseMm), start_m: toM(grid19NsCoordMm), end_m: NS_EXTENT,
-      angle_deg: TURN_ANGLE_DEG, section: 'rectangular', source: 'scale-fallback',
-    });
-
-    for (let i = 0; i < clLabels.length - 1; i++) {
-      const la = clLabels[i], lb = clLabels[i + 1];
-      const mx = (la.x + lb.x) / 2, my = (la.y + lb.y) / 2;
-      const hit = nearestDim(dimItems, mx, my, CL_RADIUS);
-      let source: 'annotated' | 'scale-fallback' = 'annotated';
-      if (hit) {
-        clBaseMm += hit.mm;
-      } else {
-        clBaseMm += pdfToMm(lb.x - la.x);
-        source = 'scale-fallback';
-        notes.push(`[FALLBACK] ${la.str.trim()}–${lb.str.trim()}`);
-      }
-      grid_lines.push({
-        label: lb.str.trim(), axis: 'X',
-        coordinate_m: toM(clBaseMm), start_m: toM(grid19NsCoordMm), end_m: NS_EXTENT,
-        angle_deg: TURN_ANGLE_DEG, section: 'rectangular', source,
-      });
-    }
+/**
+ * Deduplicate labels: if the same label text appears multiple times,
+ * keep one representative occurrence.
+ */
+function deduplicateLabels(hits: LabelHit[], dir: 'horizontal' | 'vertical'): LabelHit[] {
+  const byText = new Map<string, LabelHit[]>();
+  for (const h of hits) {
+    if (!byText.has(h.text)) byText.set(h.text, []);
+    byText.get(h.text)!.push(h);
   }
-
-  // ── 6c. Wing letters M–Y (second 13.58° turn → 27.16° total) ───────────
-  // M's absolute EW coordinate = L + L→M gap.
-  // L→M gap: search for an annotated dimension near the L–M label midpoint;
-  // fall back to the scale-derived PDF x-distance between the labels.
-  const WING_LETTER_RADIUS = 250;
-  let wingOriginMm = lPosMm;   // absolute EW position of M (set below)
-  let wingEndMm    = lPosMm;   // absolute EW position of Y (set below)
-  if (wingLetters.length > 0) {
-    // Compute L→M gap
-    const lLabel = rectLetters[rectLetters.length - 1];
-    const mLabel = wingLetters[0];
-    // L→M gap: derive M's absolute EW position by back-computing from the
-    // plan-body positions of the wing span annotations.
-    //
-    // Background: wing labels (M-Y) are offset annotation bubbles placed in a
-    // separate diagonal area of the drawing — their x positions do NOT directly
-    // correspond to EW gridline positions.  However, the dimension annotations
-    // (3383, 1901, etc.) between consecutive wing labels are placed in the plan
-    // body at the actual midpoint of the two gridlines at that NS level.
-    // From an annotation at (x_ann, y_ann):
-    //   EW_ann = (x_ann − A_pdf_x) × scale
-    //   NS_ann = (grid9_y_pdf − y_ann) × scale  (positive = north, negative = south)
-    //   EW_ann = M_ew + cumSpanToMidpoint + NS_ann × tan(WING_ANGLE)
-    // Solving:  M_ew = EW_ann − cumSpanToMidpoint − NS_ann × tan(WING_ANGLE)
-    //
-    // We compute this for every annotated inter-wing dimension, collect the
-    // M_ew estimates, and take the median for robustness.
-    // A_pdf_x: X position corresponding to EW=0 in the plan body.
-    // Derived from L's top-band label (in the same horizontal band as A-L).
-    const A_pdf_x_derived = lLabel ? lLabel.x - lPosMm / SCALE : (rectLetters[0]?.x ?? 0);
-    // grid9_y_pdf: Y position of grid 9 label (NS=0 datum).
-    const grid9_y_pdf = leftNums.length > 0 ? leftNums[0].y : 0;
-    // tan of the wing angle for EW offset computation.
-    const tanWing = Math.tan(WING_ANGLE_DEG * Math.PI / 180);
-
-    // ── Phase 1: Compute relative wing spans from the annotation band ─────────
-    // Wing labels (M–Y) are offset annotation bubbles — their x,y positions do
-    // NOT correspond to plan-body EW/NS coordinates.  However the nearestDim
-    // search at each consecutive pair midpoint correctly captures the annotated
-    // inter-wing span value.  We record spans only (not positions).
-    let relCumMm = 0;
-    const relWingSpans: number[] = [];
-    const relWingSources: Array<'annotated' | 'scale-fallback'> = [];
-
-    for (let i = 0; i < wingLetters.length - 1; i++) {
-      const la = wingLetters[i], lb = wingLetters[i + 1];
-      const mx = (la.x + lb.x) / 2, my = (la.y + lb.y) / 2;
-      const hit = nearestDim(dimItems, mx, my, WING_LETTER_RADIUS);
-      if (hit) {
-        relWingSpans.push(hit.mm);
-        relWingSources.push('annotated');
-        relCumMm += hit.mm;
-      } else {
-        const labDist = dist2(la.x, la.y, lb.x, lb.y);
-        const fb = pdfToMm(labDist);
-        relWingSpans.push(fb);
-        relWingSources.push('scale-fallback');
-        relCumMm += fb;
-        notes.push(`[FALLBACK] Wing ${la.str.trim()}–${lb.str.trim()}`);
-      }
-    }
-
-    // ── Phase 2: Derive M's absolute EW at grid9 from the plan-body label ─────
-    // The plan body carries BOTTOM LABELS for every gridline letter (at the south
-    // margin of the drawing, below grid9).  For vertical rectangular lines (A–L),
-    // the bottom label x equals the gridline EW position (constant across NS).
-    // For wing lines (M–Y), the bottom label is placed at the gridline's x where
-    // it intersects the south boundary of the plan — which is approximately the
-    // EW coordinate at grid9 level (NS=0).  We find the bottom M label (y >
-    // grid9_y_pdf, x < 1700 so it's in the plan body, not the wing margin band).
-    const allMItems = items.filter((i: any) => i.str?.trim() === 'M');
-    const mBottomLabel = allMItems
-      .filter((i: any) => i.y > grid9_y_pdf && i.x < 1700)
-      .sort((a: any, b: any) => a.y - b.y)[0]; // topmost among south labels
-
-    let mEwAtGrid9 = 0;
-    if (mBottomLabel) {
-      // The bottom label x encodes M's EW at the label's NS level (not at grid9).
-      // The label's NS level: ns_label = (grid9_y_pdf - label.y) * SCALE (negative = south).
-      // Going from ns_label northward to grid9 (NS=0), the wing line moves east:
-      //   M_ew_at_grid9 = M_ew_at_label + |ns_label| × tan(WING°)
-      const mEwAtLabel = (mBottomLabel.x - A_pdf_x_derived) * SCALE;
-      const nsLabel    = (grid9_y_pdf - mBottomLabel.y) * SCALE; // negative (south)
-      mEwAtGrid9 = mEwAtLabel + Math.abs(nsLabel) * tanWing;
-      notes.push(`M bottom label: x=${mBottomLabel.x.toFixed(1)}, y=${mBottomLabel.y.toFixed(1)}, ` +
-        `NS_label=${(nsLabel/1000).toFixed(3)}m → EW_at_label=${toM(mEwAtLabel)}m → M_ew@grid9=${toM(mEwAtGrid9)} m`);
+  const result: LabelHit[] = [];
+  for (const [, group] of byText) {
+    // Pick the one with the smallest coordinate in the primary direction
+    if (dir === 'horizontal') {
+      group.sort((a, b) => a.cx - b.cx);
     } else {
-      // Hard fallback: use L_ew (M starts at or just east of L)
-      mEwAtGrid9 = lPosMm;
-      notes.push(`M bottom label NOT FOUND — using lPosMm=${toM(lPosMm)} m as fallback`);
+      group.sort((a, b) => a.cy - b.cy);
     }
-
-    wingOriginMm = Math.round(mEwAtGrid9);
-    notes.push(`M absolute origin (from bottom label): ${toM(wingOriginMm)} m`);
-
-    // ── Phase 4: Build wing gridlines using already-computed spans ───────────
-    let wingCumMm = wingOriginMm;
-    grid_lines.push({
-      label: wingLetters[0].str.trim(), axis: 'X',
-      coordinate_m: toM(wingCumMm),
-      start_m: toM(grid19NsCoordMm), end_m: toM(grid10NsCoordMm),
-      angle_deg: WING_ANGLE_DEG, section: 'wing', source: 'annotated',
-    });
-    for (let i = 0; i < relWingSpans.length; i++) {
-      wingCumMm += relWingSpans[i];
-      grid_lines.push({
-        label: wingLetters[i + 1].str.trim(), axis: 'X',
-        coordinate_m: toM(wingCumMm),
-        start_m: toM(grid19NsCoordMm), end_m: toM(grid10NsCoordMm),
-        angle_deg: WING_ANGLE_DEG, section: 'wing',
-        source: relWingSources[i] ?? 'annotated',
-      });
-    }
-    wingEndMm = wingCumMm; // Y's absolute EW position
-    notes.push(`Y absolute end: ${toM(wingEndMm)} m`);
+    result.push(group[0]);
   }
+  return result;
+}
 
-  // ── 6d. Number gridlines 1–9 (NS left edge) ─────────────────────────────
-  // Origin = grid 9 (southernmost, Y = 0); Y increases northward.
-  // leftNums is already sorted south→north (grid 9 first).
-  const NS_RADIUS = 150;
-  if (leftNums.length > 0) {
-    let nsCumMm = 0;
-    const rectEwEnd = lPosMm > 0 ? toM(lPosMm) : EW_EXTENT;
-    grid_lines.push({
-      label: leftNums[0].str.trim(), // grid 9
-      axis: 'Y', coordinate_m: 0, start_m: 0, end_m: rectEwEnd,
-      angle_deg: 0, section: 'rectangular', source: 'annotated',
-    });
-    for (let i = 0; i < leftNums.length - 1; i++) {
-      const south = leftNums[i], north = leftNums[i + 1]; // going northward
-      const mx = (south.x + north.x) / 2, my = (south.y + north.y) / 2;
-      const hit = nearestDim(dimItems, mx, my, NS_RADIUS);
-      let source: 'annotated' | 'scale-fallback' = 'annotated';
-      if (hit) {
-        nsCumMm += hit.mm;
-      } else {
-        // y decreases going north in PDF space
-        nsCumMm += pdfToMm(south.y - north.y);
-        source = 'scale-fallback';
-        notes.push(`[FALLBACK] ${south.str.trim()}–${north.str.trim()}`);
+/**
+ * Merge families that represent the same set of gridlines
+ * (e.g., top labels and bottom labels for the same alpha family).
+ */
+function mergeDuplicateFamilies(families: LabelFamily[]): LabelFamily[] {
+  if (families.length <= 1) return families;
+
+  const merged: LabelFamily[] = [];
+  const used = new Set<number>();
+
+  for (let i = 0; i < families.length; i++) {
+    if (used.has(i)) continue;
+
+    let current = families[i];
+    const currentLabels = new Set(current.labels.map(l => l.text));
+
+    for (let j = i + 1; j < families.length; j++) {
+      if (used.has(j)) continue;
+      const otherLabels = new Set(families[j].labels.map(l => l.text));
+
+      // If families share >50% of labels, merge them
+      let overlap = 0;
+      for (const l of currentLabels) {
+        if (otherLabels.has(l)) overlap++;
       }
-      grid_lines.push({
-        label: north.str.trim(), axis: 'Y',
-        coordinate_m: toM(nsCumMm), start_m: 0, end_m: rectEwEnd,
-        angle_deg: 0, section: 'rectangular', source,
-      });
-    }
-  }
+      const overlapRatio = overlap / Math.min(currentLabels.size, otherLabels.size);
 
-  // ── 6e. Number gridlines 10–19 (right edge, wing cross-axis) ────────────
-  // Labels are on the right edge of the wing.  Dimension annotations appear
-  // to the right of the perimeter wall, following the wing angle — i.e. in a
-  // band at x ≥ (label x − 500), restricted to the y-band between each pair.
-  //
-  // coordinate_m = absolute NS position (grid 9 = 0).  Grid 10 is north of
-  // grid 9 (+17.6 m); grid 19 is south of grid 9 (−20.5 m).  Enumeration
-  // goes 10→19 (top→bottom in PDF = north→south in real space), so each span
-  // is SUBTRACTED from the running coordinate.
-  //
-  // start_m / end_m = EW extent (X) of each 10–19 line, from M to Y.
-  if (rightNums.length > 0) {
-    let cwCumMm = grid10NsCoordMm; // absolute NS coord of grid 10 (north of grid 9)
-    grid_lines.push({
-      label: rightNums[0].str.trim(), // grid 10
-      axis: 'Y', coordinate_m: toM(cwCumMm),
-      start_m: toM(wingOriginMm), end_m: toM(wingEndMm),
-      angle_deg: WING_ANGLE_DEG, section: 'wing', source: 'annotated',
-    });
-    for (let i = 0; i < rightNums.length - 1; i++) {
-      const la = rightNums[i], lb = rightNums[i + 1];
-      const hit = nearestRightEdgeDim(dimItems, la, lb, 500);
-      let source: 'annotated' | 'scale-fallback' = 'annotated';
-      let spanMm: number;
-      if (hit) {
-        spanMm = hit.mm;
-      } else {
-        // Fallback: vertical PDF distance × scale (labels are nearly vertical)
-        spanMm = pdfToMm(lb.y - la.y);
-        source = 'scale-fallback';
-        notes.push(`[FALLBACK] CW ${la.str.trim()}–${lb.str.trim()}`);
+      if (overlapRatio > 0.5) {
+        // Keep the family with more labels, or the one with smaller angle if tied
+        if (families[j].labels.length > current.labels.length) {
+          current = families[j];
+        }
+        used.add(j);
       }
-      cwCumMm -= spanMm; // SUBTRACT: going south = decreasing coordinate
+    }
+
+    merged.push(current);
+    used.add(i);
+  }
+
+  return merged;
+}
+
+// ---------------------------------------------------------------------------
+// Step 4: Find dimension text
+// ---------------------------------------------------------------------------
+
+function findDimensionCandidates(items: TextItem[]): DimCandidate[] {
+  const candidates: DimCandidate[] = [];
+  const seen = new Set<string>();
+
+  for (const item of items) {
+    const s = item.str.trim();
+    const mm = parseDimensionMm(s);
+    if (mm === null) continue;
+
+    // Filter out likely non-dimension values
+    // Valid gridline spacing: 100 mm to 50000 mm (0.1 m to 50 m)
+    if (mm < 100 || mm > 50000) continue;
+
+    // Deduplicate by position
+    const key = `${Math.round(item.x * 10)},${Math.round(item.y * 10)},${s}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    candidates.push({
+      value_mm: mm,
+      x: item.x,
+      y: item.y,
+      cx: item.x + (item.width ?? 0) / 2,
+      cy: item.y - (item.height ?? 0) / 2,
+      str: s,
+      height: item.height,
+    });
+  }
+
+  return candidates;
+}
+
+// ---------------------------------------------------------------------------
+// Step 5: Match dimensions to label gaps
+// ---------------------------------------------------------------------------
+
+/**
+ * For a pair of adjacent labels, find the dimension text that sits between them.
+ * The dimension text midpoint should be spatially between the two labels.
+ */
+function matchDimensionToGap(
+  labelA: LabelHit,
+  labelB: LabelHit,
+  dims: DimCandidate[],
+  orientation: 'horizontal' | 'vertical',
+  maxDistFactor: number = 0.15,
+): DimCandidate | null {
+  // Midpoint between the two labels
+  const mx = (labelA.cx + labelB.cx) / 2;
+  const my = (labelA.cy + labelB.cy) / 2;
+
+  // Gap size
+  const gapSize = orientation === 'horizontal'
+    ? Math.abs(labelB.cx - labelA.cx)
+    : Math.abs(labelB.cy - labelA.cy);
+
+  // Search radius: proportional to gap size, with a minimum
+  const maxDist = Math.max(gapSize * 0.6, 50);
+
+  let best: DimCandidate | null = null;
+  let bestDist = Infinity;
+
+  for (const d of dims) {
+    // Check that the dimension is roughly between the two labels
+    if (orientation === 'horizontal') {
+      const minX = Math.min(labelA.cx, labelB.cx) - gapSize * maxDistFactor;
+      const maxX = Math.max(labelA.cx, labelB.cx) + gapSize * maxDistFactor;
+      if (d.cx < minX || d.cx > maxX) continue;
+    } else {
+      const minY = Math.min(labelA.cy, labelB.cy) - gapSize * maxDistFactor;
+      const maxY = Math.max(labelA.cy, labelB.cy) + gapSize * maxDistFactor;
+      if (d.cy < minY || d.cy > maxY) continue;
+    }
+
+    const dist = dist2(d.cx, d.cy, mx, my);
+    if (dist < maxDist && dist < bestDist) {
+      bestDist = dist;
+      best = d;
+    }
+  }
+
+  return best;
+}
+
+// ---------------------------------------------------------------------------
+// Step 6: Detect bearing annotations
+// ---------------------------------------------------------------------------
+
+/**
+ * Search for bearing annotations on the drawing (e.g., "166.42" near a compass/angle symbol).
+ * A bearing is a decimal number between 0 and 360.
+ */
+function findBearingAnnotations(items: TextItem[]): number[] {
+  const bearings: number[] = [];
+  for (const item of items) {
+    const s = item.str.trim().replace(/[^0-9.]/g, '');
+    if (!BEARING_RE.test(s)) continue;
+    const val = parseFloat(s);
+    if (val >= 0 && val <= 360 && val !== 0 && val !== 180 && val !== 90 && val !== 270) {
+      // Plausible non-cardinal bearing
+      bearings.push(val);
+    }
+  }
+  return bearings;
+}
+
+// ---------------------------------------------------------------------------
+// Step 7: Estimate scale from label positions and matched dimensions
+// ---------------------------------------------------------------------------
+
+/**
+ * Estimate the PDF-units-to-mm scale factor from successfully matched dimensions.
+ * For each matched (labelA, labelB, dimension_mm), compute:
+ *   scale = dimension_mm / pdf_distance(labelA, labelB)
+ * Return the median scale.
+ */
+function estimateScale(
+  matches: Array<{ a: LabelHit; b: LabelHit; mm: number }>,
+  orientation: 'horizontal' | 'vertical',
+): number | null {
+  if (matches.length === 0) return null;
+
+  const scales: number[] = [];
+  for (const m of matches) {
+    const pdfDist = orientation === 'horizontal'
+      ? Math.abs(m.b.cx - m.a.cx)
+      : Math.abs(m.b.cy - m.a.cy);
+    if (pdfDist > 1) {
+      scales.push(m.mm / pdfDist);
+    }
+  }
+
+  if (scales.length === 0) return null;
+  scales.sort((a, b) => a - b);
+  return scales[Math.floor(scales.length / 2)]; // median
+}
+
+// ---------------------------------------------------------------------------
+// Step 8: Build gridlines from a single family
+// ---------------------------------------------------------------------------
+
+interface FamilyBuildResult {
+  gridlines: Array<{
+    label: string;
+    axis: 'X' | 'Y';
+    coordinate_m: number;
+    angle_deg: number;
+    source: 'annotated' | 'scale-fallback';
+  }>;
+  totalExtent_mm: number;
+}
+
+function buildFamilyGridlines(
+  family: LabelFamily,
+  dims: DimCandidate[],
+  allFamilyScales: Map<LabelFamily, number>,
+  notes: string[],
+): FamilyBuildResult {
+  const labels = [...family.labels];
+  const orientation = family.orientation;
+
+  // Sort labels by position along their primary axis
+  if (orientation === 'horizontal') {
+    labels.sort((a, b) => a.cx - b.cx);
+  } else {
+    labels.sort((a, b) => a.cy - b.cy);
+  }
+
+  // Match dimensions to each consecutive pair
+  const matchedPairs: Array<{
+    a: LabelHit;
+    b: LabelHit;
+    dim: DimCandidate | null;
+  }> = [];
+
+  for (let i = 0; i < labels.length - 1; i++) {
+    const dim = matchDimensionToGap(labels[i], labels[i + 1], dims, orientation);
+    matchedPairs.push({ a: labels[i], b: labels[i + 1], dim });
+  }
+
+  // Compute scale from successfully matched pairs
+  const successfulMatches = matchedPairs
+    .filter(p => p.dim !== null)
+    .map(p => ({ a: p.a, b: p.b, mm: p.dim!.value_mm }));
+
+  let scale = estimateScale(successfulMatches, orientation);
+
+  // If we couldn't compute a scale from this family, try using scales from other families
+  if (scale === null) {
+    for (const [, s] of allFamilyScales) {
+      if (s > 0) { scale = s; break; }
+    }
+  }
+
+  // Accumulate positions
+  const gridlines: FamilyBuildResult['gridlines'] = [];
+  let cumMm = 0;
+
+  // Determine axis from label type and orientation
+  // Alpha labels running horizontally = axis X (NS-running lines with EW coordinate)
+  // Numeric labels running vertically = axis Y (EW-running lines with NS coordinate)
+  // This can be reversed in some drawings; detect by label type
+  const axis: 'X' | 'Y' = family.type === 'alpha' ? 'X' : 'Y';
+
+  gridlines.push({
+    label: labels[0].text,
+    axis,
+    coordinate_m: 0,
+    angle_deg: family.angle_deg,
+    source: 'annotated',
+  });
+
+  for (let i = 0; i < matchedPairs.length; i++) {
+    const pair = matchedPairs[i];
+    let source: 'annotated' | 'scale-fallback' = 'annotated';
+
+    if (pair.dim) {
+      cumMm += pair.dim.value_mm;
+    } else if (scale !== null) {
+      // Fallback: use scale to estimate
+      const pdfDist = orientation === 'horizontal'
+        ? Math.abs(pair.b.cx - pair.a.cx)
+        : Math.abs(pair.b.cy - pair.a.cy);
+      cumMm += Math.round(pdfDist * scale);
+      source = 'scale-fallback';
+      notes.push(`[FALLBACK] ${pair.a.text}-${pair.b.text}: no dimension found, used scale`);
+    } else {
+      // No scale available at all -- skip
+      source = 'scale-fallback';
+      notes.push(`[FALLBACK] ${pair.a.text}-${pair.b.text}: no dimension or scale available`);
+    }
+
+    gridlines.push({
+      label: labels[i + 1].text,
+      axis,
+      coordinate_m: toM(cumMm),
+      angle_deg: family.angle_deg,
+      source,
+    });
+  }
+
+  // Store the computed scale for other families to use
+  if (scale !== null) {
+    allFamilyScales.set(family, scale);
+  }
+
+  return { gridlines, totalExtent_mm: cumMm };
+}
+
+// ---------------------------------------------------------------------------
+// Step 9: Determine extents and assemble final output
+// ---------------------------------------------------------------------------
+
+/**
+ * Determine whether a family is "straight" (angle near 0) or "angled" (wing/transition).
+ */
+function classifySection(angleDeg: number): 'rectangular' | 'wing' {
+  return Math.abs(angleDeg) < 2 ? 'rectangular' : 'wing';
+}
+
+// ---------------------------------------------------------------------------
+// Main export
+// ---------------------------------------------------------------------------
+
+export async function parseGridlinesFromPdf(
+  pdfBuffer: Buffer,
+): Promise<GridlineParsedResult | null> {
+  const notes: string[] = [];
+
+  // ---- Step 1: Extract text items ----
+  const extracted = await extractTextItems(pdfBuffer);
+  if (!extracted) {
+    return null;
+  }
+  const { items, pageWidth, pageHeight } = extracted;
+  notes.push(`PDF items: ${items.length}, page: ${pageWidth.toFixed(0)} x ${pageHeight.toFixed(0)}`);
+
+  // ---- Step 2: Find grid labels ----
+  const labelHits = findLabelHits(items);
+  notes.push(`Grid label hits: ${labelHits.length}`);
+  if (labelHits.length < 2) {
+    notes.push('Too few grid labels found');
+    return {
+      grid_lines: [],
+      gridline_definitions: [],
+      confidence: 'low',
+      notes,
+      bearing_deg: 0,
+      turn_angle_deg: 0,
+      wing_angle_deg: 0,
+    };
+  }
+
+  // ---- Step 3: Group into families ----
+  const families = groupIntoFamilies(labelHits, pageWidth, pageHeight);
+  notes.push(`Label families: ${families.length}`);
+  for (const f of families) {
+    notes.push(
+      `  Family: ${f.type} ${f.orientation}, ${f.labels.length} labels ` +
+      `[${f.labels.map(l => l.text).join(', ')}], angle=${f.angle_deg.toFixed(2)}`,
+    );
+  }
+
+  if (families.length === 0) {
+    notes.push('No label families detected');
+    return {
+      grid_lines: [],
+      gridline_definitions: [],
+      confidence: 'low',
+      notes,
+      bearing_deg: 0,
+      turn_angle_deg: 0,
+      wing_angle_deg: 0,
+    };
+  }
+
+  // ---- Step 4: Find dimension candidates ----
+  const dimCandidates = findDimensionCandidates(items);
+  notes.push(`Dimension candidates: ${dimCandidates.length}`);
+
+  // ---- Step 5: Detect bearing annotations ----
+  const bearings = findBearingAnnotations(items);
+  let bearingDeg = 0;
+  let turnAngleDeg = 0;
+  let wingAngleDeg = 0;
+
+  if (bearings.length > 0) {
+    // Use the most common bearing value
+    const bearingCounts = new Map<number, number>();
+    for (const b of bearings) {
+      const key = parseFloat(b.toFixed(2));
+      bearingCounts.set(key, (bearingCounts.get(key) ?? 0) + 1);
+    }
+    const sortedBearings = [...bearingCounts.entries()].sort((a, b) => b[1] - a[1]);
+    bearingDeg = sortedBearings[0][0];
+    turnAngleDeg = Math.abs(180 - bearingDeg);
+
+    // Count how many times the bearing appears (each occurrence may represent a turn)
+    const turnCount = sortedBearings[0][1];
+    wingAngleDeg = turnCount * turnAngleDeg;
+    notes.push(
+      `Bearing: ${bearingDeg} found ${turnCount} time(s), ` +
+      `turn=${turnAngleDeg.toFixed(2)}, wing=${wingAngleDeg.toFixed(2)}`,
+    );
+  } else {
+    // Derive angles from family geometry differences
+    const familyAngles = families.map(f => Math.abs(f.angle_deg)).filter(a => a > 2);
+    if (familyAngles.length > 0) {
+      wingAngleDeg = Math.max(...familyAngles);
+      turnAngleDeg = wingAngleDeg / 2;
+      bearingDeg = 180 - turnAngleDeg;
+      notes.push(
+        `No bearing annotation; derived from geometry: wing=${wingAngleDeg.toFixed(2)}, ` +
+        `turn=${turnAngleDeg.toFixed(2)}, bearing=${bearingDeg.toFixed(2)}`,
+      );
+    } else {
+      notes.push('No bearing annotations or angled families detected');
+    }
+  }
+
+  // ---- Step 6: Build gridlines for each family ----
+  const allFamilyScales = new Map<LabelFamily, number>();
+  const familyResults: Array<{
+    family: LabelFamily;
+    result: FamilyBuildResult;
+  }> = [];
+
+  // Process straight families first (more reliable for scale computation)
+  const sortedFamilies = [...families].sort((a, b) => {
+    const aAng = Math.abs(a.angle_deg);
+    const bAng = Math.abs(b.angle_deg);
+    return aAng - bAng; // straight first
+  });
+
+  for (const family of sortedFamilies) {
+    // Override family angle with bearing-derived angle if applicable
+    if (wingAngleDeg > 0 && Math.abs(family.angle_deg) > 2) {
+      // Determine if this is a transition family (half angle) or full wing
+      const halfAngle = turnAngleDeg;
+      const fullAngle = wingAngleDeg;
+
+      // Use the derived angle closest to the detected family angle
+      const diffHalf = Math.abs(Math.abs(family.angle_deg) - halfAngle);
+      const diffFull = Math.abs(Math.abs(family.angle_deg) - fullAngle);
+
+      if (diffHalf < diffFull) {
+        family.angle_deg = family.angle_deg > 0 ? halfAngle : -halfAngle;
+      } else {
+        family.angle_deg = family.angle_deg > 0 ? fullAngle : -fullAngle;
+      }
+    }
+
+    const result = buildFamilyGridlines(family, dimCandidates, allFamilyScales, notes);
+    familyResults.push({ family, result });
+  }
+
+  // ---- Step 7: Compute extents ----
+  // For each axis, the extent is the range of the perpendicular axis
+  // Alpha (axis=X) gridlines: their start_m/end_m = range of numeric (axis=Y) coordinates
+  // Numeric (axis=Y) gridlines: their start_m/end_m = range of alpha (axis=X) coordinates
+
+  // Collect all coordinates by axis and section
+  const xCoordsBySection = new Map<string, { min: number; max: number }>();
+  const yCoordsBySection = new Map<string, { min: number; max: number }>();
+
+  for (const { family, result } of familyResults) {
+    const section = classifySection(family.angle_deg);
+    const sectionKey = `${section}_${family.angle_deg.toFixed(1)}`;
+
+    for (const g of result.gridlines) {
+      const map = g.axis === 'X' ? xCoordsBySection : yCoordsBySection;
+      if (!map.has(sectionKey)) {
+        map.set(sectionKey, { min: g.coordinate_m, max: g.coordinate_m });
+      } else {
+        const range = map.get(sectionKey)!;
+        range.min = Math.min(range.min, g.coordinate_m);
+        range.max = Math.max(range.max, g.coordinate_m);
+      }
+    }
+  }
+
+  // Compute overall extents per axis
+  let xMin = 0, xMax = 0, yMin = 0, yMax = 0;
+  for (const [, range] of xCoordsBySection) {
+    xMin = Math.min(xMin, range.min);
+    xMax = Math.max(xMax, range.max);
+  }
+  for (const [, range] of yCoordsBySection) {
+    yMin = Math.min(yMin, range.min);
+    yMax = Math.max(yMax, range.max);
+  }
+
+  // ---- Step 8: Assemble output ----
+  const grid_lines: ParsedGridLine[] = [];
+  const gridline_definitions: GridlineDefinition[] = [];
+
+  for (const { family, result } of familyResults) {
+    const section = classifySection(family.angle_deg);
+
+    // Determine extents for this family's gridlines
+    // alpha (X) gridlines span the perpendicular numeric (Y) range
+    // numeric (Y) gridlines span the perpendicular alpha (X) range
+    // Try to match extents from families at the same angle
+    let startM: number;
+    let endM: number;
+
+    if (family.type === 'alpha') {
+      // X-axis gridlines: extent is the Y-axis range
+      // Find numeric families at the same angle
+      const matchingNumeric = familyResults.filter(
+        fr => fr.family.type === 'numeric' &&
+              Math.abs(fr.family.angle_deg - family.angle_deg) < 3
+      );
+      if (matchingNumeric.length > 0) {
+        const coords = matchingNumeric.flatMap(fr => fr.result.gridlines.map(g => g.coordinate_m));
+        startM = Math.min(...coords);
+        endM = Math.max(...coords);
+      } else {
+        startM = yMin;
+        endM = yMax;
+      }
+    } else {
+      // Y-axis gridlines: extent is the X-axis range
+      const matchingAlpha = familyResults.filter(
+        fr => fr.family.type === 'alpha' &&
+              Math.abs(fr.family.angle_deg - family.angle_deg) < 3
+      );
+      if (matchingAlpha.length > 0) {
+        const coords = matchingAlpha.flatMap(fr => fr.result.gridlines.map(g => g.coordinate_m));
+        startM = Math.min(...coords);
+        endM = Math.max(...coords);
+      } else {
+        startM = xMin;
+        endM = xMax;
+      }
+    }
+
+    for (const g of result.gridlines) {
       grid_lines.push({
-        label: lb.str.trim(), axis: 'Y',
-        coordinate_m: toM(cwCumMm),
-        start_m: toM(wingOriginMm), end_m: toM(wingEndMm),
-        angle_deg: WING_ANGLE_DEG, section: 'wing', source,
+        label: g.label,
+        axis: g.axis,
+        coordinate_m: g.coordinate_m,
+        start_m: startM,
+        end_m: endM,
+        angle_deg: g.angle_deg,
+        section,
+        source: g.source,
+      });
+
+      gridline_definitions.push({
+        label: g.label,
+        axis: g.axis,
+        coord: g.coordinate_m,
+        start_m: startM,
+        end_m: endM,
+        angle_deg: g.angle_deg,
       });
     }
   }
 
+  // ---- Summary ----
   const annotated = grid_lines.filter(g => g.source === 'annotated').length;
-  const fallback  = grid_lines.filter(g => g.source === 'scale-fallback').length;
+  const fallback = grid_lines.filter(g => g.source === 'scale-fallback').length;
   notes.push(
-    `Total: ${grid_lines.length} gridlines  ` +
+    `Total: ${grid_lines.length} gridlines ` +
     `(${annotated} annotated, ${fallback} scale-fallback)`,
   );
 
+  // Confidence: high if we found a reasonable number of gridlines with mostly annotated sources
+  const confidence: 'high' | 'low' =
+    grid_lines.length >= 4 && fallback <= grid_lines.length * 0.3 ? 'high' : 'low';
+
   return {
     grid_lines,
-    confidence: grid_lines.length >= 30 && fallback <= 5 ? 'high' : 'low',
+    gridline_definitions,
+    confidence,
     notes,
-    bearing_deg:    BEARING_DEG,
-    turn_angle_deg: TURN_ANGLE_DEG,
-    wing_angle_deg: WING_ANGLE_DEG,
+    bearing_deg: bearingDeg,
+    turn_angle_deg: turnAngleDeg,
+    wing_angle_deg: wingAngleDeg,
   };
 }
