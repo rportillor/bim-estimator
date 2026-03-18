@@ -11,6 +11,8 @@
 |-----|------|--------|---------|
 | 1.0 | 2026-03-18 | Claude Code | Initial assessment — gridlines, element coordinate problem, IR pipeline plan |
 | 1.1 | 2026-03-18 | Replit Agent | Reviewed and corrected Section 4; confirmed pipeline files already in v16; verified anchor values |
+| 1.2 | 2026-03-18 | Claude Code | Added grid intersection markers to viewer-3d.tsx (commit ace4f15, +70 lines) |
+| 1.3 | 2026-03-18 | Replit Agent | Pulled commit ace4f15 from GitHub and applied to Replit workspace; Vite HMR confirmed; browser reload required to render markers |
 
 ---
 
@@ -185,7 +187,36 @@ From TRANSFER.md:
 
 ---
 
-## 8. Replit Agent Review (Rev 1.1)
+## 8. Grid Intersection Markers (Rev 1.2 / 1.3)
+
+### What Claude Code added (commit ace4f15):
+A new block appended after the static gridline renderer that:
+- Filters `MOORINGS_GRIDLINES` into alpha (axis='X') and numeric (axis='Y') sets
+- For every alpha × numeric pair, checks whether their extents overlap (with 5 m tolerance)
+- Computes the exact intersection point using the tan-based formula — same convention as the gridline renderer
+- Renders a `SphereGeometry(0.3)` at each intersection:
+  - **Green** for orthogonal intersections (rectangular grid)
+  - **Magenta** for intersections where either gridline is angled (wing / CL)
+- Adds a small canvas-text label sprite above each sphere showing the reference (e.g., `A-9`, `M-10`)
+- Logs `[3D Viewer] Rendered X grid intersection markers` to the console
+
+### What Replit Agent did (Rev 1.3):
+- Fetched the updated `viewer-3d.tsx` (2153 lines) from the `estimatorpro-v16` branch via GitHub API
+- Verified the diff: 2 comment improvements + 70-line intersection block — no other changes
+- Applied the file to the Replit workspace
+- Vite HMR confirmed: `hmr update /src/components/bim/viewer-3d.tsx`
+- **Browser reload needed** to trigger the new render pass and see console log count
+
+### How to verify:
+1. Load the BIM viewer → navigate to The Moorings → P1 floor
+2. Look for green dots at every rectangular grid intersection (A–L × 1–9)
+3. Look for magenta dots at every wing/CL intersection (M–Y × 10–19, CL × all)
+4. Open browser console — confirm `Rendered X grid intersection markers` (expect ~200–300)
+5. Cross-check a known corner: origin A-9 should have a green dot at Three.js `(0, -4.65, 0)`
+
+---
+
+## 9. Replit Agent Review (Rev 1.1)
 
 **Agreement with overall approach: YES.**
 
