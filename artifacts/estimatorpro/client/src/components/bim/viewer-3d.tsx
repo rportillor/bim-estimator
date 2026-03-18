@@ -1969,7 +1969,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         ctx2d.fillText(g.label, BPIX/2, BPIX/2);
         const labelTex    = new THREE.CanvasTexture(lc);
         const labelSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTex, depthTest: false }));
-        labelSprite.scale.set(4, 4, 1);  // 4m × 4m square → renders as circle
+        labelSprite.scale.set(2.5, 2.5, 1);  // sprite size in world units
         const dir = pt2.clone().sub(pt1).normalize();
         // axis='Y' non-angled (1–9 rectangular number lines): label goes to WEST (left) end
         // axis='Y' angled (10–19 wing lines) + letter lines + CL: label goes to the far end (pt2)
