@@ -473,6 +473,15 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       TWO: THREE.TOUCH.DOLLY_PAN
     };
     
+    // Block the browser right-click context menu on the canvas — without this,
+    // right-click triggers the OS menu instantly and the drag never fires.
+    renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
+
+    // Allow full free rotation in all directions (X, Y, Z axes), including
+    // over the top and under the bottom — no polar clamp.
+    controls.minPolarAngle = 0;
+    controls.maxPolarAngle = Math.PI;
+
     // ✅ iOS Safari fix: Prevent default touch behaviors and enable better touch handling
     renderer.domElement.style.touchAction = 'none';
     renderer.domElement.style.userSelect = 'none';
