@@ -1234,7 +1234,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         const p = {
           x: cc2.x,
           y: cc2.z,   // Building Z (height/elevation) → Three.js Y (up)
-          z: cc2.y    // Building Y (depth/north-south) → Three.js Z (forward)
+          z: -cc2.y   // Building Y (north-south) → Three.js -Z  (north = -Z, cartesian convention)
         };
         const type = (e.elementType || e.type || e.category || "").toLowerCase();
 
@@ -1842,12 +1842,13 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         let pt1: THREE.Vector3, pt2: THREE.Vector3;
         if (g.axis === 'X') {
           // NS-running letter lines: sweep parameter is NS (start_m → end_m)
-          pt1 = new THREE.Vector3(g.coord + g.start_m * tanA, staticFloorY, g.start_m);
-          pt2 = new THREE.Vector3(g.coord + g.end_m   * tanA, staticFloorY, g.end_m);
+          // North (PDF-Y+) → Three.js -Z so that north appears UP on screen with NE camera
+          pt1 = new THREE.Vector3(g.coord + g.start_m * tanA, staticFloorY, -g.start_m);
+          pt2 = new THREE.Vector3(g.coord + g.end_m   * tanA, staticFloorY, -g.end_m);
         } else {
           // EW-running number lines: sweep parameter is EW (start_m → end_m)
-          pt1 = new THREE.Vector3(g.start_m, staticFloorY, g.coord);
-          pt2 = new THREE.Vector3(g.end_m,   staticFloorY, g.coord - (g.end_m - g.start_m) * tanA);
+          pt1 = new THREE.Vector3(g.start_m, staticFloorY, -g.coord);
+          pt2 = new THREE.Vector3(g.end_m,   staticFloorY, -(g.coord - (g.end_m - g.start_m) * tanA));
         }
 
         // ── Main gridline ──────────────────────────────────────────────────────
@@ -1889,11 +1890,11 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           // 3D position of this tick along the gridline
           let tickPt: THREE.Vector3;
           if (g.axis === 'X') {
-            // param = NS coordinate; EW shifts by tanA per metre NS
-            tickPt = new THREE.Vector3(g.coord + param * tanA, staticFloorY, param);
+            // param = NS coordinate; EW shifts by tanA per metre NS; Z negated (north → -Z)
+            tickPt = new THREE.Vector3(g.coord + param * tanA, staticFloorY, -param);
           } else {
-            // param = EW coordinate; NS shifts by -tanA per metre EW from start_m
-            tickPt = new THREE.Vector3(param, staticFloorY, g.coord - (param - g.start_m) * tanA);
+            // param = EW coordinate; NS shifts by -tanA per metre EW; Z negated
+            tickPt = new THREE.Vector3(param, staticFloorY, -(g.coord - (param - g.start_m) * tanA));
           }
 
           // Tick mark — short line perpendicular to the gridline
@@ -1959,7 +1960,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           const markerColor = isAngled ? 0xFF00FF : 0x00FF00;
           const markerMat = new THREE.MeshBasicMaterial({ color: markerColor, transparent: true, opacity: 0.7 });
           const marker = new THREE.Mesh(markerGeo, markerMat);
-          marker.position.set(ew, staticFloorY + 0.1, ns);
+          marker.position.set(ew, staticFloorY + 0.1, -ns); // north → -Z
           marker.name = `sg:int:${alpha.label}-${numeric.label}`;
           marker.userData = {
             type: 'grid_intersection',
@@ -1984,7 +1985,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           const intTex = new THREE.CanvasTexture(intCanvas);
           const intSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: intTex, depthTest: false }));
           intSprite.scale.set(1.2, 0.3, 1);
-          intSprite.position.set(ew, staticFloorY + 0.5, ns);
+          intSprite.position.set(ew, staticFloorY + 0.5, -ns); // north → -Z
           intSprite.name = `sg:int:${alpha.label}-${numeric.label}:lbl`;
           three.current?.scene.add(intSprite);
 
@@ -2044,17 +2045,17 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       });
 
       controls.target.copy(center);
-      // Always restore Y-up before setting camera position — Plan View changes
-      // camera.up to (0,0,1) and that persists across re-renders without this reset.
+      // Always restore Y-up for the default 3D view.
+      // Plan View sets camera.up=(0,0,-1); this resets it on every scene rebuild.
       camera.up.set(0, 1, 0);
-      // 🎯 CAMERA POSITIONING: Place camera SOUTH-WEST of building, looking north-east.
-      // This gives the standard architectural south-looking-north orientation:
-      //   • Grid 1 (north, Three.js Z=+40.83) appears at the TOP of the screen  ✓
-      //   • Grid 9 (south reference, Z=0) appears at the BOTTOM               ✓
-      //   • East (X+) appears to the right, elevation (Y+) appears up           ✓
-      // Offset (-0.4, 0.8, -1.2): west-slightly, high, south → looks NE.
+      // 🎯 CAMERA POSITIONING: NE of building, looking south-west.
+      // With north → Three.js -Z convention:
+      //   • Grid 1 (north, Three.js Z=-40.83) is far from NE camera → TOP ✓
+      //   • Grid 9 (south ref, Z=0) closer → lower on screen ✓
+      //   • East (X+) → RIGHT on screen ✓ (standard cartesian orientation)
+      // Offset (1, 0.8, 1.2): east, high, and south (+Z = south) → looks toward building
       const cameraDistance = Math.max(diag * 0.8, 50);
-      const cameraOffset = new THREE.Vector3(-0.4, 0.8, -1.2).normalize().multiplyScalar(cameraDistance);
+      const cameraOffset = new THREE.Vector3(1, 0.8, 1.2).normalize().multiplyScalar(cameraDistance);
       camera.position.copy(center).add(cameraOffset);
       
       // Ensure camera can see the full building
@@ -2236,11 +2237,11 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
               // Restore standard 3D view: Y is up (Three.js convention)
               // This undoes any camera.up change made by Plan View
               camera.up.set(0, 1, 0);
-              // Camera SW of building, looking NE → north (Grid 1) at top, south (Grid 9) at bottom
+              // Camera NE of building: east=right, north (-Z) at top — cartesian convention
               const dist = Math.max(s.x, s.z) * 0.9 + 20;
               controls.target.set(c.x, c.y, c.z);
-              const sw = new THREE.Vector3(-0.4, 0.8, -1.2).normalize().multiplyScalar(dist);
-              camera.position.set(c.x + sw.x, c.y + sw.y, c.z + sw.z);
+              const ne = new THREE.Vector3(1, 0.8, 1.2).normalize().multiplyScalar(dist);
+              camera.position.set(c.x + ne.x, c.y + ne.y, c.z + ne.z);
               controls.update();
               camera.updateProjectionMatrix();
             }}
@@ -2264,12 +2265,12 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
               const height = Math.max(s.x, s.z) * 0.9 + 20;
               // Target: building centroid at floor level
               controls.target.set(c.x, c.y, c.z);
-              // Camera nearly overhead — tiny Z offset avoids the pole/gimbal-lock
-              // singularity that happens at exactly θ=π (straight down).
-              // With camera.up=(0,0,1), north (Three.js Z+) points "up" on screen,
-              // east (Three.js X+) points right — matches the PDF plan orientation.
-              camera.up.set(0, 0, 1);
-              camera.position.set(c.x, c.y + height, c.z + 0.001);
+              // Plan view: camera directly above, camera.up=(0,0,-1)
+              // Cross product: (0,0,-1)×(0,1,0) = (1,0,0) → east (+X) goes RIGHT
+              // y_screen = (0,1,0)×(1,0,0) = (0,0,-1) → Three.js -Z goes UP = north goes UP
+              // This gives the standard cartesian orientation: east=right, north=up
+              camera.up.set(0, 0, -1);
+              camera.position.set(c.x, c.y + height, c.z);
               controls.update();
               camera.updateProjectionMatrix();
             }}
