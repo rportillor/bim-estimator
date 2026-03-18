@@ -89,8 +89,13 @@ const WING_EW_E =  87.472; // Grid Y EW at NS=0
 const WING_NS_N =  37.766; // M×10 NS (northern wing boundary on Grid M)
 const WING_NS_S = -12.753; // Y×19 NS (southern wing boundary on Grid Y)
 
-// CL lines extend from the wing SE corner NS up through the rectangular block north boundary
-const CL_NS_START = WING_NS_S;
+// CL lines span exactly the rectangular block: Grid 9 (NS=0) → Grid 1 (NS=40.830).
+// The two geometric anchors that define the CL line are BOTH on this range:
+//   South anchor: Grid 9 × Grid 19 = CL at (EW=56.071, NS=0)    → CL_NS_START = 0
+//   North anchor: Grid 1 × Grid 10 = CL at (EW=59.075, NS=40.830) → CL_NS_END   = 40.830
+// Extending south to WING_NS_S (−12.753) is wrong — CL lines do not enter the wing's
+// south half-space below Grid 9.
+const CL_NS_START = RECT_NS_START;
 const CL_NS_END   = RECT_NS_END;
 
 // ── How wing-line extents are computed ────────────────────────────────────

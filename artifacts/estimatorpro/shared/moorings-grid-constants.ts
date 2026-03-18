@@ -66,8 +66,12 @@ const WING_NS_N =  37.766; // M×10 NS (northernmost point on Grid M, NW corner)
 const WING_EW_W =  45.671; // Grid M EW at NS=0  (western wing reference)
 const WING_EW_E =  87.472; // Grid Y EW at NS=0  (eastern wing reference)
 
-// CL lines extend from the wing SE NS level up through the rectangular block north boundary
-const CL_NS_START = WING_NS_S;
+// CL lines span exactly the rectangular block: Grid 9 (NS=0) → Grid 1 (NS=40.830).
+// Both geometric anchors sit on this range:
+//   South anchor: Grid 9 × Grid 19 = CL at (EW=56.071, NS=0)      → CL_NS_START = 0
+//   North anchor: Grid 1 × Grid 10 = CL at (EW=59.075, NS=40.830) → CL_NS_END   = 40.830
+// DO NOT extend to WING_NS_S (−12.753) — CL lines do not enter the wing below Grid 9.
+const CL_NS_START = RECT_NS_START;
 const CL_NS_END   = RECT_NS_END;
 
 export const MOORINGS_GRIDLINES: GridlineDefinition[] = [

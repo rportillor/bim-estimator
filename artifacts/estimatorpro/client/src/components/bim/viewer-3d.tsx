@@ -1843,20 +1843,24 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       const staticFloorY = coerceWithDatum(0, 0, staticFloorElevRaw).z;
 
       // ── Colour scheme (PDF convention):
-      //   X-axis lines (letter grid A–Y, running N–S): blue  (#1177CC)
-      //   Y-axis lines (number grid 1–19, running E–W): amber (#CC7700)
-      //   Wing / angled lines (27.16° and 13.58°):     magenta (#AA00CC)
+      //   X-axis lines (letter grid A–L, running N–S):    blue    (#1177CC)
+      //   Y-axis lines (number grid 1–9,  running E–W):   amber   (#CC7700)
+      //   Wing / angled lines (M–Y, 10–19, 27.16°):       magenta (#AA00CC)
+      //   CL transition lines (CLa / CL / CLb, 4.208°):   teal    (#00AA88)
+      //     CL lines are distinct from wing lines — same angle family but separate structural zone.
       const COL_X_HEX   = 0x1177CC;  const COL_X_CSS   = '#1177CC';
       const COL_Y_HEX   = 0xCC7700;  const COL_Y_CSS   = '#CC7700';
       const COL_ANG_HEX = 0xAA00CC;  const COL_ANG_CSS = '#AA00CC';
+      const COL_CL_HEX  = 0x00AA88;  const COL_CL_CSS  = '#00AA88';
       const TICK_STEP   = 5;   // metres between dimension ticks
       const TICK_HALF   = 2.0; // half-length of perpendicular tick (metres) — 4m total, visible from plan view
 
       for (const g of MOORINGS_GRIDLINES) {
         const tanA     = Math.tan(g.angle_deg * (Math.PI / 180));
         const isAngled = Math.abs(g.angle_deg) > 0.01;
-        const colHex   = isAngled ? COL_ANG_HEX : (g.axis === 'X' ? COL_X_HEX : COL_Y_HEX);
-        const colCss   = isAngled ? COL_ANG_CSS : (g.axis === 'X' ? COL_X_CSS : COL_Y_CSS);
+        const isCL     = g.label === 'CLa' || g.label === 'CL' || g.label === 'CLb';
+        const colHex   = isCL ? COL_CL_HEX : (isAngled ? COL_ANG_HEX : (g.axis === 'X' ? COL_X_HEX : COL_Y_HEX));
+        const colCss   = isCL ? COL_CL_CSS  : (isAngled ? COL_ANG_CSS  : (g.axis === 'X' ? COL_X_CSS  : COL_Y_CSS));
 
         // ── Endpoints ─────────────────────────────────────────────────────────
         let pt1: THREE.Vector3, pt2: THREE.Vector3;
@@ -2219,9 +2223,10 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           <div><span className="text-green-400 font-bold">■</span> Z = Elev (+ up)</div>
           <div className="mt-1 text-slate-400 text-[9px]">Origin: Grid A-9 = (0, 0, 0)</div>
           <div className="mt-1.5 border-t border-slate-600 pt-1 font-semibold text-[10px] text-slate-300 uppercase tracking-wide">Gridlines</div>
-          <div><span style={{color:'#4499EE'}} className="font-bold">■</span> A–Y &nbsp;letter grid (N–S)</div>
-          <div><span style={{color:'#EE9922'}} className="font-bold">■</span> 1–19 number grid (E–W)</div>
-          <div><span style={{color:'#CC44EE'}} className="font-bold">■</span> Wing / angled (27.16°)</div>
+          <div><span style={{color:'#1177CC'}} className="font-bold">■</span> A–L &nbsp;letter grid (N–S)</div>
+          <div><span style={{color:'#CC7700'}} className="font-bold">■</span> 1–9 &nbsp;&nbsp;number grid (E–W)</div>
+          <div><span style={{color:'#AA00CC'}} className="font-bold">■</span> M–Y / 10–19 wing (27.16°)</div>
+          <div><span style={{color:'#00AA88'}} className="font-bold">■</span> CLa / CL / CLb &nbsp;(4.208°)</div>
           <div className="text-slate-400 text-[9px] mt-0.5">Ticks every 5 m</div>
         </div>
 
