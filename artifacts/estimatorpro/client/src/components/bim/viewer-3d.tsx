@@ -1928,11 +1928,12 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       }
       console.log(`[3D Viewer] Rendered ${intersectionCount} grid intersection markers`);
 
-      // Update axes positioning - place at ground level (Y=0)
+      // Axes are pinned to world origin = Grid A-9 = Three.js (0, 0, 0).
+      // DO NOT move axes to building center — it breaks the A-9 origin reference.
       const axes = three.current?.scene.getObjectByName("axes") as THREE.AxesHelper;
       if (axes) {
         axes.visible = true;
-        axes.position.set(center.x, 0, center.z); // Y=0 for ground level
+        axes.position.set(0, 0, 0); // World origin = Grid A-9 intersection
         const axisScale = Math.max(2, Math.min(20, diag / 15));
         (axes as any).scale.setScalar(axisScale);
 
@@ -1942,23 +1943,23 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         );
         oldLabels?.forEach(l => three.current?.scene.remove(l));
 
-        // Add axis orientation labels
-        // Three.js: X = Grid Letters (horizontal), Y = Up, Z = Grid Numbers (depth)
-        const xLabel = createGridLabel('Grid Letters (X)', '#FF3333', 22);
+        // Add axis orientation labels at world origin (Grid A-9)
+        // Three.js: X = Grid Letters (EW, east), Y = Up, Z = Grid Numbers (NS, north)
+        const xLabel = createGridLabel('Grid A→ (X)', '#FF3333', 22);
         xLabel.name = 'axisLabelX';
-        xLabel.position.set(center.x + axisScale * 1.3, 0.2, center.z);
+        xLabel.position.set(axisScale * 1.3, 0.2, 0);
         xLabel.scale.setScalar(axisScale * 0.4);
         three.current?.scene.add(xLabel);
 
         const yLabel = createGridLabel('Up (Y)', '#33CC33', 22);
         yLabel.name = 'axisLabelY';
-        yLabel.position.set(center.x, axisScale * 1.2, center.z);
+        yLabel.position.set(0, axisScale * 1.2, 0);
         yLabel.scale.setScalar(axisScale * 0.4);
         three.current?.scene.add(yLabel);
 
-        const zLabel = createGridLabel('Grid Numbers (Z)', '#3333FF', 22);
+        const zLabel = createGridLabel('Grid 9→1 (Z)', '#3333FF', 22);
         zLabel.name = 'axisLabelZ';
-        zLabel.position.set(center.x, 0.2, center.z + axisScale * 1.3);
+        zLabel.position.set(0, 0.2, axisScale * 1.3);
         zLabel.scale.setScalar(axisScale * 0.4);
         three.current?.scene.add(zLabel);
       }
