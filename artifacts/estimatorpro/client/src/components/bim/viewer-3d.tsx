@@ -6,10 +6,7 @@ import { BIMTransformControls, type TransformResult } from "./transform-controls
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { ZoomIn, ZoomOut, Home, Layers, Eye, EyeOff, AlertTriangle } from "lucide-react";
-
-// ---- Exports kept for ModelProperties ----
-export const UNIT_SYSTEMS = { METRIC: 'metric', IMPERIAL: 'imperial' } as const;
-export type UnitSystem = typeof UNIT_SYSTEMS[keyof typeof UNIT_SYSTEMS];
+import type { UnitSystem } from "./unit-utils";
 
 export interface ViewerProps {
   ifcUrl?: string;
@@ -33,7 +30,7 @@ export interface SelectedElement {
 }
 
 // simple metric-only for now (keeps API)
-export const unitConversion = {
+const unitConversion = {
   length: (v:number)=>v, area:(v:number)=>v, volume:(v:number)=>v
 };
 
@@ -385,12 +382,6 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
   }>>([]);
   const [visibleStoreys,setVisibleStoreys]=useState<Set<string>>(new Set());
   const [showFloorPanel,setShowFloorPanel]=useState(false);
-  // ── Pipeline grid data (confirmed gridlines with labels) ───────────────
-  const [pipelineGrid,setPipelineGrid]=useState<{
-    alphaGridlines: Array<{ label: string; position_m: number; angle_deg: number }>;
-    numericGridlines: Array<{ label: string; position_m: number; angle_deg: number }>;
-  } | null>(null);
-  // ─────────────────────────────────────────────────────────────────────────
   const loadAbortController = useRef<AbortController|null>(null);
   const transformControls = useRef<BIMTransformControls|null>(null);
   const moveDebounceTimer = useRef<ReturnType<typeof setTimeout>|null>(null);
@@ -609,27 +600,6 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         setVisibleStoreys(new Set(data.storeys.map((s:any)=>s.name)));
       })
       .catch(()=>{ /* non-fatal — viewer still shows all elements */ });
-  },[modelId]);
-
-  // ── Fetch confirmed pipeline grid data for grid-line rendering ────────────
-  useEffect(()=>{
-    if(!modelId) return;
-    const token = localStorage.getItem("auth_token");
-    const headers: Record<string,string> = {};
-    if(token) headers['Authorization'] = `Bearer ${token}`;
-    fetch(`/api/bim/pipeline/${modelId}/status`, { credentials:'include', headers })
-      .then(r=>r.ok ? r.json() : null)
-      .then(data=>{
-        const grid = data?.pipelineState?.stageResults?.grid;
-        if(!grid) return;
-        if(Array.isArray(grid.alphaGridlines) && Array.isArray(grid.numericGridlines)) {
-          setPipelineGrid({
-            alphaGridlines: grid.alphaGridlines,
-            numericGridlines: grid.numericGridlines,
-          });
-        }
-      })
-      .catch(()=>{ /* non-fatal — viewer falls back to analysis-based grids */ });
   },[modelId]);
 
   useEffect(()=>{
@@ -1903,111 +1873,16 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       });
       
       // CONSTRUCTION GRID RENDERING
-      // Remove old grids
+      // grid_line BIM elements are rendered as THREE.Line objects above in the main element loop.
+      // This fallback renders a heuristic grid from wall/column positions when no grid_line
+      // elements are present (e.g., floors not yet extracted).
       const oldGrids = three.current?.scene.children.filter(child =>
         child.name?.includes("grid") || child.name?.includes("Grid")
       );
       oldGrids?.forEach(grd => three.current?.scene.remove(grd));
 
-      // Prefer confirmed pipeline grid data (has labels and angles) over
-      // analysis-based heuristic grids.
-      // BUT: if the model already has grid_line elements (extracted via extract-layer),
-      // those are authoritative — suppress the pipeline grid to avoid duplicates.
       const hasElementGridLines = elements.some((e: any) => e.elementType === 'grid_line');
-      const hasPipelineGrid = !hasElementGridLines && pipelineGrid &&
-        (pipelineGrid.alphaGridlines.length > 0 || pipelineGrid.numericGridlines.length > 0);
-
-      if (hasPipelineGrid && pipelineGrid) {
-        const gridGroup = new THREE.Group();
-        gridGroup.name = "pipelineGrid";
-
-        const gridMat = new THREE.LineBasicMaterial({
-          color: 0xAAAAAA,
-          opacity: 0.5,
-          transparent: true,
-        });
-
-        // Compute extents from the grid data for line length
-        const allAlphaPos = pipelineGrid.alphaGridlines.map(g => g.position_m);
-        const allNumericPos = pipelineGrid.numericGridlines.map(g => g.position_m);
-        const alphaMin = allAlphaPos.length > 0 ? Math.min(...allAlphaPos) : 0;
-        const alphaMax = allAlphaPos.length > 0 ? Math.max(...allAlphaPos) : 0;
-        const numericMin = allNumericPos.length > 0 ? Math.min(...allNumericPos) : 0;
-        const numericMax = allNumericPos.length > 0 ? Math.max(...allNumericPos) : 0;
-        const margin = 5; // 5 m overshoot past last gridline
-
-        // Alpha gridlines (letters): run along the numeric (Z) direction
-        // In Three.js: X = alpha position, Z = numeric direction, Y = 0 (ground)
-        for (const gl of pipelineGrid.alphaGridlines) {
-          const x = gl.position_m;
-          const angleRad = (gl.angle_deg || 0) * Math.PI / 180;
-          const zStart = numericMin - margin;
-          const zEnd = numericMax + margin;
-          const lineLen = zEnd - zStart;
-
-          if (Math.abs(gl.angle_deg || 0) < 0.01) {
-            // Orthogonal gridline
-            const pts = [
-              new THREE.Vector3(x, 0, zStart),
-              new THREE.Vector3(x, 0, zEnd),
-            ];
-            const geo = new THREE.BufferGeometry().setFromPoints(pts);
-            gridGroup.add(new THREE.Line(geo, gridMat));
-          } else {
-            // Angled gridline: direction is perpendicular to alpha axis, rotated by angle
-            const dx = -Math.sin(angleRad) * lineLen;
-            const dz = Math.cos(angleRad) * lineLen;
-            const pts = [
-              new THREE.Vector3(x - dx / 2, 0, (zStart + zEnd) / 2 - dz / 2),
-              new THREE.Vector3(x + dx / 2, 0, (zStart + zEnd) / 2 + dz / 2),
-            ];
-            const geo = new THREE.BufferGeometry().setFromPoints(pts);
-            gridGroup.add(new THREE.Line(geo, gridMat));
-          }
-
-          // Label at the start of the gridline
-          const label = createGridLabel(gl.label, '#666666', 32);
-          label.position.set(x, 0.1, zStart - 1.5);
-          label.scale.setScalar(2);
-          gridGroup.add(label);
-        }
-
-        // Numeric gridlines (numbers): run along the alpha (X) direction
-        for (const gl of pipelineGrid.numericGridlines) {
-          const z = gl.position_m;
-          const angleRad = (gl.angle_deg || 0) * Math.PI / 180;
-          const xStart = alphaMin - margin;
-          const xEnd = alphaMax + margin;
-          const lineLen = xEnd - xStart;
-
-          if (Math.abs(gl.angle_deg || 0) < 0.01) {
-            const pts = [
-              new THREE.Vector3(xStart, 0, z),
-              new THREE.Vector3(xEnd, 0, z),
-            ];
-            const geo = new THREE.BufferGeometry().setFromPoints(pts);
-            gridGroup.add(new THREE.Line(geo, gridMat));
-          } else {
-            const dx = Math.cos(angleRad) * lineLen;
-            const dz = Math.sin(angleRad) * lineLen;
-            const pts = [
-              new THREE.Vector3((xStart + xEnd) / 2 - dx / 2, 0, z - dz / 2),
-              new THREE.Vector3((xStart + xEnd) / 2 + dx / 2, 0, z + dz / 2),
-            ];
-            const geo = new THREE.BufferGeometry().setFromPoints(pts);
-            gridGroup.add(new THREE.Line(geo, gridMat));
-          }
-
-          // Label at the start of the gridline
-          const label = createGridLabel(gl.label, '#666666', 32);
-          label.position.set(xStart - 1.5, 0.1, z);
-          label.scale.setScalar(2);
-          gridGroup.add(label);
-        }
-
-        three.current?.scene.add(gridGroup);
-        console.log(`[3D Viewer] Rendered pipeline grid: ${pipelineGrid.alphaGridlines.length} alpha + ${pipelineGrid.numericGridlines.length} numeric gridlines`);
-      } else if(gridAnalysis.xs.length > 0 && gridAnalysis.ys.length > 0) {
+      if (!hasElementGridLines && gridAnalysis.xs.length > 0 && gridAnalysis.ys.length > 0) {
         // Fallback: analysis-based heuristic grid (no labels)
         const gridMaterial = new THREE.LineBasicMaterial({ color: 0x444444, opacity: 0.6, transparent: true });
         const gridPoints: THREE.Vector3[] = [];
@@ -2105,7 +1980,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       }
       setIsLoading(false); // Reset so re-runs aren't blocked by stale isLoading=true
     };
-  },[ready, modelId, visibleStoreys, pipelineGrid]); // re-render on floor toggle or grid data load
+  },[ready, modelId, visibleStoreys]); // re-render on floor toggle
 
   return (
     <Card className="w-full h-full">
