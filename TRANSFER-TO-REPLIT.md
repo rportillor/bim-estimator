@@ -14,6 +14,7 @@
 | 1.2 | 2026-03-18 | Claude Code | Added grid intersection markers to viewer-3d.tsx (commit ace4f15, +70 lines) |
 | 1.3 | 2026-03-18 | Replit Agent | Pulled commit ace4f15; Vite HMR confirmed; browser reload required |
 | 2.0 | 2026-03-18 | Claude Code | Complete rewrite — all 7 fixes, generic parser, intersection system, element placement types, construction phases |
+| 2.1 | 2026-03-18 | Replit Agent | Synced all Rev 2.0 code — 7 files applied, 3 new shared/ types, server clean restart; **264 intersection markers + 47 gridlines confirmed in console** |
 
 ---
 
