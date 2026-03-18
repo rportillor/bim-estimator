@@ -2044,6 +2044,9 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       });
 
       controls.target.copy(center);
+      // Always restore Y-up before setting camera position — Plan View changes
+      // camera.up to (0,0,1) and that persists across re-renders without this reset.
+      camera.up.set(0, 1, 0);
       // 🎯 IMPROVED CAMERA POSITIONING: Better view for building scale
       const cameraDistance = Math.max(diag * 0.8, 50); // Minimum 50m distance
       const cameraOffset = new THREE.Vector3(1, 0.8, 1.2).normalize().multiplyScalar(cameraDistance);
@@ -2222,12 +2225,17 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
             className="md:size-8 lg:size-10 bg-white/90 hover:bg-white shadow-lg touch-manipulation"
             onClick={()=>{
               if(!three.current) return; 
-              const {camera,controls} = three.current;
-              const grid = three.current.scene.getObjectByName("grid") as THREE.GridHelper;
-              const _size = 40; const center = new THREE.Vector3(0,0,0);
-              if(grid){ grid.position.set(0,0,0); }
-              controls.target.copy(center); 
-              camera.position.set(10,8,10); 
+              const {camera, controls} = three.current;
+              const c = buildingCenterRef.current;
+              const s = buildingSizeRef.current;
+              // Restore standard 3D view: Y is up (Three.js convention)
+              // This undoes any camera.up change made by Plan View
+              camera.up.set(0, 1, 0);
+              // Oblique NE perspective, elevated enough to see the full building
+              const dist = Math.max(s.x, s.z) * 0.9 + 20;
+              controls.target.set(c.x, c.y, c.z);
+              camera.position.set(c.x + dist * 0.65, c.y + dist * 0.5, c.z + dist * 0.85);
+              controls.update();
               camera.updateProjectionMatrix();
             }}
             data-testid="button-reset-view"
