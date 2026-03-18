@@ -1878,6 +1878,25 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       const TICK_STEP   = 10;  // metres between dimension ticks
       const TICK_HALF   = 2.0; // half-length of perpendicular tick (metres) — 4m total, visible from plan view
 
+      // ── Rect ↔ Wing intersection pairs ────────────────────────────────────────
+      // These pairs share an intersection point inside the wing zone.
+      // Grid 12 (wing) has no rect partner — it clears Grid 1 by ~1 m.
+      const tanW_ext = Math.tan(WING_ANG * (Math.PI / 180));
+      // For each pair: intersection EW = wing.start_m + (wing.coord − rect.coord) / tanW
+      const RECT_WING: Record<string, string> = {
+        '9':'19','8':'18','7':'17','6':'16','5':'15','4':'14','3':'13','2':'11','1':'10',
+      };
+      const WING_RECT: Record<string, string> = Object.fromEntries(
+        Object.entries(RECT_WING).map(([r,w]) => [w,r])
+      );
+      // Pre-compute intersection EW for every pair (keyed by rect label)
+      const PAIR_EW: Record<string, number> = {};
+      for (const [rl, wl] of Object.entries(RECT_WING)) {
+        const rg = MOORINGS_GRIDLINES.find(x => x.label === rl);
+        const wg = MOORINGS_GRIDLINES.find(x => x.label === wl);
+        if (rg && wg) PAIR_EW[rl] = wg.start_m + (wg.coord - rg.coord) / tanW_ext;
+      }
+
       for (const g of MOORINGS_GRIDLINES) {
         const tanA     = Math.tan(g.angle_deg * (Math.PI / 180));
         const isAngled = Math.abs(g.angle_deg) > 0.01;
@@ -1885,7 +1904,25 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         const colHex   = isCL ? COL_CL_HEX : (isAngled ? COL_ANG_HEX : (g.axis === 'X' ? COL_X_HEX : COL_Y_HEX));
         const colCss   = isCL ? COL_CL_CSS  : (isAngled ? COL_ANG_CSS  : (g.axis === 'X' ? COL_X_CSS  : COL_Y_CSS));
 
-        // ── Endpoints ─────────────────────────────────────────────────────────
+        // ── Endpoints (with inter-zone extensions) ────────────────────────────
+        // Rect number lines extend EAST to their wing-partner intersection.
+        // Wing number lines extend WEST to the same intersection (so the cross is visible).
+        let effStart = g.start_m, effEnd = g.end_m;
+        if (g.axis === 'Y') {
+          if (!isAngled) {
+            // Rect line — extend east to intersection with wing partner
+            const intEW = PAIR_EW[g.label];
+            if (intEW !== undefined) effEnd = Math.max(effEnd, intEW);
+          } else {
+            // Wing line — extend west to intersection with rect partner
+            const rectLabel = WING_RECT[g.label];
+            if (rectLabel !== undefined) {
+              const intEW = PAIR_EW[rectLabel];
+              if (intEW !== undefined) effStart = Math.min(effStart, intEW);
+            }
+          }
+        }
+
         let pt1: THREE.Vector3, pt2: THREE.Vector3;
         if (g.axis === 'X') {
           // NS-running letter lines: sweep parameter is NS (start_m → end_m)
@@ -1893,9 +1930,9 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           pt1 = new THREE.Vector3(g.coord + g.start_m * tanA, staticFloorY, -g.start_m);
           pt2 = new THREE.Vector3(g.coord + g.end_m   * tanA, staticFloorY, -g.end_m);
         } else {
-          // EW-running number lines: sweep parameter is EW (start_m → end_m)
-          pt1 = new THREE.Vector3(g.start_m, staticFloorY, -g.coord);
-          pt2 = new THREE.Vector3(g.end_m,   staticFloorY, -(g.coord - (g.end_m - g.start_m) * tanA));
+          // EW-running number lines: use effStart/effEnd for extended render endpoints
+          pt1 = new THREE.Vector3(effStart, staticFloorY, -(g.coord - (effStart - g.start_m) * tanA));
+          pt2 = new THREE.Vector3(effEnd,   staticFloorY, -(g.coord - (effEnd   - g.start_m) * tanA));
         }
 
         // ── Main gridline ──────────────────────────────────────────────────────
