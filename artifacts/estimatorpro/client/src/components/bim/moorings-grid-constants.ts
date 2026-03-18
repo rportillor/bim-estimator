@@ -30,10 +30,13 @@
  *   Grid M  EW = 45.671    (at NS=0, wing western reference line)
  *   Grid Y  EW = 87.472    (at NS=0, wing eastern reference line)
  *
- * CRITICAL GEOMETRIC ANCHOR (from drawing A101):
- *   Grid 9 × Grid 19 × CL all meet at one point: (EW=56.071, NS=0)
- *   This gives orig_coord_19 = (56.071−45.671) × tan(27.16°) = 5.336 m
- *   All other 10–19 coords follow from the stored spacings.
+ * CRITICAL GEOMETRIC ANCHORS (from drawing A101):
+ *   WING ANCHOR: Grid 9 × Grid 19 = (EW=56.071, NS=0)
+ *     orig_coord_19 = (56.071−45.671) × tan(27.16°) = 5.336 m
+ *     All other 10–19 coords follow from stored spacings.
+ *   CL ANCHOR: CL gridline meets Grid L at Grid 9 → CL at (EW=41.999, NS=0)
+ *     CL does NOT pass through the Grid 9 × Grid 19 wing intersection.
+ *     CLa = CL − 3.285 = 38.714 m,  CLb = CL + 3.285 = 45.284 m  (from drawing "3285")
  *
  * Wing boundary corners (intersections of outer grid lines):
  *   M×10 = (EW=65.047, NS=+37.766)   NW corner of wing
@@ -65,20 +68,18 @@ const RECT_EW_END   = 41.999;  // Grid L EW (east bound of rectangular block)
 const WING_ANG  = 27.16;  // degrees — M–Y and 10–19 families
 //
 // CL_ANG = WING_ANG / 2 = 13.58°
-//
-// How the CL zone angle is established:
-//   • The angle 13.58° appears explicitly on drawing A101 as the CL transition-zone slope.
-//   • It equals exactly WING_ANG / 2 (27.16° / 2 = 13.58°) — a well-established
-//     architectural device for blending two orthogonal systems via their bisector.
-//   • Geometric verification: south anchor Grid 9 × Grid 19 × CL = (EW=56.071, NS=0).
-//     With slope 13.58°, the north end at NS=40.830 lands at:
-//       EW = 56.071 + 40.830 × tan(13.58°) = 56.071 + 9.863 = 65.934 m
-//     Grid M at NS=40.830 = 45.671 + 40.830 × tan(27.16°) = 66.619 m
-//     Difference = 0.685 m — CL lands just inside Grid M, the wing's west boundary. ✓
-//   • A slope of 4.208° (previously stored) has only 7.4% grade — looks straight in plan
-//     view and contradicts the 13.58° marked on A101. It was a misidentification.
-//   • With 13.58° the CL lines have a 24.2% grade — clearly visible at wing angle / 2.
-const CL_ANG    = WING_ANG / 2;  // 13.58° — CLa / CL / CLb gridline slope
+//   • Appears explicitly on drawing A101 as the CL transition-zone slope.
+//   • Equals WING_ANG / 2 — the architectural bisector between rectangular (0°) and wing (27.16°).
+//   • NOT derived from Grid 9 × Grid 19 — that gives the wing slope, not the CL slope.
+const CL_ANG     = WING_ANG / 2;  // 13.58° — CLa / CL / CLb gridline slope
+
+// CL zone EW positions at NS=0 (Grid 9), read directly from drawing A101:
+//   CL meets Grid L at Grid 9 → CL coord = RECT_EW_END = 41.999 m
+//   Drawing dimension "3285" = perpendicular spacing between CL lines = 3.285 m
+//   CLa = CL − CL_SPACING = 38.714 m  (circle overlaps Grid K on drawing — 235mm west of K=38.949)
+//   CLb = CL + CL_SPACING = 45.284 m  (circle overlaps Grid M on drawing — 387mm west of M=45.671)
+const CL_SPACING = 3.285;              // metres — spacing between CLa/CL and CL/CLb
+const CL_COORD   = RECT_EW_END;       // CL at NS=0 = Grid L = 41.999 m
 
 // Reference EW coords for the wing (at NS=0 / Grid 9 level)
 const WING_EW_W =  45.671; // Grid M EW at NS=0
@@ -91,16 +92,16 @@ const WING_NS_N =  37.766; // M×10 NS (northern wing boundary on Grid M)
 const WING_NS_S = -12.753; // Y×19 NS (southern wing boundary on Grid Y)
 
 // CL lines span exactly the rectangular block: Grid 9 (NS=0) → Grid 1 (NS=40.830).
-//   South anchor: Grid 9 × Grid 19 × CL = (EW=56.071, NS=0)   confirmed from A101
-//   North end:    at NS=40.830, CL EW = 56.071 + 40.830×tan(13.58°) = 65.934 m
-//                 Grid M at NS=40.830 = 66.619 m → CL lands 0.685 m inside wing west boundary ✓
-// CL lines do not extend south of Grid 9 — the anchor is AT Grid 9, not below it.
+//   South anchor: CL meets Grid L at Grid 9 → CL at (EW=41.999, NS=0)
+//   North end:    at NS=40.830, CL EW = 41.999 + 40.830×tan(13.58°) = 41.999 + 9.863 = 51.862 m
+//                 (transition zone between Grid L=41.999 and Grid M at NS=40.830=66.619 m) ✓
+// CL lines do not extend south of Grid 9.
 const CL_NS_START = RECT_NS_START;
 const CL_NS_END   = RECT_NS_END;
 
 // ── How wing-line extents are computed ────────────────────────────────────
 //
-// ANCHOR: Grid 9 × Grid 19 = CL (EW=56.071, NS=0).
+// WING ANCHOR: Grid 9 × Grid 19 = (EW=56.071, NS=0)   [wing geometry only; CL is at 41.999m]
 //   orig_coord_19 = (56.071 − 45.671) × tan(27.16°) = 5.336 m
 //   orig_coord_10 = 5.336 + Σ(spacings 19→18→...→10) = 47.707 m
 //
@@ -137,11 +138,13 @@ export const MOORINGS_GRIDLINES: GridlineDefinition[] = [
   { label: 'L',  axis: 'X', coord: 41.999,  start_m: RECT_NS_START, end_m: RECT_NS_END, angle_deg: 0 },
 
   // ── CL transition lines (CLa / CL / CLb) ────────────────────────────────
-  // axis='X': angled 13.58°; bridge rectangular block and wing.
-  // NOTE: Grid 9 × Grid 19 × CL all meet at (EW=56.071, NS=0) — verified from A101.
-  { label: 'CLa', axis: 'X', coord: 52.786, start_m: CL_NS_START, end_m: CL_NS_END, angle_deg: CL_ANG },
-  { label: 'CL',  axis: 'X', coord: 56.071, start_m: CL_NS_START, end_m: CL_NS_END, angle_deg: CL_ANG },
-  { label: 'CLb', axis: 'X', coord: 59.356, start_m: CL_NS_START, end_m: CL_NS_END, angle_deg: CL_ANG },
+  // axis='X': angled CL_ANG=13.58°; bridge the rectangular block and the wing.
+  // At NS=0 (Grid 9): CL is at Grid L (RECT_EW_END=41.999 m); CLa 3.285m west, CLb 3.285m east.
+  // At NS=40.830 (Grid 1): CL EW = 41.999 + 40.830×tan(13.58°) = 51.862 m (in transition zone).
+  // Reading from drawing A101: "3285" is the spacing, circles show CLa≈K, CL≈L, CLb≈M at Grid 9.
+  { label: 'CLa', axis: 'X', coord: CL_COORD - CL_SPACING, start_m: CL_NS_START, end_m: CL_NS_END, angle_deg: CL_ANG },
+  { label: 'CL',  axis: 'X', coord: CL_COORD,               start_m: CL_NS_START, end_m: CL_NS_END, angle_deg: CL_ANG },
+  { label: 'CLb', axis: 'X', coord: CL_COORD + CL_SPACING, start_m: CL_NS_START, end_m: CL_NS_END, angle_deg: CL_ANG },
 
   // ── Wing EW-position lines (M–Y) ────────────────────────────────────────
   // axis='X': angled 27.16°; coord = EW at NS=0.
