@@ -5,6 +5,15 @@
 
 ---
 
+## Revision History
+
+| Rev | Date | Author | Changes |
+|-----|------|--------|---------|
+| 1.0 | 2026-03-18 | Claude Code | Initial assessment — gridlines, element coordinate problem, IR pipeline plan |
+| 1.1 | 2026-03-18 | Replit Agent | Reviewed and corrected Section 4; confirmed pipeline files already in v16; verified anchor values |
+
+---
+
 ## 1. Current State Assessment
 
 ### What I found in the codebase audit:
@@ -12,13 +21,18 @@
 **THREE gridline rendering paths exist:**
 1. Static constants renderer (`MOORINGS_GRIDLINES` in `moorings-grid-constants.ts`) — ACTIVE, correct
 2. DB grid_line element renderer — SKIPPED at viewer-3d.tsx line 1250
-3. Analysis-based heuristic grid — DETECTED but NEVER RENDERED (logged at line 720)
+3. Analysis-based heuristic grid — computed and logged at line 720, never rendered (by design)
 
 **The gridline constants are correct:**
 - 47 gridlines defined with proper positions from PDF dimension annotations
 - Origin A-9 = (0, 0, 0)
 - Wing angle 27.16 degrees, CL angle 13.58 degrees
 - tan-based formula is mathematically correct
+
+**Verification anchor values (confirmed against constants file by Replit Agent):**
+- Grid B = X 4.710 m ✓
+- Grid 8 = Z 5.885 m ✓
+- Grid L = X 41.999 m ✓
 
 **The problem is NOT the gridlines — it's the ELEMENTS:**
 - Elements in the DB were extracted by Claude using absolute PDF coordinates or arbitrary positions
@@ -46,7 +60,12 @@ The IR pipeline (Stages 5A/5B/5C) was built to fix this — Claude classifies el
 
 ### Step 2: Verify gridline rendering
 - Load the BIM viewer for P1 floor
-- Confirm all 47 lines appear: 12 rectangular (A-L, orange), 3 CL (magenta), 13 wing (M-Y, magenta), 9 rectangular NS (1-9, yellow), 10 wing NS (10-19, magenta)
+- Confirm all 47 lines appear:
+  - 12 rectangular EW (A–L): orange
+  - 13 wing EW (M–Y): magenta
+  - 3 centreline (CLa / CL / CLb): magenta
+  - 9 rectangular NS (1–9): yellow
+  - 10 wing NS (10–19): magenta
 - Labels should appear at the end of each line
 
 ### Step 3: Verify origin
@@ -79,21 +98,30 @@ The IR pipeline (parameter-resolver.ts) does exactly this conversion.
 
 ---
 
-## 4. Files Changed by Claude Code (this session)
+## 4. Pipeline Files Status (CORRECTED in Rev 1.1)
 
-### On the estimatorpro-v16 branch:
-No files were changed yet — this session was analysis only.
+### ~~Original claim (Rev 1.0):~~
+~~"These files are on `master` but NOT in v16 — need selective merge."~~
 
-### On the master branch (prior sessions, 60 files):
-These changes are on the `master` branch and include the full IR pipeline,
-PDF vector parser, grid confirmation dialog, and all fixes. They need to be
-selectively merged into v16 if needed.
+### Correction (Rev 1.1 — Replit Agent):
+**All pipeline files are already present in v16.** The v16 branch was pushed directly from the Replit master workspace, which contains the full IR pipeline. No merging is required.
 
-Key files from master that v16 should consider:
-- `server/pipeline/parameter-resolver.ts` — converts grid refs → absolute coords
-- `server/pipeline/mesh-builder.ts` — builds 3D geometry from resolved params
-- `server/pipeline/candidate-types.ts` — IR types with grid references
-- `server/pipeline/pdf-vector-parser.ts` — reads grid from PDF text positions
+Confirmed present at `artifacts/estimatorpro/server/pipeline/`:
+- `parameter-resolver.ts` ✓ — converts grid refs → absolute coords
+- `mesh-builder.ts` ✓ — builds 3D geometry from resolved params
+- `candidate-types.ts` ✓ — IR types with grid references
+- `pdf-vector-parser.ts` ✓ — reads grid from PDF text positions
+- `sequential-pipeline.ts` ✓
+- `stage-types.ts` ✓
+- `prompt-builders.ts` ✓
+- `view-projection.ts` ✓
+- `view-classifier.ts` ✓
+- `spatial-matcher.ts` ✓
+- `coordinate-transform.ts` ✓
+- `grid-bay-zones.ts` ✓
+- `candidate-review.ts` ✓
+
+**13 pipeline files total — all present in v16, ready to use.**
 
 ---
 
@@ -135,12 +163,11 @@ Phase 4: VERIFY
 
 | Issue | Status | Notes |
 |-------|--------|-------|
-| Grid 19 coordinate discrepancy | Open | Two values: -27.552 vs -30.088. See TRANSFER.md §4.3 |
-| Old grid_line elements in DB | Needs cleanup | Remove from bim_elements table |
-| Elements positioned with wrong origin | All P1 elements | Need re-extraction using grid references |
-| PDF parser missing full grid | Partial | Parser found 12 of 25 alpha gridlines |
-| Angled grid families not separated | Open | Parser treats all alphas as one family |
-| Analysis grid detected but not rendered | By design | Could be useful for verification |
+| Grid 19 coordinate discrepancy | Open | Two values: −27.552 vs −30.088. See TRANSFER.md §4.3 |
+| Old grid_line elements in DB | Needs cleanup | Remove from bim_elements table (viewer skips them but DB should be clean) |
+| Elements positioned with wrong origin | All P1 elements | Need re-extraction using grid references via IR pipeline |
+| PDF parser — angled grid families not separated | Open | Parser treats all alphas as one family; constants file is authoritative now |
+| Analysis grid computed but not rendered | By design | Computed for debug logging only; static constants renderer replaced it |
 
 ---
 
@@ -151,6 +178,26 @@ From TRANSFER.md:
 - NS axis = Three.js Z (positive = North)
 - Elevation = Three.js Y
 - Origin: Grid A / Grid 9 = (0, 0, 0)
-- Wing angle: 27.16 degrees
-- CL angle: 13.58 degrees
-- Grid formula: coord + start_m * tan(angle) for axis='X'
+- Wing angle: 27.16 degrees (tan = 0.5131)
+- CL angle: 13.58 degrees (tan = 0.2416)
+- Grid formula axis='X': `coord + start_m * tan(angle)`
+- Grid formula axis='Y': `coord − (end_m − start_m) * tan(angle)`
+
+---
+
+## 8. Replit Agent Review (Rev 1.1)
+
+**Agreement with overall approach: YES.**
+
+The document correctly diagnoses the problem, proposes the right sequence, and identifies the right tools to use. The pipeline already exists and is ready. Specific confirmations:
+
+- Static constants renderer is correct and active ✓
+- Elements using wrong coordinates is the core problem ✓
+- Grid-first → verify → elements is the right sequence ✓
+- IR pipeline (parameter-resolver → grid refs → absolute coords) is the right architecture ✓
+- "Do not ask Claude for absolute coordinates" is a critical rule ✓
+- Conventions must not change ✓
+
+**One correction made (see Section 4):** Pipeline files are already in v16 — no selective merging needed.
+
+**Next action:** Phase 1 visual verification — load the BIM viewer for P1, confirm all 47 lines render with correct colours and labels, then mark gridlines as done and proceed to Phase 3 element re-extraction via the IR pipeline.
