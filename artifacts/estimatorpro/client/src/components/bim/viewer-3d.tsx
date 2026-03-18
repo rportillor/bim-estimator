@@ -448,17 +448,30 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
     controls.enablePan = true;
     controls.enableZoom = true;
     controls.enableRotate = true;
-    controls.zoomSpeed = 0.6;
-    controls.panSpeed = 0.8;
+    controls.zoomSpeed = 1.2;
+    controls.panSpeed = 1.5;
     controls.rotateSpeed = 0.5;
-    
+
+    // AutoCAD-style mouse button mapping:
+    //   Left drag   → orbit/rotate
+    //   Middle drag → pan (screen-space X + Y)
+    //   Right drag  → pan (alternative, also common in CAD apps)
+    //   Scroll      → zoom
+    controls.mouseButtons = {
+      LEFT:   THREE.MOUSE.ROTATE,
+      MIDDLE: THREE.MOUSE.PAN,
+      RIGHT:  THREE.MOUSE.PAN,
+    };
+
+    // Screen-space panning: pan moves in the camera's XY plane (all directions),
+    // not along the world-up axis — this is the key fix for "only scrolls up/down".
+    controls.screenSpacePanning = true;
+
     // ✅ iOS FIX: Force touch events and prevent conflicts
     controls.touches = {
       ONE: THREE.TOUCH.ROTATE,
       TWO: THREE.TOUCH.DOLLY_PAN
     };
-    // Keyboard controls disabled for mobile
-    controls.screenSpacePanning = false;
     
     // ✅ iOS Safari fix: Prevent default touch behaviors and enable better touch handling
     renderer.domElement.style.touchAction = 'none';
