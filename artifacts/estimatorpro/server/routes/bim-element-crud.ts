@@ -250,6 +250,30 @@ bimElementCrudRouter.patch(
 );
 
 // ═════════════════════════════════════════════════════════════════════════════
+// DELETE /api/bim/models/:modelId/elements/type/:elementType — Bulk delete by type
+// Used to remove stale grid_line records when switching to constants-based rendering
+// ═════════════════════════════════════════════════════════════════════════════
+
+bimElementCrudRouter.delete(
+  '/api/bim/models/:modelId/elements/type/:elementType',
+  async (req: Request, res: Response) => {
+    try {
+      const { modelId, elementType } = req.params;
+      const all = await storage.getBimElements(modelId) || [];
+      const toDelete = all.filter((e: any) => e.elementType === elementType);
+      if (toDelete.length === 0) {
+        return res.json({ deleted: 0, message: `No ${elementType} elements found` });
+      }
+      const kept = all.filter((e: any) => e.elementType !== elementType);
+      await storage.saveBimElements(modelId, kept);
+      return res.json({ deleted: toDelete.length, remaining: kept.length });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// ═════════════════════════════════════════════════════════════════════════════
 // DELETE /api/bim/models/:modelId/elements/:elementId — Delete element
 // ═════════════════════════════════════════════════════════════════════════════
 

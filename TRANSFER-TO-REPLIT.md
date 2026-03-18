@@ -14,7 +14,8 @@
 | 1.2 | 2026-03-18 | Claude Code | Added grid intersection markers to viewer-3d.tsx (commit ace4f15, +70 lines) |
 | 1.3 | 2026-03-18 | Replit Agent | Pulled commit ace4f15; Vite HMR confirmed; browser reload required |
 | 2.0 | 2026-03-18 | Claude Code | Complete rewrite — all 7 fixes, generic parser, intersection system, element placement types, construction phases |
-| 2.1 | 2026-03-18 | Replit Agent | Synced all Rev 2.0 code — 7 files applied, 3 new shared/ types, server clean restart; **264 intersection markers + 47 gridlines confirmed in console** |
+| 2.1 | 2026-03-18 | Replit Agent | Synced all Rev 2.0 code — 7 files applied, 3 new shared/ types, server clean restart; 264 intersection markers + 47 gridlines confirmed in console |
+| 2.2 | 2026-03-18 | Replit Agent | Fix #1 complete: 47 grid_line DB records deleted; insertion guards added to real-qto-processor.ts + construction-workflow-processor.ts; bulk DELETE endpoint added to bim-element-crud.ts |
 
 ---
 
@@ -28,7 +29,7 @@
 
 **What it does:** Removes all `grid_line` type elements from the bim_elements table. Prevents future insertions. Static constants renderer is the sole source of gridlines.
 
-**To clean existing DB:** Call `DELETE /api/bim/models/41fc242e-300c-490d-849c-2e897757534f/elements/grid-lines`
+**DONE (Rev 2.2):** 47 grid_line DB records deleted directly. DB now contains only real elements (walls, doors, stairs, MEP, slab). Bulk delete endpoint available at DELETE /api/bim/models/:modelId/elements/type/grid_line for future use.
 
 ### Fix #2: Single gridline rendering verified
 **File:** `client/src/components/bim/viewer-3d.tsx` (line ~620)

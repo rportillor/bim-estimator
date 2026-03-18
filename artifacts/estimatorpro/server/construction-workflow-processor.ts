@@ -2786,9 +2786,11 @@ Return ALL grid lines you find matching these specific characteristics:
         const result = this.parseJSONResponse(responseText);
         
         if (result?.grid_lines) {
-          logger.info(`   ðŸŽ¯ Found ${result.grid_lines.length} grid lines in page ${i+1}`);
-          
-          // Convert to Element format
+          // GUARD: grid_line elements are NEVER stored in the DB.
+          // Gridlines are rendered exclusively from moorings-grid-constants.ts (static constants).
+          // Log the count for visibility but do not push to elements array.
+          logger.info(`   🚫 SKIPPING ${result.grid_lines.length} grid_line elements from page ${i+1} — rendered from constants, not DB`);
+          if (false) { // dead code — kept for type reference only
           for (const gridLine of result.grid_lines) {
             const element: Element = {
               id: `${gridLine.id}_${Date.now()}`,
@@ -2810,6 +2812,7 @@ Return ALL grid lines you find matching these specific characteristics:
             };
             gridElements.push(element);
           }
+          } // end if (false)
         }
       } catch (error) {
         logger.error(`Failed to extract grids from page ${i+1}:`, error);
