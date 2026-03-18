@@ -180,12 +180,36 @@ export function computeAllIntersections(
 
   for (const alpha of alphas) {
     for (const numeric of numerics) {
+      // Only compute intersection if the gridlines PHYSICALLY OVERLAP.
+      // Alpha gridline (axis='X') spans from start_m to end_m in the NS direction.
+      // Numeric gridline (axis='Y') spans from start_m to end_m in the EW direction.
+      // They can only intersect if the numeric's EW range includes the alpha's EW coord
+      // AND the alpha's NS range includes the numeric's NS coord.
+      //
+      // For angled grids, the ranges shift — use a generous tolerance (5m) to account
+      // for the angular displacement at the extents.
+      const tolerance = 5;
+      const alphaMinNS = Math.min(alpha.start_m, alpha.end_m) - tolerance;
+      const alphaMaxNS = Math.max(alpha.start_m, alpha.end_m) + tolerance;
+      const numericMinEW = Math.min(numeric.start_m, numeric.end_m) - tolerance;
+      const numericMaxEW = Math.max(numeric.start_m, numeric.end_m) + tolerance;
+
+      // Quick check: does the numeric gridline's EW range reach the alpha's EW coord?
+      if (alpha.coord < numericMinEW || alpha.coord > numericMaxEW) continue;
+      // Does the alpha gridline's NS range reach the numeric's NS coord?
+      if (numeric.coord < alphaMinNS || numeric.coord > alphaMaxNS) continue;
+
       const result = computeGridIntersection(alpha.label, numeric.label, gridlines);
       if (result) {
+        // Final check: is the intersection point within BOTH gridlines' physical extents?
+        const ewInRange = result.ew >= numericMinEW && result.ew <= numericMaxEW;
+        const nsInRange = result.ns >= alphaMinNS && result.ns <= alphaMaxNS;
+        if (!ewInRange || !nsInRange) continue;
+
         intersections.push({
           alpha_label: alpha.label,
           numeric_label: numeric.label,
-          x: Math.round(result.ew * 1000) / 1000,  // round to mm precision
+          x: Math.round(result.ew * 1000) / 1000,
           y: Math.round(result.ns * 1000) / 1000,
           z: floorElevation,
           source: 'computed_from_grid',
