@@ -2,6 +2,9 @@
 // Deterministic parameter resolution engine.
 // Resolves candidate parameters from schedule, assembly, and grid data.
 // NO Claude/AI calls — purely lookup-based with fuzzy matching.
+//
+// Grid positions come from the AUTHORITATIVE source: moorings-grid-constants.ts
+// When available, these override any grid positions from Claude/PDF parser.
 
 import type {
   ScheduleData,
@@ -10,6 +13,10 @@ import type {
   GridData,
   GridAxis,
 } from './stage-types';
+
+import { computeGridIntersection, type GridlineDefinition } from '../../shared/grid-types';
+// Project-specific grid data — will be replaced by parser output for generic projects
+import { MOORINGS_GRIDLINES } from '../../shared/moorings-grid-constants';
 
 import type {
   CandidateSet,
@@ -198,11 +205,36 @@ function buildWallAssemblyMap(assemblies: AssemblyData): Map<string, AssemblyDef
   return map;
 }
 
-function buildGridMap(gridlines: GridAxis[]): Map<string, number> {
+/**
+ * Build a grid position lookup map.
+ * PRIMARY SOURCE: moorings-grid-constants.ts (hardcoded from PDF dimension text)
+ * FALLBACK: pipeline grid data (from Claude/PDF parser)
+ *
+ * The constants are authoritative because they were derived by reading the
+ * actual dimension strings between gridlines on the drawing. The pipeline
+ * grid data is from AI/parser extraction which may have errors.
+ */
+function buildGridMap(
+  pipelineGridlines: GridAxis[],
+  axis: 'X' | 'Y',
+): Map<string, number> {
   const map = new Map<string, number>();
-  for (const g of gridlines) {
-    map.set(g.label.toUpperCase().replace(/\s+/g, ''), g.position_m);
+
+  // PRIMARY: use hardcoded constants (authoritative — from PDF dimension text)
+  for (const g of MOORINGS_GRIDLINES) {
+    if (g.axis === axis) {
+      map.set(g.label.toUpperCase().replace(/\s+/g, ''), g.coord);
+    }
   }
+
+  // FALLBACK: if constants didn't have a label, try pipeline data
+  for (const g of pipelineGridlines) {
+    const key = g.label.toUpperCase().replace(/\s+/g, '');
+    if (!map.has(key)) {
+      map.set(key, g.position_m);
+    }
+  }
+
   return map;
 }
 
@@ -260,6 +292,18 @@ function fuzzyLookup<T>(map: Map<string, T>, raw: string): { value: T; matchedKe
 // Grid position resolution
 // ---------------------------------------------------------------------------
 
+/**
+ * Resolve a grid reference to absolute (EW, NS) coordinates.
+ *
+ * For STRAIGHT grids: intersection = (alpha.coord, numeric.coord) — simple lookup.
+ * For ANGLED grids (wing M-Y, 10-19): the intersection point depends on BOTH
+ * gridlines' angles. Grid M at grid 12 is NOT at (M.coord, 12.coord) — it's at
+ * the point where the two angled lines actually cross.
+ *
+ * Uses computeGridIntersection() which solves the parametric line equations.
+ *
+ * Returns {x: EW, y: NS} — x maps to Three.js X, y maps to Three.js Z.
+ */
 function resolveGridPosition(
   gridRef: { alpha: string; numeric: string } | null,
   offset: { x: number; y: number },
@@ -271,6 +315,17 @@ function resolveGridPosition(
   const alphaKey = gridRef.alpha.toUpperCase().replace(/\s+/g, '');
   const numericKey = gridRef.numeric.toUpperCase().replace(/\s+/g, '');
 
+  // Try exact intersection computation (handles angled grids correctly)
+  // Uses MOORINGS_GRIDLINES as default — future projects will pass their own parsed gridlines
+  const intersection = computeGridIntersection(alphaKey, numericKey, MOORINGS_GRIDLINES);
+  if (intersection) {
+    return {
+      x: intersection.ew + offset.x,
+      y: intersection.ns + offset.y,
+    };
+  }
+
+  // Fallback: simple lookup (for grids not in the constants)
   const alphaPos = gridAlpha.get(alphaKey);
   const numericPos = gridNumeric.get(numericKey);
 
@@ -471,8 +526,10 @@ export function resolveParameters(
   const doorSchedule = buildDoorScheduleMap(schedules);
   const windowSchedule = buildWindowScheduleMap(schedules);
   const wallAssemblies = buildWallAssemblyMap(assemblies);
-  const gridAlpha = buildGridMap(grid.alphaGridlines);
-  const gridNumeric = buildGridMap(grid.numericGridlines);
+  // Alpha gridlines (A-L, CL, M-Y) map to EW positions → axis='X' in constants
+  // Numeric gridlines (1-9, 10-19) map to NS positions → axis='Y' in constants
+  const gridAlpha = buildGridMap(grid.alphaGridlines, 'X');
+  const gridNumeric = buildGridMap(grid.numericGridlines, 'Y');
   const storeyMap = buildStoreyMap(candidates.storeys);
 
   // Determine the drawing unit system — if not explicitly provided, use schedule units.

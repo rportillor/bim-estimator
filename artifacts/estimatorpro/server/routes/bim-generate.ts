@@ -39,6 +39,159 @@ bimGenerateRouter.delete("/bim/clear-lock", async (req: Request, res: Response) 
   }
 });
 
+// ─── Phase 1: GRIDLINES ──────────────────────────────────────────────────────
+// Parse gridlines from PDF, compute all intersections, return for verification.
+// This is the FIRST step before any element placement.
+
+bimGenerateRouter.post("/bim/models/:modelId/parse-gridlines", async (req: Request, res: Response) => {
+  try {
+    const { modelId } = req.params;
+    const model = await storage.getBimModel(modelId);
+    if (!model) return res.status(404).json({ ok: false, message: 'Model not found' });
+
+    const documents = await storage.getDocuments(model.projectId);
+    if (documents.length === 0) {
+      return res.status(422).json({ ok: false, message: 'No documents uploaded' });
+    }
+
+    // Find the floor plan PDF (parking plan, ground floor, etc.)
+    const { loadFileBuffer } = await import('../services/storage-file-resolver');
+    let pdfBuffer: Buffer | null = null;
+    let pdfName = '';
+
+    for (const doc of documents) {
+      if (!(doc.fileType || '').toLowerCase().includes('pdf')) continue;
+      const key = (doc as any).storageKey || doc.filename;
+      const buf = await loadFileBuffer(key);
+      if (buf) {
+        pdfBuffer = buf;
+        pdfName = doc.filename;
+        // Prefer floor plans over other documents
+        if (/plan|floor|parking|underground|A101|A201/i.test(doc.filename)) break;
+      }
+    }
+
+    if (!pdfBuffer) {
+      return res.status(422).json({ ok: false, message: 'No readable PDF found in project documents' });
+    }
+
+    // Run the generic parser
+    const { parseGridlinesFromPdf } = await import('../utils/gridline-pdf-parser');
+    const parsed = await parseGridlinesFromPdf(pdfBuffer);
+
+    if (!parsed) {
+      return res.status(500).json({ ok: false, message: 'PDF parser returned null — no text content found' });
+    }
+
+    // Compute all grid intersections
+    const { computeAllIntersections } = await import('../../shared/element-placement-types');
+    const floorElevation = req.body?.floorElevation ?? 0;
+    const gridTable = computeAllIntersections(
+      parsed.gridline_definitions,
+      floorElevation,
+      model.projectId,
+    );
+
+    logger.info('Gridlines parsed and intersections computed', {
+      modelId,
+      pdfName,
+      gridlines: parsed.grid_lines.length,
+      intersections: gridTable.intersections.length,
+      origin: gridTable.origin,
+      confidence: parsed.confidence,
+    });
+
+    res.json({
+      ok: true,
+      modelId,
+      source_pdf: pdfName,
+      confidence: parsed.confidence,
+      origin: gridTable.origin,
+      gridlines: parsed.grid_lines,
+      gridline_definitions: parsed.gridline_definitions,
+      intersections: gridTable.intersections,
+      bearing_deg: parsed.bearing_deg,
+      wing_angle_deg: parsed.wing_angle_deg,
+      notes: parsed.notes,
+      // Summary for quick review
+      summary: {
+        total_gridlines: parsed.grid_lines.length,
+        alpha_count: parsed.grid_lines.filter(g => g.axis === 'X').length,
+        numeric_count: parsed.grid_lines.filter(g => g.axis === 'Y').length,
+        total_intersections: gridTable.intersections.length,
+        annotated: parsed.grid_lines.filter(g => g.source === 'annotated').length,
+        scale_fallback: parsed.grid_lines.filter(g => g.source === 'scale-fallback').length,
+      },
+    });
+  } catch (e: any) {
+    logger.error('Gridline parsing failed', { error: e.message });
+    res.status(500).json({ ok: false, message: `Gridline parsing failed: ${e.message}` });
+  }
+});
+
+// Get the current verified grid coordinate table for a model
+bimGenerateRouter.get("/bim/models/:modelId/grid-table", async (req: Request, res: Response) => {
+  try {
+    const { modelId } = req.params;
+    const model = await storage.getBimModel(modelId);
+    if (!model) return res.status(404).json({ ok: false, message: 'Model not found' });
+
+    // Read grid table from model metadata
+    const meta = typeof (model as any).metadata === 'string'
+      ? JSON.parse((model as any).metadata || '{}')
+      : ((model as any).metadata || {});
+
+    const gridTable = meta.gridCoordinateTable || null;
+
+    res.json({
+      ok: true,
+      modelId,
+      gridTable,
+      hasGrid: gridTable !== null,
+      intersectionCount: gridTable?.intersections?.length ?? 0,
+      verified: gridTable?.verification?.user_confirmed ?? false,
+    });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, message: `Failed to get grid table: ${e.message}` });
+  }
+});
+
+// Save/confirm the grid coordinate table
+bimGenerateRouter.post("/bim/models/:modelId/confirm-grid-table", async (req: Request, res: Response) => {
+  try {
+    const { modelId } = req.params;
+    const { gridTable } = req.body;
+
+    if (!gridTable || !gridTable.intersections) {
+      return res.status(400).json({ ok: false, message: 'gridTable with intersections required' });
+    }
+
+    // Mark as user confirmed
+    gridTable.verification = {
+      ...gridTable.verification,
+      user_confirmed: true,
+      confirmed_at: new Date().toISOString(),
+    };
+
+    // Save to model metadata
+    await storage.updateBimModelMetadata(modelId, { gridCoordinateTable: gridTable });
+
+    logger.info('Grid coordinate table confirmed', {
+      modelId,
+      intersections: gridTable.intersections.length,
+      origin: gridTable.origin,
+    });
+
+    res.json({
+      ok: true,
+      modelId,
+      message: `Grid confirmed: ${gridTable.intersections.length} intersections at origin ${gridTable.origin.description}`,
+    });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, message: `Failed to confirm grid: ${e.message}` });
+  }
+});
+
 // ─── Lock status ─────────────────────────────────────────────────────────────
 bimGenerateRouter.get("/bim/lock-status", async (_req: Request, res: Response) => {
   try {
