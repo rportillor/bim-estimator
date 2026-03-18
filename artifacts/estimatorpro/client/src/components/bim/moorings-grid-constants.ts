@@ -16,8 +16,11 @@
  *     end_m   = EW of eastern boundary
  *     angle_deg = same convention; NS shifts by −tan(angle) per metre of EW east of start_m
  *
- * Wing angle: 27.16° (two 13.58° turns from bearing 166.42°)
- * CL angle  : 13.58° (single transition turn)
+ * Wing angle  : 27.16° (two turns from bearing 166.42°)
+ * CL_ANG     :  4.208° (geometric slope of the CLa/CL/CLb gridlines — derived from
+ *                        Grid 9×Grid 19 → CL at NS=0 EW=56.071 and
+ *                        Grid 1×Grid 10 → CL at NS=40.830 EW=59.075;
+ *                        13.58° is the construction joint angle on A101, not the gridline slope)
  *
  * Key anchor dimensions (all metres, measured from PDF A101):
  *   Grid 9  NS = 0         (south NS reference, origin)
@@ -27,11 +30,16 @@
  *   Grid M  EW = 45.671    (at NS=0, wing western reference line)
  *   Grid Y  EW = 87.472    (at NS=0, wing eastern reference line)
  *
+ * CRITICAL GEOMETRIC ANCHOR (from drawing A101):
+ *   Grid 9 × Grid 19 × CL all meet at one point: (EW=56.071, NS=0)
+ *   This gives orig_coord_19 = (56.071−45.671) × tan(27.16°) = 5.336 m
+ *   All other 10–19 coords follow from the stored spacings.
+ *
  * Wing boundary corners (intersections of outer grid lines):
- *   M×10 = (EW=51.689, NS=+11.731)   NW corner of wing
- *   Y×10 = (EW=84.781, NS= −5.245)   NE corner of wing
- *   M×19 = (EW=34.482, NS=−21.812)   SW corner of wing
- *   Y×19 = (EW=67.570, NS=−38.784)   SE corner of wing
+ *   M×10 = (EW=65.047, NS=+37.766)   NW corner of wing
+ *   Y×10 = (EW=98.138, NS=+20.789)   NE corner of wing
+ *   M×19 = (EW=47.838, NS= +4.224)   SW corner of wing
+ *   Y×19 = (EW=80.929, NS=−12.753)   SE corner of wing
  *
  * Wing line extents are bounded by Grid M (west), Grid Y (east),
  * Grid 10 (north) and Grid 19 (south) — not by fixed WING_NS/EW constants,
@@ -55,52 +63,56 @@ const RECT_EW_START = 0;       // Grid A EW (west bound of rectangular block)
 const RECT_EW_END   = 41.999;  // Grid L EW (east bound of rectangular block)
 
 const WING_ANG  = 27.16;  // degrees — M–Y and 10–19 families
-const CL_ANG    = 13.58;  // degrees — CLa / CL / CLb transition lines
+//
+// CL_ANG is derived geometrically — same method used to establish CL coord:
+//   Step 1 (how CL coord was found):
+//     Grid 19 extended to NS=0  → EW = 45.671 + orig_19/tan(27.16°)
+//                                     = 45.671 + 5.336/0.5130 = 56.071  ← CL at Grid 9
+//   Step 2 (same method for Grid 10 × Grid 1):
+//     Grid 10 extended to NS=40.830 → EW = 45.671 + (orig_10−NS_1)/tan(27.16°)
+//                                         = 45.671 + (47.707−40.830)/0.5130 = 59.075  ← CL at Grid 1
+//   Step 3 (slope of the CL line):
+//     tan(CL_ANG) = (59.075−56.071)/40.830 = 3.004/40.830 = 0.073566
+//     CL_ANG = arctan(0.073566) = 4.208°
+//   Verification: Grid 2 × Grid 11 and Grid 3 × Grid 13 also land at EW≈59.075, confirming the line.
+//   NOTE: 13.58° appears on drawing A101 as a joint/construction angle, NOT the CL gridline slope.
+//   DO NOT assume CL_ANG = WING_ANG/2. Always derive from wing anchor pairs for each project.
+const CL_ANG    =  4.208;  // degrees — CLa / CL / CLb gridline slope (project-specific, derived above)
 
 // Reference EW coords for the wing (at NS=0 / Grid 9 level)
 const WING_EW_W =  45.671; // Grid M EW at NS=0
 const WING_EW_E =  87.472; // Grid Y EW at NS=0
 
-// WING_NS_S is used as CL-line start (south end of the CL transition zone).
-// It equals the NS of Grid 19 at Grid Sa's EW (~50.6 m), where the southern
-// boundary of the wing passes.
-const WING_NS_S = -30.088;
-const WING_NS_N =  14.819; // Grid 10 NS at EW=45.671 (wing northern reference)
+// Wing NS extents (derived from corner intersections):
+//   WING_NS_N = NS of M×10 (Grid M × Grid 10) = 37.766 m north of Grid 9
+//   WING_NS_S = NS of Y×19 (Grid Y × Grid 19) = 12.753 m south of Grid 9
+const WING_NS_N =  37.766; // M×10 NS (northern wing boundary on Grid M)
+const WING_NS_S = -12.753; // Y×19 NS (southern wing boundary on Grid Y)
 
-// CL lines extend from the wing south boundary up through the rectangular block north boundary
+// CL lines extend from the wing SE corner NS up through the rectangular block north boundary
 const CL_NS_START = WING_NS_S;
 const CL_NS_END   = RECT_NS_END;
 
 // ── How wing-line extents are computed ────────────────────────────────────
 //
-// Wing axis='X' lines (M–Y) run from their intersection with Grid 19 (south)
-// to their intersection with Grid 10 (north).  Both Grid 10 and Grid 19 are
-// angled, so the NS extent of each M–Y line is unique.
+// ANCHOR: Grid 9 × Grid 19 = CL (EW=56.071, NS=0).
+//   orig_coord_19 = (56.071 − 45.671) × tan(27.16°) = 5.336 m
+//   orig_coord_10 = 5.336 + Σ(spacings 19→18→...→10) = 47.707 m
 //
-//   start_m_j = NS at (Grid_j × Grid_19)
-//             = (−27.552 + (45.671 − coord_j) × tan27) / (1 + tan27²)
-//             = (−4.123 − 0.5130 × coord_j) / 1.26317
+// All 10–19 orig_coord values (= NS at EW=45.671, all POSITIVE = north of Grid 9):
+//   Grid 10: +47.707  Grid 11: +44.232  Grid 12: +39.482  Grid 13: +34.753
+//   Grid 14: +30.553  Grid 15: +23.573  Grid 16: +16.967  Grid 17: +14.608
+//   Grid 18: +12.509  Grid 19: + 5.336
 //
-//   end_m_j   = NS at (Grid_j × Grid_10)
-//             = (14.819 + (45.671 − coord_j) × tan27) / (1 + tan27²)
-//             = ( 38.248 − 0.5130 × coord_j) / 1.26317
+// Wing axis='X' lines (M–Y): start_m = NS at (Grid_j × Grid_19)
+//   start_m_j = (orig_19 + (45.671 − coord_j) × tan27) / (1 + tan27²)
+// Wing axis='X' lines (M–Y): end_m = NS at (Grid_j × Grid_10)
+//   end_m_j   = (orig_10 + (45.671 − coord_j) × tan27) / (1 + tan27²)
 //
-// Wing axis='Y' lines (10–19) run from their intersection with Grid M (west)
-// to their intersection with Grid Y (east).  coord is redefined as NS at
-// the new start_m (= EW of the Grid M intersection).
-//
-//   start_m_i = EW at (Grid_i × Grid_M)
-//             = 45.671 + orig_coord_i / 1.26317 × tan27
-//             = 45.671 + orig_coord_i × 0.40625
-//
-//   coord_i   = NS at new start_m
-//             = orig_coord_i / 1.26317
-//
-//   end_m_i   = EW at (Grid_i × Grid_Y)
-//             = 87.472 + (orig_coord_i − 41.801 × tan27) / 1.26317 × tan27
-//             = 87.472 + (orig_coord_i − 21.444) × 0.40625
-//
-// where orig_coord_i = original "NS at EW=45.671" measurement from A101.
+// Wing axis='Y' lines (10–19): start_m = EW at (Grid_i × Grid_M)
+//   start_m_i = 45.671 + orig_i × tan27 / (1 + tan27²)
+// Wing axis='Y' lines (10–19): end_m = EW at (Grid_i × Grid_Y)
+//   end_m_i   = 87.472 + (orig_i − (87.472−45.671)×tan27) × tan27 / (1+tan27²)
 // ──────────────────────────────────────────────────────────────────────────
 
 export const MOORINGS_GRIDLINES: GridlineDefinition[] = [
@@ -120,7 +132,8 @@ export const MOORINGS_GRIDLINES: GridlineDefinition[] = [
   { label: 'L',  axis: 'X', coord: 41.999,  start_m: RECT_NS_START, end_m: RECT_NS_END, angle_deg: 0 },
 
   // ── CL transition lines (CLa / CL / CLb) ────────────────────────────────
-  // axis='X': angled 13.58°; bridge rectangular block and wing
+  // axis='X': angled 13.58°; bridge rectangular block and wing.
+  // NOTE: Grid 9 × Grid 19 × CL all meet at (EW=56.071, NS=0) — verified from A101.
   { label: 'CLa', axis: 'X', coord: 52.786, start_m: CL_NS_START, end_m: CL_NS_END, angle_deg: CL_ANG },
   { label: 'CL',  axis: 'X', coord: 56.071, start_m: CL_NS_START, end_m: CL_NS_END, angle_deg: CL_ANG },
   { label: 'CLb', axis: 'X', coord: 59.356, start_m: CL_NS_START, end_m: CL_NS_END, angle_deg: CL_ANG },
@@ -129,20 +142,20 @@ export const MOORINGS_GRIDLINES: GridlineDefinition[] = [
   // axis='X': angled 27.16°; coord = EW at NS=0.
   // start_m = NS at intersection with Grid 19 (southern wing boundary).
   // end_m   = NS at intersection with Grid 10 (northern wing boundary).
-  // Both are derived from: (±offset − 0.5130 × coord) / 1.26317
-  { label: 'M',  axis: 'X', coord: 45.671, start_m: -21.812, end_m:  11.731, angle_deg: WING_ANG },
-  { label: 'N',  axis: 'X', coord: 49.054, start_m: -23.186, end_m:  10.357, angle_deg: WING_ANG },
-  { label: 'P',  axis: 'X', coord: 50.956, start_m: -23.958, end_m:   9.585, angle_deg: WING_ANG },
-  { label: 'Q',  axis: 'X', coord: 55.371, start_m: -25.752, end_m:   7.792, angle_deg: WING_ANG },
-  { label: 'R',  axis: 'X', coord: 58.551, start_m: -27.046, end_m:   6.501, angle_deg: WING_ANG },
-  { label: 'S',  axis: 'X', coord: 65.272, start_m: -29.773, end_m:   3.772, angle_deg: WING_ANG },
-  { label: 'Sa', axis: 'X', coord: 66.021, start_m: -30.078, end_m:   3.468, angle_deg: WING_ANG },
-  { label: 'T',  axis: 'X', coord: 68.322, start_m: -31.012, end_m:   2.533, angle_deg: WING_ANG },
-  { label: 'U',  axis: 'X', coord: 72.372, start_m: -32.657, end_m:   0.888, angle_deg: WING_ANG },
-  { label: 'V',  axis: 'X', coord: 74.918, start_m: -33.692, end_m:  -0.147, angle_deg: WING_ANG },
-  { label: 'W',  axis: 'X', coord: 79.272, start_m: -35.458, end_m:  -1.915, angle_deg: WING_ANG },
-  { label: 'X',  axis: 'X', coord: 82.761, start_m: -36.874, end_m:  -3.332, angle_deg: WING_ANG },
-  { label: 'Y',  axis: 'X', coord: 87.472, start_m: -38.785, end_m:  -5.245, angle_deg: WING_ANG },
+  // Derived from anchor: orig_19=5.336, orig_10=47.707, denom=1+tan²(27.16°)=1.26317
+  { label: 'M',  axis: 'X', coord: 45.671, start_m:   4.224, end_m:  37.766, angle_deg: WING_ANG },
+  { label: 'N',  axis: 'X', coord: 49.054, start_m:   2.850, end_m:  36.392, angle_deg: WING_ANG },
+  { label: 'P',  axis: 'X', coord: 50.956, start_m:   2.077, end_m:  35.620, angle_deg: WING_ANG },
+  { label: 'Q',  axis: 'X', coord: 55.371, start_m:   0.284, end_m:  33.826, angle_deg: WING_ANG },
+  { label: 'R',  axis: 'X', coord: 58.551, start_m:  -1.007, end_m:  32.535, angle_deg: WING_ANG },
+  { label: 'S',  axis: 'X', coord: 65.272, start_m:  -3.737, end_m:  29.805, angle_deg: WING_ANG },
+  { label: 'Sa', axis: 'X', coord: 66.021, start_m:  -4.041, end_m:  29.501, angle_deg: WING_ANG },
+  { label: 'T',  axis: 'X', coord: 68.322, start_m:  -4.976, end_m:  28.566, angle_deg: WING_ANG },
+  { label: 'U',  axis: 'X', coord: 72.372, start_m:  -6.621, end_m:  26.922, angle_deg: WING_ANG },
+  { label: 'V',  axis: 'X', coord: 74.918, start_m:  -7.655, end_m:  25.888, angle_deg: WING_ANG },
+  { label: 'W',  axis: 'X', coord: 79.272, start_m:  -9.423, end_m:  24.119, angle_deg: WING_ANG },
+  { label: 'X',  axis: 'X', coord: 82.761, start_m: -10.840, end_m:  22.702, angle_deg: WING_ANG },
+  { label: 'Y',  axis: 'X', coord: 87.472, start_m: -12.753, end_m:  20.789, angle_deg: WING_ANG },
 
   // ── Rectangular NS-position lines (9–1, south→north) ────────────────────
   // axis='Y': run east-west at fixed NS; span the full rectangular EW extent (A→L)
@@ -159,31 +172,33 @@ export const MOORINGS_GRIDLINES: GridlineDefinition[] = [
   // ── Wing NS-position lines (10–19, north→south) ──────────────────────────
   // axis='Y': angled 27.16°.
   // coord  = NS at EW = start_m  (= NS at the Grid M intersection).
-  // start_m = EW at intersection with Grid M  (= 45.671 + orig_coord × 0.40625)
-  // end_m   = EW at intersection with Grid Y  (= 87.472 + (orig_coord − 21.444) × 0.40625)
-  // where orig_coord is the NS at EW=WING_EW_W=45.671 measured on A101.
+  // start_m = EW at intersection with Grid M.
+  // end_m   = EW at intersection with Grid Y.
   //
-  //  Grid   orig_coord   new coord   start_m   end_m
-  //  10     +14.819      +11.731     51.689    84.781
-  //  11     +11.344      + 8.983     50.279    83.370
-  //  12     + 6.594      + 5.220     48.349    81.441
-  //  13     + 1.865      + 1.477     46.429    79.520
-  //  14     − 2.335      − 1.849     44.722    77.815
-  //  15     − 9.315      − 7.374     41.888    74.980
-  //  16     −15.921      −12.604     39.205    72.297
-  //  17     −18.280      −14.473     38.250    71.338
-  //  18     −20.379      −16.133     37.395    70.488
-  //  19     −27.552      −21.812     34.482    67.570
-  { label: '10', axis: 'Y', coord:  11.731, start_m:  51.689, end_m:  84.781, angle_deg: WING_ANG },
-  { label: '11', axis: 'Y', coord:   8.983, start_m:  50.279, end_m:  83.370, angle_deg: WING_ANG },
-  { label: '12', axis: 'Y', coord:   5.220, start_m:  48.349, end_m:  81.441, angle_deg: WING_ANG },
-  { label: '13', axis: 'Y', coord:   1.477, start_m:  46.429, end_m:  79.520, angle_deg: WING_ANG },
-  { label: '14', axis: 'Y', coord:  -1.849, start_m:  44.722, end_m:  77.815, angle_deg: WING_ANG },
-  { label: '15', axis: 'Y', coord:  -7.374, start_m:  41.888, end_m:  74.980, angle_deg: WING_ANG },
-  { label: '16', axis: 'Y', coord: -12.604, start_m:  39.205, end_m:  72.297, angle_deg: WING_ANG },
-  { label: '17', axis: 'Y', coord: -14.473, start_m:  38.250, end_m:  71.338, angle_deg: WING_ANG },
-  { label: '18', axis: 'Y', coord: -16.133, start_m:  37.395, end_m:  70.488, angle_deg: WING_ANG },
-  { label: '19', axis: 'Y', coord: -21.812, start_m:  34.482, end_m:  67.570, angle_deg: WING_ANG },
+  // Anchor: orig_coord_19=5.336 (Grid 19 crosses Grid 9 at CL=56.071).
+  // All positive: the wing sits NORTH of Grid 9, attached to the building's east side.
+  //
+  //  Grid  orig_coord   coord   start_m   end_m
+  //  10    +47.707     +37.766  65.047    98.138
+  //  11    +44.232     +35.015  63.635    96.726
+  //  12    +39.482     +31.255  61.706    94.797
+  //  13    +34.753     +27.511  59.786    92.876
+  //  14    +30.553     +24.186  58.080    91.171
+  //  15    +23.573     +18.661  55.245    88.336
+  //  16    +16.967     +13.431  52.562    85.653
+  //  17    +14.608     +11.564  51.604    84.695
+  //  18    +12.509     + 9.902  50.751    83.842
+  //  19    + 5.336     + 4.224  47.838    80.929
+  { label: '10', axis: 'Y', coord:  37.766, start_m:  65.047, end_m:  98.138, angle_deg: WING_ANG },
+  { label: '11', axis: 'Y', coord:  35.015, start_m:  63.635, end_m:  96.726, angle_deg: WING_ANG },
+  { label: '12', axis: 'Y', coord:  31.255, start_m:  61.706, end_m:  94.797, angle_deg: WING_ANG },
+  { label: '13', axis: 'Y', coord:  27.511, start_m:  59.786, end_m:  92.876, angle_deg: WING_ANG },
+  { label: '14', axis: 'Y', coord:  24.186, start_m:  58.080, end_m:  91.171, angle_deg: WING_ANG },
+  { label: '15', axis: 'Y', coord:  18.661, start_m:  55.245, end_m:  88.336, angle_deg: WING_ANG },
+  { label: '16', axis: 'Y', coord:  13.431, start_m:  52.562, end_m:  85.653, angle_deg: WING_ANG },
+  { label: '17', axis: 'Y', coord:  11.564, start_m:  51.604, end_m:  84.695, angle_deg: WING_ANG },
+  { label: '18', axis: 'Y', coord:   9.902, start_m:  50.751, end_m:  83.842, angle_deg: WING_ANG },
+  { label: '19', axis: 'Y', coord:   4.224, start_m:  47.838, end_m:  80.929, angle_deg: WING_ANG },
 ];
 
 /**
