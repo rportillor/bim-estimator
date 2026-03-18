@@ -1,8 +1,13 @@
 /**
- * Gridline PDF Parser -- v5.0 (Fully Generic)
+ * Gridline PDF Parser -- v5.1 (Fully Generic)
  *
  * Extracts gridline definitions from ANY construction drawing PDF.
  * Zero hardcoded values: no bearings, no scale factors, no band positions, no spacing values.
+ *
+ * ORIGIN RULE:
+ * Origin (0,0,0) is ALWAYS the intersection of the LEFTMOST and LOWEST gridlines
+ * on the drawing — the bottom-left corner of the building.
+ * All gridline positions are accumulated from this origin using dimension text.
  *
  * Algorithm:
  * 1. Extract all text items from the PDF
@@ -11,7 +16,10 @@
  * 4. Detect angles from label geometry via linear regression
  * 5. Find dimension text and match to adjacent label pairs
  * 6. Accumulate positions from dimension values
- * 7. Determine axis, extents, and build output
+ * 7. Origin = bottom-left gridline intersection
+ * 8. Determine axis, extents, and build output
+ * 9. AI verification: output includes data for Claude to verify against PDF image
+ * 10. User confirmation: presented to user for final approval
  */
 
 import type { GridlineDefinition } from '../../shared/moorings-grid-constants';
@@ -40,6 +48,12 @@ export interface GridlineParsedResult {
   bearing_deg: number;
   turn_angle_deg: number;
   wing_angle_deg: number;
+  /** Origin = bottom-left corner gridline intersection */
+  origin: {
+    alpha_label: string;   // leftmost alpha gridline label (e.g. "A")
+    numeric_label: string; // bottommost numeric gridline label (e.g. "9")
+    description: string;   // e.g. "Grid A / Grid 9 intersection"
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -721,11 +735,19 @@ function buildFamilyGridlines(
   const labels = [...family.labels];
   const orientation = family.orientation;
 
-  // Sort labels by position along their primary axis
+  // Sort labels so that the BOTTOM-LEFT corner of the drawing is first.
+  // This ensures origin (0,0,0) is always at the bottom-left gridline intersection.
+  //
+  // For horizontal families (alpha/letters): sort left→right (ascending X)
+  //   The leftmost label = position 0 (EW origin)
+  //
+  // For vertical families (numeric/numbers): sort bottom→top (DESCENDING Y in PDF space,
+  //   because PDF Y=0 is TOP of page, so bottom of page = highest Y)
+  //   The bottommost label = position 0 (NS origin)
   if (orientation === 'horizontal') {
-    labels.sort((a, b) => a.cx - b.cx);
+    labels.sort((a, b) => a.cx - b.cx);     // left to right
   } else {
-    labels.sort((a, b) => a.cy - b.cy);
+    labels.sort((a, b) => b.cy - a.cy);     // bottom to top (highest PDF Y = bottom of page = first)
   }
 
   // Match dimensions to each consecutive pair
@@ -850,6 +872,7 @@ export async function parseGridlinesFromPdf(
       bearing_deg: 0,
       turn_angle_deg: 0,
       wing_angle_deg: 0,
+      origin: { alpha_label: '?', numeric_label: '?', description: 'Not determined' },
     };
   }
 
@@ -873,6 +896,7 @@ export async function parseGridlinesFromPdf(
       bearing_deg: 0,
       turn_angle_deg: 0,
       wing_angle_deg: 0,
+      origin: { alpha_label: '?', numeric_label: '?', description: 'Not determined' },
     };
   }
 
@@ -1072,6 +1096,18 @@ export async function parseGridlinesFromPdf(
   const confidence: 'high' | 'low' =
     grid_lines.length >= 4 && fallback <= grid_lines.length * 0.3 ? 'high' : 'low';
 
+  // Determine origin — the bottom-left corner gridline intersection.
+  // This is the FIRST label in each sorted family (position 0).
+  const alphaOrigin = grid_lines.find(g => g.axis === 'X' && g.coordinate_m === 0);
+  const numericOrigin = grid_lines.find(g => g.axis === 'Y' && g.coordinate_m === 0);
+  const origin = {
+    alpha_label: alphaOrigin?.label || grid_lines.find(g => g.axis === 'X')?.label || '?',
+    numeric_label: numericOrigin?.label || grid_lines.find(g => g.axis === 'Y')?.label || '?',
+    description: '',
+  };
+  origin.description = `Grid ${origin.alpha_label} / Grid ${origin.numeric_label} intersection (bottom-left corner)`;
+  notes.push(`Origin: ${origin.description}`);
+
   return {
     grid_lines,
     gridline_definitions,
@@ -1080,5 +1116,6 @@ export async function parseGridlinesFromPdf(
     bearing_deg: bearingDeg,
     turn_angle_deg: turnAngleDeg,
     wing_angle_deg: wingAngleDeg,
+    origin,
   };
 }
