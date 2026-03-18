@@ -1899,10 +1899,11 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         const labelSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTex, depthTest: false }));
         labelSprite.scale.set(4, 2, 1);  // 4m × 2m — visible from plan-view distance (~90m)
         const dir = pt2.clone().sub(pt1).normalize();
-        // axis='Y' (1–9 number lines): label goes to the WEST (left) end of the line
-        // all others (letter lines, wing, CL): label goes to the far (north) end
-        const lblRef = g.axis === 'Y' ? pt1 : pt2;
-        const lblFwd = g.axis === 'Y' ? -1 : 1;
+        // axis='Y' non-angled (1–9 rectangular number lines): label goes to WEST (left) end
+        // axis='Y' angled (10–19 wing lines) + letter lines + CL: label goes to the far end (pt2)
+        const moveToWest = g.axis === 'Y' && !isAngled;
+        const lblRef = moveToWest ? pt1 : pt2;
+        const lblFwd = moveToWest ? -1 : 1;
         labelSprite.position.copy(lblRef).addScaledVector(dir, lblFwd * 3).add(new THREE.Vector3(0, 1, 0));
         labelSprite.name = `sg:${g.label}:lbl`;
         three.current?.scene.add(labelSprite);
