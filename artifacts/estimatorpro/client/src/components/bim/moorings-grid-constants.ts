@@ -73,13 +73,22 @@ const WING_ANG  = 27.16;  // degrees — M–Y and 10–19 families
 //   • NOT derived from Grid 9 × Grid 19 — that gives the wing slope, not the CL slope.
 const CL_ANG     = WING_ANG / 2;  // 13.58° — CLa / CL / CLb gridline slope
 
-// CL zone EW positions at NS=0 (Grid 9), read directly from drawing A101:
-//   CL meets Grid L at Grid 9 → CL coord = RECT_EW_END = 41.999 m
-//   Drawing dimension "3285" = perpendicular spacing between CL lines = 3.285 m
-//   CLa = CL − CL_SPACING = 38.714 m  (circle overlaps Grid K on drawing — 235mm west of K=38.949)
-//   CLb = CL + CL_SPACING = 45.284 m  (circle overlaps Grid M on drawing — 387mm west of M=45.671)
-const CL_SPACING = 3.285;              // metres — spacing between CLa/CL and CL/CLb
-const CL_COORD   = RECT_EW_END;       // CL at NS=0 = Grid L = 41.999 m
+// CL zone EW positions at NS=0 (Grid 9) — derived directly from drawing A101 dimensions:
+//
+//   Dimension chain at Grid 9 level (all EW, all at NS=0):
+//     "1959" mm = CLb to Grid N  → CLb = N(49.054) − 1.959 = 47.095 m
+//     "3285" mm = CLa→CL and CL→CLb (equal spacing)
+//     "3383" mm = Grid M to Grid N = 49.054−45.671 = 3.383 m ✓
+//     "1902" mm = Grid N to Grid P = 50.956−49.054 = 1.902 m ✓
+//     "3050" mm = Grid K to Grid L = 41.999−38.949 = 3.050 m ✓ (reference)
+//
+//   Therefore (working left from CLb):
+//     CLb = 49.054 − 1.959 = 47.095 m  (in M–N bay: M=45.671, N=49.054)
+//     CL  = 47.095 − 3.285 = 43.810 m  (in L–M bay: L=41.999, M=45.671)
+//     CLa = 43.810 − 3.285 = 40.525 m  (in K–L bay: K=38.949, L=41.999)
+//
+const CL_SPACING = 3.285;   // metres — equal spacing between each pair of CL zone lines
+const CL_COORD   = 43.810;  // CL at NS=0 (m); CLb=N−1959mm, CL=CLb−3285mm
 
 // Reference EW coords for the wing (at NS=0 / Grid 9 level)
 const WING_EW_W =  45.671; // Grid M EW at NS=0
@@ -92,9 +101,9 @@ const WING_NS_N =  37.766; // M×10 NS (northern wing boundary on Grid M)
 const WING_NS_S = -12.753; // Y×19 NS (southern wing boundary on Grid Y)
 
 // CL lines span exactly the rectangular block: Grid 9 (NS=0) → Grid 1 (NS=40.830).
-//   South anchor: CL meets Grid L at Grid 9 → CL at (EW=41.999, NS=0)
-//   North end:    at NS=40.830, CL EW = 41.999 + 40.830×tan(13.58°) = 41.999 + 9.863 = 51.862 m
-//                 (transition zone between Grid L=41.999 and Grid M at NS=40.830=66.619 m) ✓
+//   South end: CLa=40.525, CL=43.810, CLb=47.095 at NS=0 (derived from drawing dims above)
+//   North end at NS=40.830: CLa=50.388, CL=53.673, CLb=56.958 m
+//              (all within transition zone; Grid M at NS=40.830 = 66.619 m)
 // CL lines do not extend south of Grid 9.
 const CL_NS_START = RECT_NS_START;
 const CL_NS_END   = RECT_NS_END;
