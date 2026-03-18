@@ -16,6 +16,7 @@
 | 1.3 | 2026-03-18 | Replit Agent | Applied commit ace4f15 to Replit workspace; updated in-progress status |
 | 2.0 | 2026-03-18 | Claude Code | 15 commits: generic grid parser, shared types, parameter-resolver, gridline API, element placement types |
 | 2.1 | 2026-03-18 | Replit Agent | Synced Rev 2.0 code — 7 files applied (3 new shared/, 4 updated server/); server clean restart; 264 markers + 47 gridlines confirmed in console |
+| 2.2 | 2026-03-18 | Replit Agent | Fix #1 complete: 47 grid_line DB records deleted; insertion guards in both processors; bulk delete endpoint added |
 
 ---
 
@@ -123,9 +124,8 @@ artifacts/
 
 ## 4. Issues Remaining (Not Yet Started)
 
-### 4.1 DB cleanup — old grid_line elements
-**Detail:** Old `grid_line` records remain in `bim_elements`. The viewer skips them (`continue` in element loop) so they don't affect rendering, but the DB should be clean.
-**Work needed:** Delete all `grid_line` type elements for this model from `bim_elements` table.
+### ~~4.1 DB cleanup — old grid_line elements~~ DONE (Rev 2.2)
+**Completed:** 47 `grid_line` records deleted directly from DB. Insertion guards added to `real-qto-processor.ts` and `construction-workflow-processor.ts` — neither processor will ever write `grid_line` to DB again. Bulk delete endpoint added to `bim-element-crud.ts` (DELETE /api/bim/models/:modelId/elements/type/:elementType).
 
 ### 4.2 Grid 19 coordinate discrepancy
 **Detail:** Grid 19 has two source values: −27.552 m (cumulative spans) vs −30.088 m (direct PDF anchor). Constants file uses −30.088 for span bounds but −27.552 for the grid 19 line itself. ~2.5 m mismatch at south wing corner.
