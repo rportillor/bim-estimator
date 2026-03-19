@@ -2087,7 +2087,10 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           const clPerp_x =  1    / normCL;   //  0.97183
           const clPerp_z = tanCL / normCL;   //  0.23475
 
-          const CHAIN_OFFSET = 7;   // metres south of Grid 9
+          // 11 m south keeps the CL chain clear of the A-L chain (SOUTH_Z=7).
+          // The CL chain's Z range is [11/normCL, 11/normCL + 6.385×tanCL/normCL]
+          // ≈ [10.69, 12.19] — well south of A-L at Z=7.
+          const CHAIN_OFFSET = 11;
           const TICK_H = 0.8;
 
           const clLines = MOORINGS_GRIDLINES
@@ -2345,7 +2348,10 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       // Cluster radius: 2 m in EW + NS combined (chebyshev distance).
       // Offset direction is HORIZONTAL (XZ plane, 45° SE) so labels stay at floor
       // level — no vertical floating that would look like "labels on the Z axis".
-      const CLUSTER_DIST = 2.0;
+      // 0.1 m threshold — only catches mathematically-identical duplicates
+      // (e.g. CL×9 and CL×19 both land at EW=43.810, NS=0 by the CL constraint).
+      // A larger value incorrectly stagger legitimate nearby intersections.
+      const CLUSTER_DIST = 0.1;
       const STAGGER_STEP = 2.2;  // metres horizontal offset per slot
       const stackCount: number[] = new Array(allIntersections.length).fill(0);
       for (let i = 0; i < allIntersections.length; i++) {
