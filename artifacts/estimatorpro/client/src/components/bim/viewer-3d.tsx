@@ -2068,6 +2068,30 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           addSpacingLbl(Math.round((b.coord - a.coord)*1000), (a.coord+b.coord)/2, SOUTH_Z, `sg:dchain:ew:${i}`);
         }
 
+        // ── CL zone chain: CLa → CL → CLb (same south level as A-L) ─────────
+        // CL_SPACING = 3.285 m = 3285 mm for each interval — read directly from
+        // the drawing.  The chain runs east-west at SOUTH_Z just like A-L.
+        // South ends of all three CL lines are at NS=0 (Grid 9 level, Z=0).
+        const clLines = MOORINGS_GRIDLINES
+          .filter(g => g.label === 'CLa' || g.label === 'CL' || g.label === 'CLb')
+          .sort((a, b) => a.coord - b.coord);  // west (CLa) → east (CLb)
+
+        if (clLines.length >= 2) {
+          // Chain line from CLa.coord to CLb.coord at SOUTH_Z
+          addLine2(clLines[0].coord, fl, SOUTH_Z, clLines[clLines.length-1].coord, fl, SOUTH_Z, DIM_GREY);
+          for (const g of clLines) {
+            // Extension: from Z=1 (just past Grid 9) to Z=SOUTH_Z-1 (1m before chain)
+            addLine2(g.coord, fl, 1, g.coord, fl, SOUTH_Z - 1, EXT_GREY);
+            // Tick ±0.8 at chain
+            addLine2(g.coord, fl, SOUTH_Z - 0.8, g.coord, fl, SOUTH_Z + 0.8, DIM_GREY);
+          }
+          // Spacing labels — known from drawing: each gap = CL_SPACING = 3285 mm
+          for (let i = 0; i < clLines.length - 1; i++) {
+            const a = clLines[i], b = clLines[i+1];
+            addSpacingLbl(3285, (a.coord + b.coord) / 2, SOUTH_Z, `sg:dchain:cl:${i}`);
+          }
+        }
+
         // ── WEST chain: rectangular number lines 1–9 ─────────────────────────
         const rectNSLines = MOORINGS_GRIDLINES
           .filter(g => g.axis === 'Y' && Math.abs(g.angle_deg) < 0.01)
@@ -2233,10 +2257,10 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       const numericLines = MOORINGS_GRIDLINES.filter(g => g.axis === 'Y');
       let intersectionCount = 0;
 
+      // Pass 1: compute all valid intersections
+      const allIntersections: Array<{ew:number; ns:number; alphaLabel:string; numericLabel:string; isAngled:boolean}> = [];
       for (const alpha of alphaLines) {
         for (const numeric of numericLines) {
-          // Extent overlap check — must use full EW range for angled alpha lines
-          // (e.g. CL lines drift EW as NS increases, so alpha.coord alone is wrong).
           const tol = 5;
           const tanA = Math.tan(alpha.angle_deg * (Math.PI / 180));
           const tanN = Math.tan(numeric.angle_deg * (Math.PI / 180));
@@ -2246,7 +2270,6 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           const nMin = Math.min(numeric.start_m, numeric.end_m) - tol;
           const nMax = Math.max(numeric.start_m, numeric.end_m) + tol;
 
-          // Alpha line EW range over its NS extent
           const aEW1 = alpha.coord + alpha.start_m * tanA;
           const aEW2 = alpha.coord + alpha.end_m   * tanA;
           const aEWMin = Math.min(aEW1, aEW2) - tol;
@@ -2254,58 +2277,79 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           if (aEWMax < nMin || aEWMin > nMax) continue;
           if (numeric.coord < aMin || numeric.coord > aMax) continue;
 
-          // Compute intersection
           const denom = 1 + tanA * tanN;
           if (Math.abs(denom) < 1e-10) continue;
           const ns = (numeric.coord + (numeric.start_m - alpha.coord) * tanN) / denom;
           const ew = alpha.coord + ns * tanA;
-
-          // Verify intersection is within extents
           if (ew < nMin || ew > nMax || ns < aMin || ns > aMax) continue;
 
-          // Render intersection marker — small sphere
-          const markerGeo = new THREE.SphereGeometry(0.3, 8, 6);
-          const isAngled = Math.abs(alpha.angle_deg) > 0.01 || Math.abs(numeric.angle_deg) > 0.01;
-          const markerColor = isAngled ? 0xFF00FF : 0x00FF00;
-          const markerMat = new THREE.MeshBasicMaterial({ color: markerColor, transparent: true, opacity: 0.7 });
-          const marker = new THREE.Mesh(markerGeo, markerMat);
-          marker.position.set(ew, staticFloorY + 0.1, -ns); // north → -Z
-          marker.name = `sg:int:${alpha.label}-${numeric.label}`;
-          marker.userData = {
-            type: 'grid_intersection',
-            label: `${alpha.label}-${numeric.label}`,
-            ew: Math.round(ew * 1000) / 1000,
-            ns: Math.round(ns * 1000) / 1000,
-            z: staticFloorY,
-          };
-          three.current?.scene.add(marker);
-
-          // Label at intersection — floating CAD-style: yellow text with black outline,
-          // transparent background so no rectangle obscures geometry.
-          const intCanvas = document.createElement('canvas');
-          intCanvas.width = 128; intCanvas.height = 40;
-          const intCtx = intCanvas.getContext('2d')!;
-          intCtx.clearRect(0, 0, 128, 40);           // fully transparent — no rectangle
-          intCtx.font = 'bold 20px monospace';
-          intCtx.textAlign = 'center';
-          intCtx.textBaseline = 'middle';
-          // Black outline first for contrast against any background
-          intCtx.strokeStyle = '#000000';
-          intCtx.lineWidth = 4;
-          intCtx.lineJoin = 'round';
-          intCtx.strokeText(`${alpha.label}-${numeric.label}`, 64, 20);
-          // Bright CAD yellow fill — readable against both dark and light geometry
-          intCtx.fillStyle = '#FFE033';
-          intCtx.fillText(`${alpha.label}-${numeric.label}`, 64, 20);
-          const intTex = new THREE.CanvasTexture(intCanvas);
-          const intSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: intTex, transparent: true, depthTest: false }));
-          intSprite.scale.set(2.8, 0.875, 1);
-          intSprite.position.set(ew, staticFloorY + 1.0, -ns); // north → -Z, raised 1m
-          intSprite.name = `sg:int:${alpha.label}-${numeric.label}:lbl`;
-          three.current?.scene.add(intSprite);
-
-          intersectionCount++;
+          allIntersections.push({
+            ew, ns,
+            alphaLabel: alpha.label,
+            numericLabel: numeric.label,
+            isAngled: Math.abs(alpha.angle_deg) > 0.01 || Math.abs(numeric.angle_deg) > 0.01,
+          });
         }
+      }
+
+      // Pass 2: assign stagger index so nearby labels don't overlap.
+      // Cluster radius: 2 m in EW + NS combined (chebyshev distance).
+      const CLUSTER_DIST = 2.0;
+      const stackCount: number[] = new Array(allIntersections.length).fill(0);
+      for (let i = 0; i < allIntersections.length; i++) {
+        let slot = 0;
+        for (let j = 0; j < i; j++) {
+          const de = Math.abs(allIntersections[i].ew - allIntersections[j].ew);
+          const dn = Math.abs(allIntersections[i].ns - allIntersections[j].ns);
+          if (de < CLUSTER_DIST && dn < CLUSTER_DIST) {
+            // This slot is taken by j — bump our slot
+            slot = Math.max(slot, stackCount[j] + 1);
+          }
+        }
+        stackCount[i] = slot;
+      }
+
+      // Pass 3: render markers and labels with staggered Y heights
+      for (let idx = 0; idx < allIntersections.length; idx++) {
+        const { ew, ns, alphaLabel, numericLabel, isAngled } = allIntersections[idx];
+        const stackSlot = stackCount[idx];
+        const labelY = staticFloorY + 1.0 + stackSlot * 1.8; // 1.8 m per stagger step
+
+        // Intersection marker (sphere)
+        const markerGeo = new THREE.SphereGeometry(0.3, 8, 6);
+        const markerColor = isAngled ? 0xFF00FF : 0x00FF00;
+        const markerMat = new THREE.MeshBasicMaterial({ color: markerColor, transparent: true, opacity: 0.7 });
+        const marker = new THREE.Mesh(markerGeo, markerMat);
+        marker.position.set(ew, staticFloorY + 0.1, -ns);
+        marker.name = `sg:int:${alphaLabel}-${numericLabel}`;
+        marker.userData = {
+          type: 'grid_intersection', label: `${alphaLabel}-${numericLabel}`,
+          ew: Math.round(ew*1000)/1000, ns: Math.round(ns*1000)/1000, z: staticFloorY,
+        };
+        three.current?.scene.add(marker);
+
+        // Label — floating CAD yellow with black outline, staggered to avoid overlap
+        const intCanvas = document.createElement('canvas');
+        intCanvas.width = 128; intCanvas.height = 40;
+        const intCtx = intCanvas.getContext('2d')!;
+        intCtx.clearRect(0, 0, 128, 40);
+        intCtx.font = 'bold 20px monospace';
+        intCtx.textAlign = 'center';
+        intCtx.textBaseline = 'middle';
+        intCtx.strokeStyle = '#000000';
+        intCtx.lineWidth = 4;
+        intCtx.lineJoin = 'round';
+        intCtx.strokeText(`${alphaLabel}-${numericLabel}`, 64, 20);
+        intCtx.fillStyle = '#FFE033';
+        intCtx.fillText(`${alphaLabel}-${numericLabel}`, 64, 20);
+        const intTex = new THREE.CanvasTexture(intCanvas);
+        const intSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: intTex, transparent: true, depthTest: false }));
+        intSprite.scale.set(2.8, 0.875, 1);
+        intSprite.position.set(ew, labelY, -ns);
+        intSprite.name = `sg:int:${alphaLabel}-${numericLabel}:lbl`;
+        three.current?.scene.add(intSprite);
+
+        intersectionCount++;
       }
       console.log(`[3D Viewer] Rendered ${intersectionCount} grid intersection markers`);
 
