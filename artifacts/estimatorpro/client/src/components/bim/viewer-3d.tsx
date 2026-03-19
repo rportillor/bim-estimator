@@ -2343,7 +2343,10 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
 
       // Pass 2: assign stagger index so nearby labels don't overlap.
       // Cluster radius: 2 m in EW + NS combined (chebyshev distance).
+      // Offset direction is HORIZONTAL (XZ plane, 45° SE) so labels stay at floor
+      // level — no vertical floating that would look like "labels on the Z axis".
       const CLUSTER_DIST = 2.0;
+      const STAGGER_STEP = 2.2;  // metres horizontal offset per slot
       const stackCount: number[] = new Array(allIntersections.length).fill(0);
       for (let i = 0; i < allIntersections.length; i++) {
         let slot = 0;
@@ -2351,18 +2354,20 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           const de = Math.abs(allIntersections[i].ew - allIntersections[j].ew);
           const dn = Math.abs(allIntersections[i].ns - allIntersections[j].ns);
           if (de < CLUSTER_DIST && dn < CLUSTER_DIST) {
-            // This slot is taken by j — bump our slot
             slot = Math.max(slot, stackCount[j] + 1);
           }
         }
         stackCount[i] = slot;
       }
 
-      // Pass 3: render markers and labels with staggered Y heights
+      // Pass 3: render markers and labels; collisions offset horizontally (not vertically)
       for (let idx = 0; idx < allIntersections.length; idx++) {
         const { ew, ns, alphaLabel, numericLabel, isAngled } = allIntersections[idx];
         const stackSlot = stackCount[idx];
-        const labelY = staticFloorY + 1.0 + stackSlot * 1.8; // 1.8 m per stagger step
+        // Shift in the +X direction per slot so labels fan out east — stays at floor level
+        const labelEW = ew + stackSlot * STAGGER_STEP;
+        const labelNS = ns;
+        const labelY  = staticFloorY + 1.0; // always at floor + 1 m (no vertical stacking)
 
         // Intersection marker (sphere)
         const markerGeo = new THREE.SphereGeometry(0.3, 8, 6);
@@ -2394,7 +2399,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         const intTex = new THREE.CanvasTexture(intCanvas);
         const intSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: intTex, transparent: true, depthTest: false }));
         intSprite.scale.set(2.8, 0.875, 1);
-        intSprite.position.set(ew, labelY, -ns);
+        intSprite.position.set(labelEW, labelY, -labelNS);  // horizontal offset for collision avoidance
         intSprite.name = `sg:int:${alphaLabel}-${numericLabel}:lbl`;
         three.current?.scene.add(intSprite);
 
