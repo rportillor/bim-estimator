@@ -2370,19 +2370,19 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       for (let idx = 0; idx < allIntersections.length; idx++) {
         const { ew, ns, alphaLabel, numericLabel, isAngled } = allIntersections[idx];
         const stackSlot = stackCount[idx];
-        // Shift in the +X direction per slot so labels fan out east — stays at floor level
-        const labelEW = ew + stackSlot * STAGGER_STEP;
-        const labelNS = ns;
-        // CLa and CLb intersections are within 1–2 m of the adjacent K/L/M gridlines,
-        // so their labels overlap with rect-grid labels at floor+1.  Raise them +2 m
-        // so CLa/CLb labels float at floor+3 ("above") while rect/wing labels stay at
-        // floor+1 ("below") — the one-above-one-below split the user requested.
-        const isCLzone = alphaLabel === 'CLa' || alphaLabel === 'CLb';
-        const labelY  = staticFloorY + 1.0 + (isCLzone ? 2.0 : 0.0);
+        // Stagger colliding labels NORTH/SOUTH (Z direction) so they sit on opposite
+        // sides of their dot at floor level — no vertical floating.
+        // slot 0 = at intersection, slot 1 = 2 m south (+Z), slot 2 = 2 m north (-Z)
+        const staggerZ = stackSlot === 0 ? 0 : stackSlot % 2 === 1 ? 2.0 : -2.0;
+        const labelEW = ew;
+        const labelY  = staticFloorY + 1.0;
 
         // Intersection marker (sphere)
         const markerGeo = new THREE.SphereGeometry(0.3, 8, 6);
-        const markerColor = isAngled ? 0xFF00FF : 0x00FF00;
+        // 3-colour dot system — label text will match
+        const isCLlabel  = alphaLabel === 'CLa' || alphaLabel === 'CL' || alphaLabel === 'CLb';
+        const isWingLabel = isAngled && !isCLlabel;
+        const markerColor = isCLlabel ? 0x00FFCC : isWingLabel ? 0xFF88FF : 0x44FF88;
         const markerMat = new THREE.MeshBasicMaterial({ color: markerColor, transparent: true, opacity: 0.7 });
         const marker = new THREE.Mesh(markerGeo, markerMat);
         marker.position.set(ew, staticFloorY + 0.1, -ns);
@@ -2405,12 +2405,13 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         intCtx.lineWidth = 4;
         intCtx.lineJoin = 'round';
         intCtx.strokeText(`${alphaLabel}-${numericLabel}`, 64, 20);
-        intCtx.fillStyle = '#FFE033';
+        // Text colour matches the dot colour for instant visual pairing
+        intCtx.fillStyle = isCLlabel ? '#00FFCC' : isWingLabel ? '#FF88FF' : '#FFE033';
         intCtx.fillText(`${alphaLabel}-${numericLabel}`, 64, 20);
         const intTex = new THREE.CanvasTexture(intCanvas);
         const intSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: intTex, transparent: true, depthTest: false }));
         intSprite.scale.set(2.8, 0.875, 1);
-        intSprite.position.set(labelEW, labelY, -labelNS);  // horizontal offset for collision avoidance
+        intSprite.position.set(labelEW, labelY, -ns + staggerZ);  // staggerZ = N/S offset for collision avoidance
         intSprite.name = `sg:int:${alphaLabel}-${numericLabel}:lbl`;
         three.current?.scene.add(intSprite);
 
