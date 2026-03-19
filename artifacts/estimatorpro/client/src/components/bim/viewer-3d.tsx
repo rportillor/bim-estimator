@@ -2256,10 +2256,11 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
 
             for (let i = 0; i < myAtt.length - 1; i++) {
               const a = myAtt[i], b = myAtt[i+1];
-              // Same logic as A-L: raw coord difference (EW at NS=0).
-              // Chain runs along Grid-19 (mySE slope), so tick-to-tick distance
-              // = coord_diff × norm  (slope factor, same as A-L × 1 for vertical lines).
-              const spacing_mm = Math.round(Math.abs(b.g.coord - a.g.coord) * norm * 1000);
+              // Drawing A101 annotates the HORIZONTAL (EW) bay width between M-Y gridlines,
+              // i.e. the raw coordinate difference at NS=0 in millimetres.
+              // Confirmed by image extraction: M-N=3383, N-P=1902, S-Sa=749, Sa-T=2301 etc.
+              // all match |Δcoord| × 1000 exactly. No norm factor.
+              const spacing_mm = Math.round(Math.abs(b.g.coord - a.g.coord) * 1000);
               addSpacingLbl(spacing_mm, (a.chainX+b.chainX)/2, (a.chainZ+b.chainZ)/2, `sg:dchain:my:${i}`);
             }
           }
