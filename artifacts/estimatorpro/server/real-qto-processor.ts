@@ -19,6 +19,7 @@ import { inferStoreysIfMissing } from "./helpers/storey-inference";
 import { GeometryValidator, validateExtractedGeometry, GridSystem } from './helpers/geometry-validator';
 import { normaliseElevation, toMetres } from './helpers/unit-normaliser';
 import { registerMissingData } from './estimator/rfi-generator';
+import { computeGridIntersection, MOORINGS_GRIDLINES } from '../shared/moorings-grid-constants';
 
 // 📏 Unit Conversion Constants
 const _UNIT_CONVERSIONS = {
@@ -3329,13 +3330,42 @@ Return JSON ONLY — no prose, no explanation:
 
       perimeter_walls: ctx + `TASK: Extract ONLY the EXTERIOR PERIMETER WALLS and FOUNDATION/RETAINING WALLS at the ${floor.name} level. Return NOTHING else.
 
-For each wall:
-{ "wall_id": "EW-001", "start": {"x":0.0,"y":0.0}, "end": {"x":5.5,"y":0.0}, "thickness_m": 0.35, "height_m": ${h.toFixed(2)}, "material": "concrete", "type": "foundation" }
-- type: "foundation" | "retaining" | "exterior"
-- All coordinates in metres from grid origin
+CRITICAL — USE GRID REFERENCES, NOT PIXEL ESTIMATES:
+Do NOT guess or estimate raw x/y coordinates. Instead, identify which grid lines each wall runs along.
+Read the grid bubble labels printed in circles around the drawing perimeter, then match each wall to its bounding grid lines.
 
-Return JSON ONLY:
-{ "perimeter_walls": [ { "wall_id","start","end","thickness_m","height_m","material","type" }, ... ] }`,
+THE MOORINGS GRID COORDINATE TABLE (metres from origin — Grid A = EW 0, Grid 9 = NS 0):
+
+RECTANGULAR SECTION — EW gridlines (run north-south, position = metres east of Grid A):
+  A=0.000  B=4.710  C=8.199  D=12.553  E=15.099  F=19.149
+  G=21.450  Ga=22.199  H=29.049  J=32.100  K=38.949  L=41.999
+
+RECTANGULAR SECTION — NS gridlines (run east-west, position = metres north of Grid 9):
+  9=0.000  8=5.885  7=8.244  6=14.850  5=21.830
+  4=26.030  3=27.876  2=37.355  1=40.830
+
+WING SECTION — angled EW gridlines (27.16° from NS axis, EW position at NS=0):
+  M=45.671  N=49.054  P=50.956  Q=55.371  R=58.551  S=65.272
+  Sa=66.021  T=68.322  U=72.372  V=74.918  W=79.272  X=82.761  Y=87.472
+
+WING SECTION — angled NS gridlines (NS at Grid M intersection):
+  10=35.572  11=32.480  12=28.254  13=24.046  14=22.404
+  15=18.667  16=12.457  17=6.579  18=4.480  19=-0.756
+
+For each wall segment return:
+{ "wall_id": "EW-001",
+  "grid_start": {"alpha": "A", "numeric": "9"},
+  "grid_end":   {"alpha": "L", "numeric": "9"},
+  "offset_m": 0,
+  "thickness_m": 0.30, "height_m": ${h.toFixed(2)}, "material": "concrete", "type": "foundation" }
+- grid_start / grid_end: the grid intersection at each end of the wall
+    alpha = the EW gridline label (A–Y or CLa/CL/CLb)
+    numeric = the NS gridline label (1–9 or 10–19)
+- offset_m: perpendicular offset in metres if the wall does NOT sit exactly on the grid line (0 in most cases)
+- type: "foundation" | "retaining" | "exterior"
+
+Return JSON ONLY — no prose:
+{ "perimeter_walls": [ { "wall_id","grid_start","grid_end","offset_m","thickness_m","height_m","material","type" }, ... ] }`,
 
       interior_walls: ctx + `TASK: Extract ONLY the INTERIOR PARTITION WALLS at the ${floor.name} level. Exclude exterior walls and structural columns.
 
@@ -3438,8 +3468,43 @@ Return JSON ONLY:
       const key = layer === 'perimeter_walls' ? 'perimeter_walls' : 'interior_walls';
       const elType = layer === 'perimeter_walls' ? 'exterior_wall' : 'interior_wall';
       for (const w of (result?.[key] ?? [])) {
-        const dx = (w.end?.x ?? 0) - (w.start?.x ?? 0);
-        const dy = (w.end?.y ?? 0) - (w.start?.y ?? 0);
+        // ── Resolve start/end coordinates ────────────────────────────────────
+        // Prefer grid_start / grid_end references resolved via Moorings constants
+        // (exact values from verified drawing dimensions).  Fall back to raw x/y
+        // only if no grid refs are present (interior walls, legacy responses).
+        let startCoord: { x: number; y: number } = { x: w.start?.x ?? 0, y: w.start?.y ?? 0 };
+        let endCoord:   { x: number; y: number } = { x: w.end?.x   ?? 0, y: w.end?.y   ?? 0 };
+
+        if (w.grid_start?.alpha && w.grid_start?.numeric) {
+          const gi = computeGridIntersection(
+            String(w.grid_start.alpha),
+            String(w.grid_start.numeric),
+            MOORINGS_GRIDLINES,
+          );
+          if (gi) {
+            startCoord = { x: gi.ew + (w.offset_m ?? 0), y: gi.ns };
+            logger.info(`[parseLayerResponse] ${w.wall_id} start resolved from grid ${w.grid_start.alpha}×${w.grid_start.numeric} → EW=${gi.ew.toFixed(3)} NS=${gi.ns.toFixed(3)}`);
+          } else {
+            logger.warn(`[parseLayerResponse] ${w.wall_id} grid_start ${w.grid_start.alpha}×${w.grid_start.numeric} not found in MOORINGS_GRIDLINES — using raw coords`);
+          }
+        }
+
+        if (w.grid_end?.alpha && w.grid_end?.numeric) {
+          const gi = computeGridIntersection(
+            String(w.grid_end.alpha),
+            String(w.grid_end.numeric),
+            MOORINGS_GRIDLINES,
+          );
+          if (gi) {
+            endCoord = { x: gi.ew + (w.offset_m ?? 0), y: gi.ns };
+            logger.info(`[parseLayerResponse] ${w.wall_id} end   resolved from grid ${w.grid_end.alpha}×${w.grid_end.numeric} → EW=${gi.ew.toFixed(3)} NS=${gi.ns.toFixed(3)}`);
+          } else {
+            logger.warn(`[parseLayerResponse] ${w.wall_id} grid_end ${w.grid_end.alpha}×${w.grid_end.numeric} not found in MOORINGS_GRIDLINES — using raw coords`);
+          }
+        }
+
+        const dx = endCoord.x - startCoord.x;
+        const dy = endCoord.y - startCoord.y;
         const len = Math.sqrt(dx * dx + dy * dy);
         const wallH = w.height_m ?? h;
         const thick = w.thickness_m ?? 0.2;
@@ -3450,8 +3515,8 @@ Return JSON ONLY:
           geometry: JSON.stringify({
             type: 'wall',
             dimensions: { length: len, height: wallH, depth: thick, area: len * wallH, volume: len * wallH * thick },
-            location: { realLocation: { x: w.start?.x ?? 0, y: w.start?.y ?? 0, z: elev } },
-            start: w.start, end: w.end,
+            location: { realLocation: { x: startCoord.x, y: startCoord.y, z: elev } },
+            start: startCoord, end: endCoord,
           }),
           properties: JSON.stringify({ material: w.material, type: w.type ?? elType, fireRating: w.fire_rating }),
           quantity: len, unit: 'LM',
