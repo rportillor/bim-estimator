@@ -1866,8 +1866,8 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       const staticFloorY = coerceWithDatum(0, 0, staticFloorElevRaw).z;
 
       // ── Colour scheme (PDF convention):
-      //   X-axis lines (letter grid A–L, running N–S):    blue    (#1177CC)
-      //   Y-axis lines (number grid 1–9,  running E–W):   amber   (#CC7700)
+      //   X-axis lines (letter grid A–L, running E–W):    blue    (#1177CC)
+      //   Y-axis lines (number grid 1–9,  running N–S):   amber   (#CC7700)
       //   Wing / angled lines (M–Y, 10–19, 27.16°):       magenta (#AA00CC)
       //   CL transition lines (CLa / CL / CLb, 4.208°):   teal    (#00AA88)
       //     CL lines are distinct from wing lines — same angle family but separate structural zone.
@@ -2623,8 +2623,8 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           <div><span className="text-green-400 font-bold">■</span> Z = Elev (+ up)</div>
           <div className="mt-1 text-slate-400 text-[9px]">Origin: Grid A-9 = (0, 0, 0)</div>
           <div className="mt-1.5 border-t border-slate-600 pt-1 font-semibold text-[10px] text-slate-300 uppercase tracking-wide">Gridlines</div>
-          <div><span style={{color:'#1177CC'}} className="font-bold">■</span> A–L &nbsp;letter grid (N–S)</div>
-          <div><span style={{color:'#CC7700'}} className="font-bold">■</span> 1–9 &nbsp;&nbsp;number grid (E–W)</div>
+          <div><span style={{color:'#1177CC'}} className="font-bold">■</span> A–L &nbsp;letter grid (E–W)</div>
+          <div><span style={{color:'#CC7700'}} className="font-bold">■</span> 1–9 &nbsp;&nbsp;number grid (N–S)</div>
           <div><span style={{color:'#AA00CC'}} className="font-bold">■</span> M–Y / 10–19 wing (27.16°)</div>
           <div><span style={{color:'#00AA88'}} className="font-bold">■</span> CLa / CL / CLb &nbsp;(4.208°)</div>
           <div className="text-slate-400 text-[9px] mt-0.5">Ticks every 5 m</div>
