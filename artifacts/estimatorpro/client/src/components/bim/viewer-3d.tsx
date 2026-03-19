@@ -2105,34 +2105,40 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           // 10-19 gridline direction: (1, 0, tanW)/norm
           const n19Dir_x = 1/norm,    n19Dir_z = tanW/norm;
 
-          const CHAIN_OFFSET = 12; // metres perp from reference endpoints
-          const EXT_GAP     = 2.5; // gap between gridline endpoint and start of extension line
-          const EXT_OVERSHOOT = 1.0; // extension line continues past chain line
-          const TICK_H = 0.8;     // tick half-length along chain
+          // Same distances as the A-L south chain (SOUTH_Z=7, 1m gap, ±0.8 tick)
+          // but rotated by WING_ANG. Extension lines run along each M-Y gridline
+          // (myDir direction) just like A-L extensions run along each letter gridline.
+          const CHAIN_OFFSET = 7;   // metres from wing boundary — same as SOUTH_Z for A-L
+          const TICK_H = 0.8;       // tick half-length (same as A-L)
 
-          // ── M-Y chain (SE of wing south boundary) ──────────────────────────
+          // ── M-Y chain (SW of wing south boundary, extending M-Y lines outward) ──
+          // Chain runs parallel to Grid 19 (mySE direction), placed CHAIN_OFFSET m
+          // in -myDir (SW) from each M-Y south end.  Extension lines run along each
+          // M-Y gridline direction (-myDir) from 1 m past Grid 19 to 1 m past chain.
           const wingLetterLines = MOORINGS_GRIDLINES
             .filter(g => g.axis === 'X' && Math.abs(g.angle_deg - WING_ANG) < 0.1)
             .sort((a, b) => a.coord - b.coord);  // west (M) → east (Y)
 
           if (wingLetterLines.length >= 2) {
-            // Reference: south end of each M-Y line (start_m end)
+            // Reference: south end of each M-Y line (on Grid 19)
             const myAtt = wingLetterLines.map(g => {
-              const refX = g.coord + g.start_m * tanW;  // Three.js X of south end
-              const refZ = -g.start_m;                   // Three.js Z of south end
+              const refX = g.coord + g.start_m * tanW;   // Three.js X of south end
+              const refZ = -g.start_m;                    // Three.js Z of south end
+              // Chain is CHAIN_OFFSET m further out in -myDir (SW) from south end
               return { g, refX, refZ,
-                chainX: refX + CHAIN_OFFSET * mySE_x,
-                chainZ: refZ + CHAIN_OFFSET * mySE_z };
+                chainX: refX - CHAIN_OFFSET * myDir_x,
+                chainZ: refZ - CHAIN_OFFSET * myDir_z };
             });
 
-            // Chain line: first → last attachment (runs perp to M-Y = in mySE direction)
+            // Chain line runs in mySE direction (parallel to Grid 19)
             addLine2(myAtt[0].chainX, fl, myAtt[0].chainZ, myAtt[myAtt.length-1].chainX, fl, myAtt[myAtt.length-1].chainZ, DIM_BLUE);
 
             for (const att of myAtt) {
-              // Extension line: gap from gridline end → past chain line (with overshoot)
-              addLine2(att.refX + EXT_GAP*mySE_x, fl, att.refZ + EXT_GAP*mySE_z,
-                       att.chainX + EXT_OVERSHOOT*mySE_x, fl, att.chainZ + EXT_OVERSHOOT*mySE_z, EXT_BLUE);
-              // Tick perpendicular to extension (along chain direction = myDir)
+              // Extension: 1 m past south end in -myDir → 1 m past chain in -myDir
+              // (mirrors A-L: from Z=1 past Grid-9 to Z=SOUTH_Z+1)
+              addLine2(att.refX - 1*myDir_x, fl, att.refZ - 1*myDir_z,
+                       att.chainX - 1*myDir_x, fl, att.chainZ - 1*myDir_z, EXT_BLUE);
+              // Tick ±TICK_H in -myDir at chain (perpendicular to chain = perpendicular to mySE)
               addLine2(att.chainX - TICK_H*myDir_x, fl, att.chainZ - TICK_H*myDir_z,
                        att.chainX + TICK_H*myDir_x, fl, att.chainZ + TICK_H*myDir_z, DIM_BLUE);
             }
@@ -2151,26 +2157,29 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
             .sort((a, b) => b.coord - a.coord);  // north (10) → south (19)
 
           if (wingNumberLines.length >= 2) {
-            // Reference: east end of each 10-19 line (end_m end)
+            // Reference: east end of each 10-19 line (on Grid Y east boundary)
+            // Chain is CHAIN_OFFSET m further in +n19Dir (SE) from east end.
+            // Extension lines run along each 10-19 gridline direction (+n19Dir),
+            // mirroring how A-L extensions run along each letter gridline direction.
             const n19Att = wingNumberLines.map(g => {
               const nsAtEnd = g.coord - (g.end_m - g.start_m) * tanW;
               const refX = g.end_m;
               const refZ = -nsAtEnd;
               return { g, refX, refZ,
-                chainX: refX + CHAIN_OFFSET * n19NE_x,
-                chainZ: refZ + CHAIN_OFFSET * n19NE_z };
+                chainX: refX + CHAIN_OFFSET * n19Dir_x,
+                chainZ: refZ + CHAIN_OFFSET * n19Dir_z };
             });
 
-            // Chain line: Grid-10 → Grid-19 attachment (runs perp to 10-19 = in n19NE direction)
+            // Chain line connects all attachment points
             addLine2(n19Att[0].chainX, fl, n19Att[0].chainZ, n19Att[n19Att.length-1].chainX, fl, n19Att[n19Att.length-1].chainZ, DIM_BLUE);
 
             for (const att of n19Att) {
-              // Extension line: gap from gridline end → past chain line (with overshoot)
-              addLine2(att.refX + EXT_GAP*n19NE_x, fl, att.refZ + EXT_GAP*n19NE_z,
-                       att.chainX + EXT_OVERSHOOT*n19NE_x, fl, att.chainZ + EXT_OVERSHOOT*n19NE_z, EXT_BLUE);
-              // Tick along chain direction (= 10-19 line direction = n19Dir)
-              addLine2(att.chainX - TICK_H*n19Dir_x, fl, att.chainZ - TICK_H*n19Dir_z,
-                       att.chainX + TICK_H*n19Dir_x, fl, att.chainZ + TICK_H*n19Dir_z, DIM_BLUE);
+              // Extension: 1 m past east end in +n19Dir → 1 m past chain in +n19Dir
+              addLine2(att.refX + 1*n19Dir_x, fl, att.refZ + 1*n19Dir_z,
+                       att.chainX + 1*n19Dir_x, fl, att.chainZ + 1*n19Dir_z, EXT_BLUE);
+              // Tick ±TICK_H in n19NE (myDir) direction at chain
+              addLine2(att.chainX - TICK_H*n19NE_x, fl, att.chainZ - TICK_H*n19NE_z,
+                       att.chainX + TICK_H*n19NE_x, fl, att.chainZ + TICK_H*n19NE_z, DIM_BLUE);
             }
 
             for (let i = 0; i < n19Att.length - 1; i++) {
