@@ -60,7 +60,7 @@ export function normalizeDocumentForApi(doc: any) {
   };
 }
 import { insertProjectSchema, insertDocumentSchema, insertBoqItemSchema, insertReportSchema, insertAiConfigurationSchema, insertProcessingJobSchema, insertBimModelSchema, boqItems, bimElements, bimModels, documentImages } from "@shared/schema";
-import { db } from "./db";
+import { db, pool } from "./db";
 import { eq } from "drizzle-orm";
 // [*] REMOVED: RealQTOProcessor - using ConstructionWorkflowProcessor for all processing
 // import { RealQTOProcessor } from "./real-qto-processor";
@@ -2249,6 +2249,64 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use('/api', authenticateToken, (await import('./routes/advanced-bim-routes')).advancedBimRouter);
   // pipelineRouter — Sequential BIM extraction pipeline: start, status, confirm-grid, enrich
   app.use('/api/bim/pipeline', authenticateToken, (await import('./routes/pipeline-routes')).pipelineRouter);
+
+  // ── Vision-based element extraction with built-in validation ─────────────
+  // POST /api/bim/models/:modelId/extract-elements
+  // Body: { elementType: "exterior_wall", documentId?: string }
+  // Sends the uploaded PDF to Claude Vision, validates the result, and writes
+  // only clean elements to the DB — no manual surgery needed afterwards.
+  app.post('/api/bim/models/:modelId/extract-elements', authenticateToken, async (req: any, res: any) => {
+    const { modelId } = req.params;
+    const { elementType, documentId } = req.body ?? {};
+    try {
+      const { extractExteriorWalls } = await import('./services/bim-element-extractor');
+      const anthropic = req.app.get('anthropic') as import('@anthropic-ai/sdk').default;
+
+      if (!anthropic) {
+        return res.status(503).json({ error: 'Anthropic client not initialised on server' });
+      }
+
+      // Find the PDF for this model (use supplied documentId or pick the first PDF upload)
+      const docRow = await pool.query(
+        `SELECT file_path FROM project_documents
+         WHERE project_id = (SELECT project_id FROM bim_models WHERE id=$1)
+           AND (file_type ILIKE '%pdf%' OR original_name ILIKE '%.pdf')
+           ${documentId ? 'AND id=$2' : ''}
+         ORDER BY created_at DESC LIMIT 1`,
+        documentId ? [modelId, documentId] : [modelId],
+      );
+
+      // Fallback: scan the uploads directory for the A101 PDF
+      let pdfPath: string | null = docRow.rows[0]?.file_path ?? null;
+      if (!pdfPath) {
+        const uploadsDir = path.join(process.cwd(), 'uploads');
+        if (fs.existsSync(uploadsDir)) {
+          const files = fs.readdirSync(uploadsDir).filter(f => f.toLowerCase().endsWith('.pdf'));
+          if (files.length) pdfPath = path.join(uploadsDir, files[0]);
+        }
+      }
+      if (!pdfPath || !fs.existsSync(pdfPath)) {
+        return res.status(404).json({ error: 'No PDF found for this model' });
+      }
+
+      let extractionResult;
+      if (!elementType || elementType === 'exterior_wall') {
+        extractionResult = await extractExteriorWalls(modelId, pdfPath, anthropic);
+      } else {
+        return res.status(400).json({ error: `Extraction for element type "${elementType}" not yet implemented` });
+      }
+
+      res.json({
+        success:  true,
+        inserted: extractionResult.inserted,
+        skipped:  extractionResult.skipped,
+        log:      extractionResult.reasons,
+      });
+    } catch (err: any) {
+      console.error('[extract-elements]', err);
+      res.status(500).json({ error: err.message ?? 'Extraction failed' });
+    }
+  });
 
   // BoQ Items endpoints
   // BoQ endpoint alias for consistency
