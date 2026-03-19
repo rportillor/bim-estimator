@@ -2881,6 +2881,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   */
 
+  // ── Grid spacings: Claude Vision-extracted dimension annotations ─────────
+  // RULE: All dimension values come from Claude Vision reading the printed text
+  // on the drawing. This endpoint exposes stored grid_spacing elements so the
+  // viewer never has to derive spacings mathematically.
+  app.get('/api/bim/models/:id/grid-spacings', authenticateToken, async (req, res) => {
+    try {
+      const { id: modelId } = req.params;
+      const userId = req.user?.id;
+      const model = await storage.getBimModel(modelId);
+      if (!model) return res.status(404).json({ error: 'BIM model not found' });
+      const project = await storage.getProject(model.projectId);
+      if (!project || project.userId !== userId) return res.status(403).json({ error: 'Access denied' });
+
+      const allElements = await storage.getBimElements(modelId);
+      const spacings = allElements
+        .filter(e => e.elementType === 'grid_spacing')
+        .map(e => {
+          const g = typeof e.geometry === 'string' ? JSON.parse(e.geometry) : (e.geometry ?? {});
+          return {
+            chain:      g.chain      ?? null,
+            from_label: g.from_label ?? null,
+            to_label:   g.to_label   ?? null,
+            spacing_mm: g.spacing_mm ?? null,
+          };
+        })
+        .filter(s => s.spacing_mm != null);
+
+      res.json({ spacings, count: spacings.length });
+    } catch (err) {
+      console.error('[grid-spacings]', err);
+      res.status(500).json({ error: 'Failed to fetch grid spacings' });
+    }
+  });
+
   // [*] FIX: Add missing download endpoint for Export IFC button
   app.get('/api/bim/models/:id/download', authenticateToken, async (req, res) => {
     try {

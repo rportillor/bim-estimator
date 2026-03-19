@@ -3235,6 +3235,7 @@ MANDATORY EXTRACTION REQUIREMENTS:
   /** Map layer name → bim_elements.element_type values */
   static readonly LAYER_ELEMENT_TYPES: Record<string, string[]> = {
     'gridlines':       ['grid_line'],
+    'grid_spacings':   ['grid_spacing'],
     'perimeter_walls': ['exterior_wall', 'foundation_wall', 'retaining_wall'],
     'interior_walls':  ['interior_wall', 'partition'],
     'columns':         ['column'],
@@ -3276,6 +3277,7 @@ MANDATORY EXTRACTION REQUIREMENTS:
   /** Canonical extraction order for layers (skeleton → structure → openings → services) */
   static readonly LAYER_ORDER = [
     'gridlines',
+    'grid_spacings',
     'perimeter_walls',
     'interior_walls',
     'columns',
@@ -3466,6 +3468,41 @@ For each MEP element:
 
 Return JSON ONLY:
 { "mep": [ { "mep_id","system","type","x","y","size","notes" }, ... ] }`,
+
+      grid_spacings: ctx + `TASK: Read the PRINTED DIMENSION CHAIN ANNOTATIONS from this rendered plan drawing.
+You are looking at a high-resolution image of an architectural floor plan. Read it exactly as a human reviewer would:
+— Find the dimension chains (lines with tick marks and bold numbers between grid bubble circles)
+— Read each PRINTED NUMBER exactly as it appears (millimetres, integer)
+— Do NOT derive or compute any values — ONLY transcribe what is printed
+
+There are four dimension chains on this drawing:
+
+CHAIN "AL" — Rectangular EW gridlines (A through L), dimension chain runs along the south or north edge:
+  Pairs: A-B, B-C, C-D, D-E, E-F, F-G, G-Ga, Ga-H, H-J, J-K, K-L
+
+CHAIN "19" — Rectangular NS gridlines (9 through 1), chain runs along the west or east edge:
+  Pairs: 9-8, 8-7, 7-6, 6-5, 5-4, 4-3, 3-2, 2-1
+
+CHAIN "MY" — Angled EW gridlines (M through Y), chain runs along the south edge of the wing section:
+  Pairs: M-N, N-P, P-Q, Q-R, R-S, S-Sa, Sa-T, T-U, U-V, V-W, W-X, X-Y
+
+CHAIN "1019" — Angled NS gridlines (10 through 19), chain runs along the east edge of the wing section:
+  Pairs: 10-11, 11-12, 12-13, 13-14, 14-15, 15-16, 16-17, 17-18, 18-19
+
+For each annotated spacing value you can clearly read, output one entry.
+Use null for any value you cannot clearly read — never guess or estimate.
+
+Return JSON ONLY — no prose, no explanation:
+{
+  "grid_spacings": [
+    { "chain": "AL",   "from": "A",  "to": "B",   "spacing_mm": 4710 },
+    { "chain": "AL",   "from": "B",  "to": "C",   "spacing_mm": 3489 },
+    { "chain": "19",   "from": "9",  "to": "8",   "spacing_mm": 5885 },
+    { "chain": "MY",   "from": "M",  "to": "N",   "spacing_mm": 3383 },
+    { "chain": "MY",   "from": "N",  "to": "P",   "spacing_mm": 1902 },
+    { "chain": "1019", "from": "10", "to": "11",  "spacing_mm": null  }
+  ]
+}`,
     };
 
     return instructions[layer] || ctx + `Extract all BIM elements visible at the ${floor.name} level. Return JSON.`;
@@ -3650,6 +3687,27 @@ Return JSON ONLY:
           quantity: 1, unit: 'EA',
         } as any);
       }
+    } else if (layer === 'grid_spacings') {
+      // RULE: ALL dimension values come from Claude Vision reading the actual printed text
+      // on the drawing. No mathematical derivation is permitted.
+      for (const s of (result?.grid_spacings ?? [])) {
+        if (!s.from || !s.to || s.spacing_mm == null) continue;
+        elements.push({
+          id: randomUUID(), elementType: 'grid_spacing',
+          name: `${s.chain ?? 'UNK'}:${s.from}-${s.to}`,
+          storeyName: floor.name,
+          geometry: JSON.stringify({
+            type: 'grid_spacing',
+            chain: s.chain,
+            from_label: String(s.from),
+            to_label: String(s.to),
+            spacing_mm: Number(s.spacing_mm),
+          }),
+          properties: JSON.stringify({ chain: s.chain }),
+          quantity: s.spacing_mm / 1000, unit: 'M',
+        } as any);
+      }
+      logger.info(`[parseLayerResponse] grid_spacings: ${elements.length} spacing annotations extracted from drawing`);
     }
 
     return elements;
@@ -3754,18 +3812,19 @@ Return JSON ONLY:
     const prompt = this.buildLayerPrompt(floor, layer, projectName);
     const docList = pdfBuffers.map(({ key }, i) => `  ${i + 1}. ${path.basename(key)}`).join('\n');
 
-    // ── Image-mode vs document-mode ───────────────────────────────────────────
-    // For spatial layers (walls, columns, slabs, etc.) render the drawing to a
-    // PNG image before sending to Claude.  This gives Claude Vision full spatial
-    // fidelity to read actual annotation text printed on the drawing rather than
-    // relying on PDF byte-stream parsing.  The process mirrors what a human
-    // reviewer does: look at the rendered drawing, read the bold dimension text,
-    // and cross-reference with the grid coordinate table in the prompt.
+    // ── Image-mode (MANDATORY for ALL layers) ────────────────────────────────
+    // RULE: Every layer extraction MUST use image-based Claude Vision.
+    // Render the drawing to a high-resolution PNG and send it to Claude Vision
+    // so Claude reads the actual printed text exactly as a human reviewer would.
+    // NO mathematical derivation of dimension values is permitted anywhere in the
+    // pipeline. If a value is not printed on the drawing it does not belong here.
     //
-    // Gridlines and MEP keep the document approach (text extraction is faster).
+    // This applies to ALL layer types without exception. Gridlines use the PDF
+    // text parser as a fast pre-flight check (it reads the same PDF byte stream
+    // the printer produces), but image mode is the canonical fallback.
     const SPATIAL_LAYERS = new Set([
       'perimeter_walls', 'interior_walls', 'columns', 'slabs',
-      'doors', 'windows', 'stairs',
+      'doors', 'windows', 'stairs', 'mep', 'grid_spacings',
     ]);
 
     let content: any[];

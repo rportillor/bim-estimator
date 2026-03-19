@@ -412,6 +412,37 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
   const buildingCenterRef = useRef<THREE.Vector3>(new THREE.Vector3(21, -4.65, 9.95));
   const buildingSizeRef = useRef<THREE.Vector3>(new THREE.Vector3(84, 5, 55));
 
+  // ── Grid spacings: Claude Vision-extracted dimension annotations ──────────
+  // RULE: All dimension values come from Claude Vision reading the printed text
+  // on the drawing. The formula is used ONLY as a temporary fallback when
+  // grid_spacings have not yet been extracted for this model.
+  // Key format: "${chain}:${from}-${to}" e.g. "MY:M-N", "AL:A-B", "19:9-8"
+  const [gridSpacings, setGridSpacings] = useState<Map<string,number>>(new Map());
+
+  useEffect(() => {
+    if (!modelId) return;
+    const token = localStorage.getItem('auth_token');
+    const headers: Record<string,string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    fetch(`/api/bim/models/${modelId}/grid-spacings`, { credentials: 'include', headers })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data?.spacings?.length) {
+          console.warn('[viewer-3d] grid_spacings not yet extracted — using formula fallback. Run grid_spacings layer extraction to populate.');
+          return;
+        }
+        const m = new Map<string,number>();
+        for (const s of data.spacings) {
+          if (s.chain && s.from_label && s.to_label && s.spacing_mm != null) {
+            m.set(`${s.chain}:${s.from_label}-${s.to_label}`, s.spacing_mm);
+          }
+        }
+        console.info(`[viewer-3d] grid_spacings loaded: ${m.size} annotations from drawing`);
+        setGridSpacings(m);
+      })
+      .catch(() => { /* non-fatal: formula fallback will be used */ });
+  }, [modelId]);
+
   // ── Constraint-propagating move handler ──────────────────────────────────
   const handleElementMove = useCallback((result: TransformResult) => {
     if (!modelId || !result.elementId) return;
@@ -2100,7 +2131,10 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         }
         for (let i = 0; i < rectEWLines.length - 1; i++) {
           const a = rectEWLines[i], b = rectEWLines[i+1];
-          addSpacingLbl(Math.round((b.coord - a.coord)*1000), (a.coord+b.coord)/2, SOUTH_Z, `sg:dchain:ew:${i}`);
+          // Prefer Claude Vision-extracted spacing; formula is a temporary fallback only.
+          const spacing_ew = gridSpacings.get(`AL:${a.label}-${b.label}`)
+            ?? Math.round((b.coord - a.coord)*1000);
+          addSpacingLbl(spacing_ew, (a.coord+b.coord)/2, SOUTH_Z, `sg:dchain:ew:${i}`);
         }
 
         // ── CL zone chain: CLa → CL → CLb — angled parallel to CL lines ────────
@@ -2193,7 +2227,10 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         }
         for (let i = 0; i < rectNSLines.length - 1; i++) {
           const a = rectNSLines[i], b = rectNSLines[i+1];
-          addSpacingLbl(Math.round((b.coord - a.coord)*1000), WEST_X, -(a.coord+b.coord)/2, `sg:dchain:ns:${i}`);
+          // Prefer Claude Vision-extracted spacing; formula is a temporary fallback only.
+          const spacing_ns = gridSpacings.get(`19:${a.label}-${b.label}`)
+            ?? Math.round((b.coord - a.coord)*1000);
+          addSpacingLbl(spacing_ns, WEST_X, -(a.coord+b.coord)/2, `sg:dchain:ns:${i}`);
         }
 
         // ── ANGLED CHAINS for wing lines ──────────────────────────────────────
@@ -2256,12 +2293,12 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
 
             for (let i = 0; i < myAtt.length - 1; i++) {
               const a = myAtt[i], b = myAtt[i+1];
-              // Drawing A101 annotates the HORIZONTAL (EW) bay width between M-Y gridlines,
-              // i.e. the raw coordinate difference at NS=0 in millimetres.
-              // Confirmed by image extraction: M-N=3383, N-P=1902, S-Sa=749, Sa-T=2301 etc.
-              // all match |Δcoord| × 1000 exactly. No norm factor.
-              const spacing_mm = Math.round(Math.abs(b.g.coord - a.g.coord) * 1000);
-              addSpacingLbl(spacing_mm, (a.chainX+b.chainX)/2, (a.chainZ+b.chainZ)/2, `sg:dchain:my:${i}`);
+              // Prefer Claude Vision-extracted spacing from drawing (stored in DB via
+              // grid_spacings extraction layer). Formula fallback only until extraction runs.
+              // Drawing annotates HORIZONTAL (EW) bay widths (confirmed: |Δcoord|×1000).
+              const spacing_my = gridSpacings.get(`MY:${a.g.label}-${b.g.label}`)
+                ?? Math.round(Math.abs(b.g.coord - a.g.coord) * 1000);
+              addSpacingLbl(spacing_my, (a.chainX+b.chainX)/2, (a.chainZ+b.chainZ)/2, `sg:dchain:my:${i}`);
             }
           }
 
@@ -2298,10 +2335,11 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
 
             for (let i = 0; i < n19Att.length - 1; i++) {
               const a = n19Att[i], b = n19Att[i+1];
-              // Same logic as 1-9: raw coord difference × norm (slope factor).
-              // 10-19 coord = NS at start_m; chain runs along Grid-Y slope.
-              const spacing_mm = Math.round(Math.abs(a.g.coord - b.g.coord) * norm * 1000);
-              addSpacingLbl(spacing_mm, (a.chainX+b.chainX)/2, (a.chainZ+b.chainZ)/2, `sg:dchain:1019:${i}`);
+              // Prefer Claude Vision-extracted spacing from drawing (stored in DB via
+              // grid_spacings extraction layer). Formula fallback only until extraction runs.
+              const spacing_1019 = gridSpacings.get(`1019:${a.g.label}-${b.g.label}`)
+                ?? Math.round(Math.abs(a.g.coord - b.g.coord) * norm * 1000);
+              addSpacingLbl(spacing_1019, (a.chainX+b.chainX)/2, (a.chainZ+b.chainZ)/2, `sg:dchain:1019:${i}`);
             }
           }
         }
@@ -2555,7 +2593,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       }
       setIsLoading(false); // Reset so re-runs aren't blocked by stale isLoading=true
     };
-  },[ready, modelId, visibleStoreys]); // re-render on floor toggle
+  },[ready, modelId, visibleStoreys, gridSpacings]); // re-render on floor toggle or new spacings
 
   return (
     <Card className="w-full h-full">
