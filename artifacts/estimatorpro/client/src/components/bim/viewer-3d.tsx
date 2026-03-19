@@ -2344,38 +2344,47 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         }
       }
 
-      // Pass 2: assign stagger index so nearby labels don't overlap.
-      // Collision detection: any two labels whose 3D centres are within one sprite
-      // width of each other will visually overlap from most camera angles.
-      // 3.35 m radius catches all tight grid pairs whose labels genuinely overlap:
-      //   CL–CLa / CL–CLb (3.285 m), K–L (3.050 m), H–J (3.051 m),
-      //   F–G (2.301 m), D–E (2.546 m), G–Ga (0.749 m)
-      // … while staying below B–C (3.489 m) which does NOT overlap.
-      const CLUSTER_DIST = 3.35;
-      const STAGGER_EW   = 2.5;  // metres per slot, alternating east/west
-      const stackCount: number[] = new Array(allIntersections.length).fill(0);
+      // Pass 2 — 4-quadrant label placement (one uniform rule for every label).
+      // For each intersection try 4 candidate positions around the dot in order:
+      //   east, west, south, north  (each offset QUAD_R metres from the dot centre).
+      // The first candidate whose centre is at least LABEL_CLEAR metres from every
+      // already-placed label wins.  Same algorithm for all grid families — no special cases.
+      const QUAD_R     = 2.5;   // metres from dot to label centre
+      const LABEL_CLEAR = 2.5;  // minimum separation between any two placed label centres
+      const QUAD_OFFSETS: [number, number][] = [
+        [ QUAD_R,  0     ],   // east  (right)
+        [-QUAD_R,  0     ],   // west  (left)
+        [ 0,       QUAD_R],   // south
+        [ 0,      -QUAD_R],   // north
+      ];
+      const lPlacedEW: number[] = new Array(allIntersections.length).fill(0);
+      const lPlacedNS: number[] = new Array(allIntersections.length).fill(0);
+
       for (let i = 0; i < allIntersections.length; i++) {
-        let slot = 0;
-        for (let j = 0; j < i; j++) {
-          const de = allIntersections[i].ew - allIntersections[j].ew;
-          const dn = allIntersections[i].ns - allIntersections[j].ns;
-          if (Math.sqrt(de*de + dn*dn) < CLUSTER_DIST) {
-            slot = Math.max(slot, stackCount[j] + 1);
+        const { ew, ns } = allIntersections[i];
+        // Default: east quadrant (will be overridden if a clear slot is found)
+        let bestEW = ew + QUAD_OFFSETS[0][0];
+        let bestNS = ns + QUAD_OFFSETS[0][1];
+        for (const [dew, dns] of QUAD_OFFSETS) {
+          const tryEW = ew + dew;
+          const tryNS = ns + dns;
+          let clear = true;
+          for (let j = 0; j < i; j++) {
+            const de = tryEW - lPlacedEW[j];
+            const dn = tryNS - lPlacedNS[j];
+            if (Math.sqrt(de * de + dn * dn) < LABEL_CLEAR) { clear = false; break; }
           }
+          if (clear) { bestEW = tryEW; bestNS = tryNS; break; }
         }
-        stackCount[i] = slot;
+        lPlacedEW[i] = bestEW;
+        lPlacedNS[i] = bestNS;
       }
 
-      // Pass 3: render markers and labels; collisions offset horizontally (not vertically)
+      // Pass 3: render markers and labels using pre-computed quadrant positions
       for (let idx = 0; idx < allIntersections.length; idx++) {
         const { ew, ns, alphaLabel, numericLabel, isAngled } = allIntersections[idx];
-        const stackSlot = stackCount[idx];
-        // Stagger colliding labels EAST/WEST (X direction): one left, one right.
-        // slot 0 = at dot, slot 1 = +2.5 m east, slot 2 = -2.5 m west, etc.
-        const staggerX = stackSlot === 0 ? 0
-          : stackSlot % 2 === 1 ?  Math.ceil(stackSlot  / 2) * STAGGER_EW
-          :                        -Math.floor(stackSlot / 2) * STAGGER_EW;
-        const labelEW = ew + staggerX;
+        const labelEW = lPlacedEW[idx];
+        const labelNS = lPlacedNS[idx];
         const labelY  = staticFloorY + 1.0;
 
         // Intersection marker (sphere)
@@ -2412,7 +2421,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         const intTex = new THREE.CanvasTexture(intCanvas);
         const intSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: intTex, transparent: true, depthTest: false }));
         intSprite.scale.set(2.8, 0.875, 1);
-        intSprite.position.set(labelEW, labelY, -ns);  // labelEW already includes E/W stagger
+        intSprite.position.set(labelEW, labelY, -labelNS);  // quadrant-placed position
         intSprite.name = `sg:int:${alphaLabel}-${numericLabel}:lbl`;
         three.current?.scene.add(intSprite);
 
