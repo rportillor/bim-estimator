@@ -62,16 +62,37 @@ function coerceDimToMetres(v: number): number {
   return Math.abs(v) > 50 ? v / 1000 : v;
 }
 
+/**
+ * Extract wall start/end endpoints from a BIM element.
+ *
+ * The real-qto-processor stores start/end in the GEOMETRY JSON column
+ * (geometry.start, geometry.end).  Older or pipeline-generated elements
+ * may store them in the PROPERTIES JSON column instead.  This helper
+ * checks both so all rendering code works regardless of origin.
+ */
+function wallSE(e: any): { start: {x:number;y:number} | null; end: {x:number;y:number} | null } {
+  const start = e?.geometry?.start ?? e?.properties?.start ?? null;
+  const end   = e?.geometry?.end   ?? e?.properties?.end   ?? null;
+  return { start, end };
+}
+
+/** Return true for any wall-type element regardless of naming convention. */
+function isWallType(e: any): boolean {
+  const t = (e?.elementType || e?.type || '').toLowerCase();
+  return t.includes('wall');
+}
+
 function getDims(e:any){
   // 🏗️ ENHANCED: Extract proper dimensions based on element type
   const geom = e?.geometry?.dimensions || {};
   const props = e?.properties?.dimensions || {};
   const type = (e.elementType || e.type || "").toLowerCase();
   
-  if(type.includes('wall') && e.properties?.start && e.properties?.end) {
+  const { start: _wallStart, end: _wallEnd } = wallSE(e);
+  if(type.includes('wall') && _wallStart && _wallEnd) {
     // For walls: calculate length from start/end points, use properties for thickness/height
-    const start = e.properties.start;
-    const end = e.properties.end;
+    const start = _wallStart;
+    const end = _wallEnd;
     const length = Math.sqrt(Math.pow(end.x - start.x, 2) + Math.pow(end.y - start.y, 2));
     // Dimensions are in metres from real-qto-processor (it converts mm→m)
     const actualLength = coerceDimToMetres(length || geom.width || geom.length || 0);
@@ -116,9 +137,10 @@ function _getRealLocation(e:any){
   const type = (e.elementType || e.type || "").toLowerCase();
   
   // 🏗️ WALLS: Use start/end midpoint for accurate positioning
-  if(type.includes('wall') && e.properties?.start && e.properties?.end) {
-    const start = e.properties.start;
-    const end = e.properties.end;
+  const { start: _se_start, end: _se_end } = wallSE(e);
+  if(type.includes('wall') && _se_start && _se_end) {
+    const start = _se_start;
+    const end = _se_end;
     const midX = (start.x + end.x) / 2;
     const midY = (start.y + end.y) / 2;
     // Use Z from geometry if available, otherwise default
@@ -169,9 +191,10 @@ function detectGridFromElements(elements: any[]): { xs: number[]; ys: number[] }
     const loc = e?.geometry?.location?.realLocation || parsedLocation || { x: 0, y: 0, z: 0 };
     
     // Use wall start/end points for grid detection
-    if (t.includes("WALL") && props.start && props.end) {
-      xs.push(props.start.x, props.end.x);
-      ys.push(props.start.y, props.end.y);
+    const { start: _gse_s, end: _gse_e } = wallSE(e);
+    if (t.includes("WALL") && _gse_s && _gse_e) {
+      xs.push(_gse_s.x, _gse_e.x);
+      ys.push(_gse_s.y, _gse_e.y);
     } 
     // Use column centers and add column width/depth boundaries
     else if (t.includes("COLUMN")) {
@@ -358,10 +381,8 @@ function createGridLabel(text: string, color: string = '#888888', fontSize: numb
 
 function getWallRotation(e:any) {
   // 🏗️ Calculate wall rotation from start/end points
-  if(!e.properties?.start || !e.properties?.end) return 0;
-  
-  const start = e.properties.start;
-  const end = e.properties.end;
+  const { start, end } = wallSE(e);
+  if(!start || !end) return 0;
   const dx = end.x - start.x;
   const dy = end.y - start.y;
   
@@ -735,9 +756,10 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       
       // Build connectivity maps
       elements.forEach((el: any, idx: number) => {
-        if(el.elementType === 'WALL' && el.properties?.start && el.properties?.end) {
-          const startKey = `${el.properties.start.x},${el.properties.start.y}`;
-          const endKey = `${el.properties.end.x},${el.properties.end.y}`;
+        const { start: _cs, end: _ce } = wallSE(el);
+        if(isWallType(el) && _cs && _ce) {
+          const startKey = `${_cs.x},${_cs.y}`;
+          const endKey = `${_ce.x},${_ce.y}`;
           if(!wallConnections.has(startKey)) wallConnections.set(startKey, []);
           if(!wallConnections.has(endKey)) wallConnections.set(endKey, []);
           wallConnections.get(startKey).push({el, idx, isStart: true});
@@ -1655,10 +1677,11 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         let mesh = new THREE.Mesh(geo, mat);
         
         // 🏗️ REALISTIC BUILDING POSITIONING: Use actual extracted coordinates from Claude analysis
-        if(isWall && e.properties?.start && e.properties?.end) {
+        const { start: _wse_start, end: _wse_end } = wallSE(e);
+        if(isWall && _wse_start && _wse_end) {
           // Walls: coerce start/end to metres + datum offset, then position at midpoint
-          const rawStart = e.properties.start;
-          const rawEnd = e.properties.end;
+          const rawStart = _wse_start;
+          const rawEnd = _wse_end;
           const csStart = coerceWithDatum(Number(rawStart.x||0), Number(rawStart.y||0), 0);
           const csEnd = coerceWithDatum(Number(rawEnd.x||0), Number(rawEnd.y||0), 0);
           const start = { x: csStart.x, y: csStart.y };
@@ -1672,7 +1695,8 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
             continue; // Truly empty — skip
           }
           const wallHeight = dims.height;
-          const wallThickness = dims.width;
+          // dims.depth = wall thickness (0.2–0.4m); dims.width = wall length (set by getDims from start/end calc)
+          const wallThickness = Math.max(0.05, dims.depth || 0.3);
           
           // Create properly sized wall geometry
           const wallGeo = new THREE.BoxGeometry(wallLength, wallHeight, wallThickness);
@@ -2486,7 +2510,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       console.log(`🏗️ Building Analysis:`, {
         center: {x: center.x.toFixed(2), y: center.y.toFixed(2), z: center.z.toFixed(2)},
         size: {x: size.x.toFixed(2), y: size.y.toFixed(2), z: size.z.toFixed(2)},
-        wallCount: elements.filter((e: any) => e.elementType === 'WALL').length,
+        wallCount: elements.filter((e: any) => isWallType(e)).length,
         elementTypes: Array.from(new Set(elements.map((e: any) => e.elementType)))
       });
 
