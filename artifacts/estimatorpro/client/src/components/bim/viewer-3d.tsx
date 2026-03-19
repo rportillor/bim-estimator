@@ -85,51 +85,68 @@ function isWallType(e: any): boolean {
 function getDims(e:any){
   // 🏗️ ENHANCED: Extract proper dimensions based on element type
   const geom = e?.geometry?.dimensions || {};
+  const geoRoot = e?.geometry || {};
   const props = e?.properties?.dimensions || {};
   const type = (e.elementType || e.type || "").toLowerCase();
-  
+
+  // ── RAMP: annular ring geometry ─────────────────────────────────────────
+  if (type.includes('ramp')) {
+    const outerR = geoRoot.outerRadius ?? geom.outerRadius ?? 9.0;
+    const innerR = geoRoot.innerRadius ?? geom.innerRadius ?? 5.0;
+    const h      = geoRoot.heightRise ?? geom.height ?? 4.65;
+    return { width: outerR * 2, height: h, depth: outerR * 2,
+             _isRamp: true, _innerRadius: innerR, _outerRadius: outerR };
+  }
+
+  // ── SLAB: outline polygon ────────────────────────────────────────────────
+  if (type.includes('slab') || type.includes('floor')) {
+    const outline = geoRoot.outline as Array<{x:number;y:number}> | undefined;
+    const thick   = geom.thickness ?? geom.height ?? 0.20;
+    if (outline && outline.length >= 3) {
+      // Bounding box of outline for rough fallback dims
+      const xs = outline.map(p => p.x), ys = outline.map(p => p.y);
+      const w = Math.max(...xs) - Math.min(...xs);
+      const d = Math.max(...ys) - Math.min(...ys);
+      return { width: w || 42, height: thick, depth: d || 38,
+               _isSlab: true, _outline: outline, _thickness: thick };
+    }
+    return { width: geom.width ?? 42, height: thick, depth: geom.depth ?? 38 };
+  }
+
+  // ── WALLS: length computed from start/end ────────────────────────────────
   const { start: _wallStart, end: _wallEnd } = wallSE(e);
   if(type.includes('wall') && _wallStart && _wallEnd) {
-    // For walls: calculate length from start/end points, use properties for thickness/height
     const start = _wallStart;
     const end = _wallEnd;
     const length = Math.sqrt(Math.pow(end.x - start.x, 2) + Math.pow(end.y - start.y, 2));
-    // Dimensions are in metres from real-qto-processor (it converts mm→m)
     const actualLength = coerceDimToMetres(length || geom.width || geom.length || 0);
     const actualHeight = coerceDimToMetres(props.height || geom.height || 0);
-    const actualDepth = coerceDimToMetres(props.width || geom.depth || geom.width || 0);
-
-    // Only render if we have real dimensions — no fake minimums
+    const actualDepth  = coerceDimToMetres(props.width || geom.depth || geom.width || 0);
     if (actualLength <= 0 || actualHeight <= 0) return null;
     return {
       width:  Math.min(500, actualLength),
       height: Math.min(50,  actualHeight),
-      depth:  Math.max(0.001, Math.min(5, actualDepth)), // depth can be thin but not zero (would crash BoxGeometry)
+      depth:  Math.max(0.001, Math.min(5, actualDepth)),
     };
   }
 
-  // For other elements: coerce to metres (handles both mm and m values)
+  // ── OTHER ELEMENTS ───────────────────────────────────────────────────────
   let width  = coerceDimToMetres(Number(geom.width ?? geom.length ?? props.width ?? geom.x ?? 0));
   let height = coerceDimToMetres(Number(geom.height ?? props.height ?? geom.y ?? 0));
   let depth  = coerceDimToMetres(Number(geom.depth ?? props.depth ?? geom.z ?? 0));
 
-  // Render even with partial dimensions — show what we have
   if ((!width || !isFinite(width)) && (!height || !isFinite(height)) && (!depth || !isFinite(depth))) {
-    return null; // All three missing — truly empty element
+    return null;
   }
   width  = isFinite(width)  ? width  : 0;
   height = isFinite(height) ? height : 0;
   depth  = isFinite(depth)  ? depth  : 0;
-
-  // Only render elements with real dimensions — no fake minimums
   if (width <= 0 && height <= 0 && depth <= 0) return null;
   width  = Math.min(500, Math.max(0, width));
   height = Math.min(50,  Math.max(0, height));
   depth  = Math.min(500, Math.max(0, depth));
-  // At least 2 of 3 dimensions must be > 0 to be renderable
   const nonZero = (width > 0 ? 1 : 0) + (height > 0 ? 1 : 0) + (depth > 0 ? 1 : 0);
   if (nonZero < 2) return null;
-
   return { width, height, depth };
 }
 
@@ -1338,7 +1355,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         const isInteriorWall = isWall && !isExteriorWall;
         const isColumn = /(column|pillar|post)/.test(type);
         const isBeam = /(beam|girder|joist)/.test(type);
-        const isFoundation = /(foundation|footing|basement|slab|grade)/.test(type);
+        const isFoundation = /(foundation|footing|basement|grade)/.test(type);
         
         // Floors & Slabs
         const isSlab = /(slab|floor|deck)/.test(type);
@@ -1352,6 +1369,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         
         // Vertical Transportation & Circulation
         const isStair = /(stair|step|riser|tread|flight)/.test(type);
+        const isRamp  = /^ramp/.test(type);
         const isRailing = /(railing|handrail|guardrail|balustrade)/.test(type);
         const isElevator = /(elevator|lift)/.test(type);
         const isEscalator = /(escalator|moving.walk)/.test(type);
@@ -1430,11 +1448,24 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           color = 0x696969; // Dark gray for foundation
           materialProps.roughness = 0.95;
         } else if(isSlab || isFloor){
-          // Floor slabs: Wide, thin geometry, lighter than foundation
-          const thick = Math.min(dims.height, 0.25); // Typical slab thickness
-          geo = new THREE.BoxGeometry(dims.width, thick, dims.depth);
-          geo.translate(0, thick/2, 0); // Bottom edge at origin
-          color = 0xE6E6FA; // Light lavender for floor slabs
+          // Floor slabs: ExtrudeGeometry from outline when available, box otherwise
+          const thick = (dims as any)._thickness ?? Math.min(dims.height, 0.25);
+          const outline = (dims as any)._outline as Array<{x:number;y:number}> | undefined;
+          if (outline && outline.length >= 3) {
+            try {
+              const slabShape = new THREE.Shape(outline.map((pt: {x:number;y:number}) => new THREE.Vector2(pt.x, pt.y)));
+              geo = new THREE.ExtrudeGeometry(slabShape, { depth: thick, bevelEnabled: false, steps: 1 });
+              geo.rotateX(-Math.PI / 2);   // XY → XZ: shape X→X, shape Y→Z (-NS), extrude→Y (up)
+            } catch(slabErr) {
+              console.warn('[viewer-3d] slab outline extrude failed, falling back to box', slabErr);
+              geo = new THREE.BoxGeometry(dims.width, thick, dims.depth);
+              geo.translate(0, thick / 2, 0);
+            }
+          } else {
+            geo = new THREE.BoxGeometry(dims.width, thick, dims.depth);
+            geo.translate(0, thick / 2, 0);
+          }
+          color = 0xC8C8C0;               // light warm-gray concrete
           materialProps.roughness = 0.8;
         } else if(isRoof){
           // Roof: Similar to floor but different color
@@ -1479,6 +1510,26 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           geo.translate(0, (dims.height * 0.8)/2, 0); // Bottom edge at origin
           color = 0xCD853F; // Peru/brown for stairs
           materialProps.roughness = 0.8;
+        } else if(isRamp){
+          // Circular ramp: annular ring (hollow cylinder viewed from above)
+          const outerR = (dims as any)._outerRadius ?? dims.width / 2;
+          const innerR = (dims as any)._innerRadius ?? (outerR * 0.55);
+          const rampH  = Math.max(0.15, dims.height);
+          try {
+            const rampShape = new THREE.Shape();
+            rampShape.absarc(0, 0, outerR, 0, Math.PI * 2, false);
+            const rampHole = new THREE.Path();
+            rampHole.absarc(0, 0, innerR, 0, Math.PI * 2, true);
+            rampShape.holes.push(rampHole);
+            geo = new THREE.ExtrudeGeometry(rampShape, { depth: rampH, bevelEnabled: false, steps: 1 });
+            geo.rotateX(-Math.PI / 2);        // XY → XZ (lay flat)
+          } catch(rampErr) {
+            console.warn('[viewer-3d] ramp ring extrude failed, falling back to cylinder', rampErr);
+            geo = new THREE.CylinderGeometry(outerR, outerR, rampH, 32);
+            geo.translate(0, rampH / 2, 0);
+          }
+          color = 0x99996A;                   // olive-gray concrete
+          materialProps.roughness = 0.85;
         } else if(isElevator){
           // Elevators: Large box with metallic finish
           geo = new THREE.BoxGeometry(dims.width, dims.height, dims.depth);
@@ -1758,9 +1809,18 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
             endSphere.position.copy(endPoint);
             root.add(endSphere);
           }
-        } else if(isSlab || isFloor) {
-          // Slabs: Bottom edge on floor level
+        } else if(isRamp) {
+          // Circular ramp: position ring center at ramp center coords
+          // p.x = EW, p.y = elevation (z), p.z = -NS (Three.js convention)
           mesh.position.set(p.x, p.y, p.z);
+        } else if(isSlab || isFloor) {
+          // Slabs: outline uses absolute building coords — offset only by elevation
+          if ((dims as any)._isSlab) {
+            // Outline coords are absolute; only set the floor elevation
+            mesh.position.set(0, p.y, 0);
+          } else {
+            mesh.position.set(p.x, p.y, p.z);
+          }
         } else if(isPlumbing && e.properties?.start && e.properties?.end) {
           // 🔗 CONNECTED PLUMBING: Create continuous pipe runs
           const start = e.properties.start;
@@ -2583,6 +2643,8 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       });
       setIsLoading(false);
     })().catch(err => {
+      // AbortError = normal cleanup on unmount/re-render — not a real error
+      if (err?.name === 'AbortError' || err?.code === 20) return;
       console.error('BIM load error:', err);
       setIsLoading(false);
     });
@@ -2597,99 +2659,55 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
 
   return (
     <Card className="w-full h-full">
-      <CardHeader className="pb-2">
+      <CardHeader className="pb-1 pt-3 px-3">
+        {/* ── Top row: title + status badges ── */}
         <div className="flex items-center justify-between">
-          <CardTitle>BIM Viewer</CardTitle>
-          <div className="flex items-center gap-3">
+          <CardTitle className="text-base">BIM Viewer</CardTitle>
+          <div className="flex items-center gap-2">
             {loaded && attentionCount > 0 && (
-              <div className="flex items-center gap-1.5 bg-orange-100 border border-orange-400 text-orange-800 text-xs font-semibold px-2.5 py-1 rounded-full">
-                <span className="inline-block w-2.5 h-2.5 rounded-full bg-orange-500 animate-pulse" />
-                {attentionCount} RFI{attentionCount > 1 ? 's' : ''} need attention
+              <div className="flex items-center gap-1.5 bg-orange-100 border border-orange-400 text-orange-800 text-xs font-semibold px-2 py-0.5 rounded-full">
+                <span className="inline-block w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
+                {attentionCount} RFI{attentionCount > 1 ? 's' : ''}
               </div>
             )}
             {storeys.length > 0 && (
               <Button
                 size="sm"
                 variant={showFloorPanel ? "default" : "outline"}
-                className="flex items-center gap-1.5 text-xs"
-                onClick={()=>setShowFloorPanel(v=>!v)}
+                className="flex items-center gap-1 text-xs h-6 px-2"
+                onClick={()=>{
+                  setShowFloorPanel(v=>!v);
+                  setTimeout(()=>window.dispatchEvent(new Event('resize')), 50);
+                }}
               >
-                <Layers className="h-3.5 w-3.5"/>
+                <Layers className="h-3 w-3"/>
                 Floors ({storeys.length})
               </Button>
             )}
             {loaded && elementCount > 0 && (
-              <div className="text-sm text-green-600 font-medium">
-                ✅ {elementCount.toLocaleString()} elements loaded
-              </div>
+              <span className="text-xs text-green-600 font-medium">✅ {elementCount.toLocaleString()} elem</span>
             )}
           </div>
         </div>
 
-        {/* ── Per-floor visibility panel ───────────────────────────────────── */}
-        {showFloorPanel && storeys.length > 0 && (
-          <div className="mt-2 border rounded-lg bg-white shadow-md p-3 max-h-64 overflow-y-auto">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Floor Visibility</span>
-              <div className="flex gap-2">
-                <button
-                  className="text-xs text-blue-600 hover:underline"
-                  onClick={()=>setVisibleStoreys(new Set(storeys.map(s=>s.name)))}
-                >Show all</button>
-                <span className="text-slate-300">|</span>
-                <button
-                  className="text-xs text-slate-500 hover:underline"
-                  onClick={()=>setVisibleStoreys(new Set())}
-                >Hide all</button>
-              </div>
-            </div>
-            <div className="space-y-1">
-              {[...storeys].sort((a,b)=>b.elevation-a.elevation).map(storey=>{
-                const visible = visibleStoreys.has(storey.name);
-                return (
-                  <div
-                    key={storey.id}
-                    className={`flex items-center justify-between px-2 py-1.5 rounded cursor-pointer transition-colors ${
-                      visible ? 'bg-blue-50 hover:bg-blue-100' : 'bg-slate-50 hover:bg-slate-100 opacity-60'
-                    }`}
-                    onClick={()=>{
-                      setVisibleStoreys(prev=>{
-                        const next = new Set(prev);
-                        if(next.has(storey.name)) next.delete(storey.name);
-                        else next.add(storey.name);
-                        return next;
-                      });
-                    }}
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      {visible
-                        ? <Eye className="h-3.5 w-3.5 text-blue-500 flex-shrink-0"/>
-                        : <EyeOff className="h-3.5 w-3.5 text-slate-400 flex-shrink-0"/>
-                      }
-                      <span className="text-xs font-medium text-slate-700 truncate">{storey.name}</span>
-                      {storey.rfiFlag && (
-                        <AlertTriangle className="h-3 w-3 text-orange-500 flex-shrink-0" aria-label="Elevation estimated — RFI open"/>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-3 flex-shrink-0 ml-2">
-                      <span className="text-xs text-slate-400">{storey.elevation >= 0 ? '+' : ''}{Number(storey.elevation).toFixed(3)} m</span>
-                      <span className="text-xs text-slate-400">{storey.elementCount} elem</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            {storeys.some(s=>s.rfiFlag) && (
-              <p className="mt-2 text-xs text-orange-600 flex items-center gap-1">
-                <AlertTriangle className="h-3 w-3"/> Floors marked with ⚠ have estimated elevations — see RFI dashboard
-              </p>
-            )}
+        {/* ── Horizontal legend — always visible once loaded ── */}
+        {loaded && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] leading-tight text-slate-600 font-mono select-none">
+            <span className="font-semibold text-slate-500 uppercase tracking-wide text-[9px]">Coords:</span>
+            <span><span className="text-red-500 font-bold">■</span> X=E–W</span>
+            <span><span className="text-blue-500 font-bold">■</span> Y=N–S</span>
+            <span><span className="text-green-500 font-bold">■</span> Z=Elev</span>
+            <span className="text-slate-400 text-[9px]">Origin:A9=(0,0)</span>
+            <span className="ml-1 font-semibold text-slate-500 uppercase tracking-wide text-[9px]">Grid:</span>
+            <span><span style={{color:'#1177CC'}} className="font-bold">■</span> A–L</span>
+            <span><span style={{color:'#CC7700'}} className="font-bold">■</span> 1–9</span>
+            <span><span style={{color:'#33BB00'}} className="font-bold">■</span> M–Y/10–19</span>
+            <span><span style={{color:'#DD0099'}} className="font-bold">■</span> CL±</span>
           </div>
         )}
-        {/* ───────────────────────────────────────────────────────────────── */}
 
-        <div className="md:hidden bg-blue-50 border border-blue-200 rounded p-2 text-xs text-blue-800 mt-2">
-          📱 <strong>Touch Controls:</strong> 1 finger = rotate view, 2 fingers = zoom &amp; pan
+        <div className="md:hidden bg-blue-50 border border-blue-200 rounded p-1.5 text-[10px] text-blue-800 mt-1.5">
+          📱 1 finger = rotate · 2 fingers = zoom &amp; pan
         </div>
       </CardHeader>
       <CardContent className="p-0 relative h-[70vh]">
@@ -2704,20 +2722,60 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           }}
         />
 
-        {/* ── Coordinate system + gridline colour legend ───────────────────── */}
-        <div className="absolute bottom-14 right-3 bg-black/75 text-white text-[10px] leading-relaxed rounded px-2.5 py-2 font-mono pointer-events-none select-none">
-          <div className="font-semibold text-[10px] text-slate-300 mb-1 uppercase tracking-wide">Coordinates (PDF A101)</div>
-          <div><span className="text-red-400 font-bold">■</span> X = E–W &nbsp;(+ east)</div>
-          <div><span className="text-blue-400 font-bold">■</span> Y = N–S &nbsp;(+ north)</div>
-          <div><span className="text-green-400 font-bold">■</span> Z = Elev (+ up)</div>
-          <div className="mt-1 text-slate-400 text-[9px]">Origin: Grid A-9 = (0, 0, 0)</div>
-          <div className="mt-1.5 border-t border-slate-600 pt-1 font-semibold text-[10px] text-slate-300 uppercase tracking-wide">Gridlines</div>
-          <div><span style={{color:'#1177CC'}} className="font-bold">■</span> A–L &nbsp;letter grid (E–W)</div>
-          <div><span style={{color:'#CC7700'}} className="font-bold">■</span> 1–9 &nbsp;&nbsp;number grid (N–S)</div>
-          <div><span style={{color:'#33BB00'}} className="font-bold">■</span> M–Y / 10–19 wing (27.16°)</div>
-          <div><span style={{color:'#DD0099'}} className="font-bold">■</span> CLa / CL / CLb &nbsp;(4.208°)</div>
-          <div className="text-slate-400 text-[9px] mt-0.5">Ticks every 5 m</div>
-        </div>
+        {/* ── Collapsible left sidebar — Floor Visibility ─────────────────── */}
+        {storeys.length > 0 && (
+          <div
+            className={`absolute top-2 left-0 z-10 flex transition-all duration-200 ${showFloorPanel ? 'translate-x-0' : '-translate-x-full'}`}
+            style={{maxHeight:'calc(100% - 16px)'}}
+          >
+            <div className="bg-white/95 backdrop-blur-sm border border-gray-200 rounded-r-lg shadow-lg overflow-hidden flex flex-col"
+              style={{width: 180}}>
+              <div className="flex items-center justify-between px-2 py-1.5 border-b border-gray-100 bg-gray-50/80">
+                <span className="text-[10px] font-semibold text-slate-600 uppercase tracking-wide">Floors</span>
+                <div className="flex gap-1.5">
+                  <button className="text-[10px] text-blue-600 hover:underline"
+                    onClick={()=>setVisibleStoreys(new Set(storeys.map(s=>s.name)))}>All</button>
+                  <span className="text-slate-300">|</span>
+                  <button className="text-[10px] text-slate-500 hover:underline"
+                    onClick={()=>setVisibleStoreys(new Set())}>None</button>
+                </div>
+              </div>
+              <div className="overflow-y-auto flex-1 py-1">
+                {[...storeys].sort((a,b)=>b.elevation-a.elevation).map(storey=>{
+                  const visible = visibleStoreys.has(storey.name);
+                  return (
+                    <div key={storey.id}
+                      className={`flex items-center gap-1.5 px-2 py-1 cursor-pointer transition-colors ${visible ? 'hover:bg-blue-50' : 'opacity-50 hover:bg-slate-50'}`}
+                      onClick={()=>{
+                        setVisibleStoreys(prev=>{
+                          const next = new Set(prev);
+                          if(next.has(storey.name)) next.delete(storey.name);
+                          else next.add(storey.name);
+                          return next;
+                        });
+                      }}
+                    >
+                      {visible
+                        ? <Eye className="h-3 w-3 text-blue-500 flex-shrink-0"/>
+                        : <EyeOff className="h-3 w-3 text-slate-400 flex-shrink-0"/>
+                      }
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[10px] font-medium text-slate-700 truncate">{storey.name}</div>
+                        <div className="text-[9px] text-slate-400">{storey.elevation>=0?'+':''}{Number(storey.elevation).toFixed(2)}m · {storey.elementCount}e</div>
+                      </div>
+                      {storey.rfiFlag && <AlertTriangle className="h-3 w-3 text-orange-500 flex-shrink-0"/>}
+                    </div>
+                  );
+                })}
+              </div>
+              {storeys.some(s=>s.rfiFlag) && (
+                <div className="px-2 py-1 border-t border-orange-100 text-[9px] text-orange-600 flex items-center gap-1">
+                  <AlertTriangle className="h-2.5 w-2.5"/> Estimated elevations — RFI open
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* ✅ Mobile-friendly large touch controls for iPhone */}
         <div className="absolute left-3 bottom-3 flex gap-2">
