@@ -2346,10 +2346,12 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
 
       // Pass 2: assign stagger index so nearby labels don't overlap.
       // Collision detection: any two labels whose 3D centres are within one sprite
-      // width (2.8 m) of each other will visually overlap from most camera angles.
-      // Use Euclidean distance with a 2.5 m radius; stagger colliders east/west
-      // (slot 0 = at dot, slot 1 = +2.5 m east/right, slot 2 = -2.5 m west/left).
-      const CLUSTER_DIST = 2.5;
+      // width of each other will visually overlap from most camera angles.
+      // 3.35 m radius catches all tight grid pairs whose labels genuinely overlap:
+      //   CL–CLa / CL–CLb (3.285 m), K–L (3.050 m), H–J (3.051 m),
+      //   F–G (2.301 m), D–E (2.546 m), G–Ga (0.749 m)
+      // … while staying below B–C (3.489 m) which does NOT overlap.
+      const CLUSTER_DIST = 3.35;
       const STAGGER_EW   = 2.5;  // metres per slot, alternating east/west
       const stackCount: number[] = new Array(allIntersections.length).fill(0);
       for (let i = 0; i < allIntersections.length; i++) {
