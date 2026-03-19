@@ -1,7 +1,7 @@
 # Transfer Document: Claude Code → Replit
-**Date:** March 18, 2026
-**Branch:** estimatorpro-v16
-**Context:** Gridline system overhaul + element placement architecture
+**Date:** March 19, 2026
+**Branch:** main (was estimatorpro-v16 → now v17 tagged on GitHub main)
+**Context:** Gridline system overhaul + element placement architecture + 3D viewer UI polish
 
 ---
 
@@ -16,10 +16,200 @@
 | 2.0 | 2026-03-18 | Claude Code | Complete rewrite — all 7 fixes, generic parser, intersection system, element placement types, construction phases |
 | 2.1 | 2026-03-18 | Replit Agent | Synced all Rev 2.0 code — 7 files applied, 3 new shared/ types, server clean restart; 264 intersection markers + 47 gridlines confirmed in console |
 | 2.2 | 2026-03-18 | Replit Agent | Fix #1 complete: 47 grid_line DB records deleted; insertion guards added to real-qto-processor.ts + construction-workflow-processor.ts; bulk DELETE endpoint added to bim-element-crud.ts |
+| 3.0 | 2026-03-19 | Replit Agent | **V17** — 3D viewer UI polish: dimension chains, label collision, intersection dot colours, camera controls, zoom-to-cursor; tagged v17 on GitHub |
 
 ---
 
-## 1. Fixes Applied (this session)
+## V17 Changes (March 19, 2026 — Replit Agent)
+
+> **GitHub:** `https://github.com/rportillor/bim-estimator` — branch `main`, tag `v17` (commit `9025aa8`)
+> All changes are in `artifacts/estimatorpro/client/src/components/bim/viewer-3d.tsx` and `moorings-grid-constants.ts` unless noted.
+
+---
+
+### V17-1: Camera Orientation & Cartesian Fixes
+
+**Problem:** Camera was starting with an inverted or non-standard view — north was not at top, east was not at right.
+
+**Fix:**
+- `camera.up.set(0, 1, 0)` — Y-up enforced on every scene rebuild (Plan View sets it to `(0,0,-1)`; 3D view resets it)
+- Camera positioned NE of building, looking SW: offset vector `(1, 0.8, 1.2)` normalised × `cameraDistance`
+- North → Three.js `−Z`, East → Three.js `+X` (standard cartesian, matches architectural drawings)
+- `controls.target` set to building floor level (`box.min.y`), not mid-building centre
+
+---
+
+### V17-2: Rectangular Grid Rendering (A–L × 1–9)
+
+**Confirmed correct.** Grid lines render at exact constants from `moorings-grid-constants.ts`:
+- A–L: EW positions, axis='X', straight (angle=0), colour `COL_X_HEX = 0x1177CC` (blue)
+- 1–9: NS positions, axis='Y', straight (angle=0), colour `COL_Y_HEX = 0xCC7700` (amber)
+- Intersection dots rendered as flat circles (Three.js `CircleGeometry`), colour `0x44AAFF`
+
+---
+
+### V17-3: Wing Grid Rendering (M–Y × 10–19)
+
+**Confirmed correct.** Both families angled at `WING_ANG = 27.16°` (tan = 0.5131):
+- M–Y: EW-dominant, `coord + param × tan(WING_ANG)`, colour `COL_ANG_HEX = 0x33BB00` (green)
+- 10–19: NS-dominant, `coord − (param − start_m) × tan(WING_ANG)`, same green
+- Intersection dots colour `0x88FF44` (bright lime)
+
+**Constants corrected this session:** wrote verified `start_m / end_m` extents for all M–Y and 10–19 gridlines directly into `moorings-grid-constants.ts` based on drawing measurements.
+
+---
+
+### V17-4: CL Lines (CLa / CL / CLb)
+
+**Three parallel CL lines** at `CL_ANG = WING_ANG / 2 = 13.58°` (tan ≈ 0.2416), colour `COL_CL_HEX = 0xDD0099` (magenta):
+
+| Line | EW coord at NS=0 |
+|------|-----------------|
+| CLa  | 40.525 m        |
+| CL   | 43.810 m        |
+| CLb  | 47.095 m        |
+
+- CL line spacing: `CL_SPACING = 3.285 m`
+- CL zone bridges the rectangular and wing sections
+- Intersection dots with rect × wing lines rendered as magenta circles `0xFF44CC`
+- Note: `CL_ANG` is NOT exported from constants — always computed inline as `WING_ANG / 2`
+
+---
+
+### V17-5: Dimension Chains
+
+Architectural-style dimension chains drawn outside the building footprint:
+
+| Chain | Offset from grid | Direction | Tick step |
+|-------|-----------------|-----------|-----------|
+| A–L (EW spacings) | `CHAIN_OFFSET = 7 m` south of Grid 9 | Along EW axis | 10 m major |
+| 1–9 (NS spacings) | `CHAIN_OFFSET = 7 m` west of Grid A | Along NS axis | 10 m major |
+| M–Y (wing EW) | `CHAIN_OFFSET = 7 m` south-west of wing | Along wing axis | 10 m major |
+| 10–19 (wing NS) | `CHAIN_OFFSET = 7 m` north-west of wing | Along wing axis | 10 m major |
+| CL zone (CLa/CL/CLb) | `CHAIN_OFFSET = 11 m` | Perpendicular to CL | — |
+
+- Tick height: `TICK_H = 0.8 m`
+- Chain lines drawn in the same colour as their grid family
+- Dimension text sprites placed at midpoint of each bay
+- Chain labels use `sizeAttenuation: true` (world-space, scales with zoom)
+
+---
+
+### V17-6: Label Placement — 5-Position Collision Algorithm
+
+**Problem:** Grid bubble labels and intersection labels stacked on top of each other.
+
+**Algorithm:**
+```
+QUAD_R = 0.6 m   (radius of intersection dot — keep labels outside this)
+LABEL_CLEAR = 0.9 m  (minimum clearance between placed labels)
+
+For each label, try positions in order:
+  1. [0, 0]  — at the dot itself (preferred if no conflicts)
+  2. East    (+EW)
+  3. West    (−EW)
+  4. South   (+NS in viewer = −Z direction)
+  5. North   (−NS in viewer = +Z direction)
+
+If all 5 conflict → fall back to dot position (label stays but may overlap)
+
+Placed label registry:
+  lPlacedEW[]  — EW axis labels already placed
+  lPlacedNS[]  — NS axis labels already placed
+  (separate registries to avoid cross-family false conflicts)
+```
+
+One uniform rule applies to ALL grid families (rect, wing, CL).
+
+---
+
+### V17-7: Intersection Label Styling
+
+| Element | Style |
+|---------|-------|
+| Grid bubble (circle behind label) | Sprite, `1.5 × 1.5 m`, `sizeAttenuation: true` |
+| Intersection label (e.g. "A-9") | Sprite, `1.8 × 0.56 m`, canvas 256×80 px |
+| Dim tick label (numeric value) | Sprite, `1.8 × 0.9 m`, canvas 256×128 px |
+| Chain bay label | Sprite, `2.0 × 0.9 m`, canvas 256×128 px |
+| Angle label | Sprite, `2.0 × 1.0 m`, canvas 256×128 px |
+
+**Text colours:**
+- CL family labels: `#FF44CC` (magenta)
+- Wing family labels: `#88FF44` (bright green)
+- All other labels: `#FFE033` (yellow-gold)
+
+**CLa/CLb conflict fix:** CLa and CLb share very close EW coords — their intersection labels were rendering on top of each other. Fixed by applying forced East/West offset for CLa vs CLb respectively in the placement loop.
+
+---
+
+### V17-8: Camera Controls Remapping
+
+| Action | Input |
+|--------|-------|
+| Pan (all directions) | Left drag |
+| Orbit / rotate | Right drag |
+| Zoom | Scroll wheel |
+| Zoom to cursor | Enabled (`zoomToCursor = true`) |
+
+- `controls.zoomToCursor = true` — scroll wheel zooms toward wherever the cursor is pointing, NOT just the fixed orbit target. Allows descending to floor level by hovering over a gridline and scrolling in.
+- `controls.minDistance = 0.05 m` — allows zooming right up to individual grid dots
+- `controls.maxDistance` — not capped (allows full overview)
+
+---
+
+### V17-9: Floor-Level Orbit Target
+
+**Problem:** Orbit target was at building centre height (Y ≈ −2.3 m). Zooming in stopped at mid-building, never reaching the grid floor (Y ≈ −4.65 m).
+
+**Fix:**
+```typescript
+// Initial camera setup (after model load)
+const floorTarget = new THREE.Vector3(center.x, box.min.y, center.z);
+controls.target.copy(floorTarget);
+camera.position.copy(floorTarget).add(cameraOffset);
+
+// Reset View button
+const floorY = c.y - s.y * 0.5;
+controls.target.set(c.x, floorY, c.z);
+camera.position.set(c.x + ne.x, floorY + ne.y, c.z + ne.z);
+```
+
+Both the initial load and the Reset View button now target floor level.
+
+---
+
+### V17-10: Element Dimension Labels Removed
+
+**Problem:** Each building element had a floating "L: 37.4m / H: 4.7m / T: 0.30m" sprite rendered at `scale = Math.max(0.5, Math.min(2, dims.width / 5))`. For large slabs (width = 37.4 m → scale = 2), this was a 2 × 2 m sprite that dominated the screen when zoomed in. Distance measurement lines (orange) on wall elements were similarly clutter.
+
+**Fix:** Both `createDimensionLabel` sprite block and the `createDistanceLine` block removed entirely from the element rendering loop. Element properties (L / H / T) are shown in the right panel when the user clicks on an element.
+
+---
+
+### V17 — Files Changed
+
+| File | Changes |
+|------|---------|
+| `client/src/components/bim/viewer-3d.tsx` | Dimension chains (all families), label collision algorithm, intersection dot colours, sprite sizes, camera target at floor level, zoomToCursor, Reset View fix, element dimension labels removed, distance lines removed |
+| `client/src/components/bim/moorings-grid-constants.ts` | Corrected `start_m` / `end_m` extents for M–Y and 10–19 wing gridlines |
+
+---
+
+### V17 — Known Open Items (carry forward)
+
+| Item | Priority | Notes |
+|------|----------|-------|
+| Verify all rect × wing intersections fall exactly ON the CL line in viewer | High | Geometrically they should — needs visual confirmation in browser |
+| Legends: make horizontal, move below floor visibility toggle | Medium | Currently vertical stacked in right panel |
+| Left panel: make collapsible | Medium | Expands viewport area when hidden |
+| Building elements vs grid coordinate alignment | High | Elements render but coordinates may not match grid intersections |
+| Full P1 model render verification | High | All 38 elements loaded, positions need cross-check vs drawings |
+| Automated build for Ground / Floor 2 / Floor 3 / MPH / Roof | Low | Blocked until P1 is verified |
+| `sizeAttenuation: false` is NOT usable | — | Causes uncontrolled label sizing in this Three.js setup — do not attempt |
+
+---
+
+## 1. Fixes Applied (this session — V16)
 
 ### Fix #1: Clean grid_line DB elements
 **Files changed:**
