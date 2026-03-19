@@ -2345,21 +2345,19 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       }
 
       // Pass 2: assign stagger index so nearby labels don't overlap.
-      // Cluster radius: 2 m in EW + NS combined (chebyshev distance).
-      // Offset direction is HORIZONTAL (XZ plane, 45° SE) so labels stay at floor
-      // level — no vertical floating that would look like "labels on the Z axis".
-      // 0.1 m threshold — only catches mathematically-identical duplicates
-      // (e.g. CL×9 and CL×19 both land at EW=43.810, NS=0 by the CL constraint).
-      // A larger value incorrectly stagger legitimate nearby intersections.
-      const CLUSTER_DIST = 0.1;
-      const STAGGER_STEP = 2.2;  // metres horizontal offset per slot
+      // Collision detection: any two labels whose 3D centres are within one sprite
+      // width (2.8 m) of each other will visually overlap from most camera angles.
+      // Use Euclidean distance with a 2.5 m radius; stagger colliders east/west
+      // (slot 0 = at dot, slot 1 = +2.5 m east/right, slot 2 = -2.5 m west/left).
+      const CLUSTER_DIST = 2.5;
+      const STAGGER_EW   = 2.5;  // metres per slot, alternating east/west
       const stackCount: number[] = new Array(allIntersections.length).fill(0);
       for (let i = 0; i < allIntersections.length; i++) {
         let slot = 0;
         for (let j = 0; j < i; j++) {
-          const de = Math.abs(allIntersections[i].ew - allIntersections[j].ew);
-          const dn = Math.abs(allIntersections[i].ns - allIntersections[j].ns);
-          if (de < CLUSTER_DIST && dn < CLUSTER_DIST) {
+          const de = allIntersections[i].ew - allIntersections[j].ew;
+          const dn = allIntersections[i].ns - allIntersections[j].ns;
+          if (Math.sqrt(de*de + dn*dn) < CLUSTER_DIST) {
             slot = Math.max(slot, stackCount[j] + 1);
           }
         }
@@ -2370,11 +2368,12 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       for (let idx = 0; idx < allIntersections.length; idx++) {
         const { ew, ns, alphaLabel, numericLabel, isAngled } = allIntersections[idx];
         const stackSlot = stackCount[idx];
-        // Stagger colliding labels NORTH/SOUTH (Z direction) so they sit on opposite
-        // sides of their dot at floor level — no vertical floating.
-        // slot 0 = at intersection, slot 1 = 2 m south (+Z), slot 2 = 2 m north (-Z)
-        const staggerZ = stackSlot === 0 ? 0 : stackSlot % 2 === 1 ? 2.0 : -2.0;
-        const labelEW = ew;
+        // Stagger colliding labels EAST/WEST (X direction): one left, one right.
+        // slot 0 = at dot, slot 1 = +2.5 m east, slot 2 = -2.5 m west, etc.
+        const staggerX = stackSlot === 0 ? 0
+          : stackSlot % 2 === 1 ?  Math.ceil(stackSlot  / 2) * STAGGER_EW
+          :                        -Math.floor(stackSlot / 2) * STAGGER_EW;
+        const labelEW = ew + staggerX;
         const labelY  = staticFloorY + 1.0;
 
         // Intersection marker (sphere)
@@ -2411,7 +2410,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         const intTex = new THREE.CanvasTexture(intCanvas);
         const intSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: intTex, transparent: true, depthTest: false }));
         intSprite.scale.set(2.8, 0.875, 1);
-        intSprite.position.set(labelEW, labelY, -ns + staggerZ);  // staggerZ = N/S offset for collision avoidance
+        intSprite.position.set(labelEW, labelY, -ns);  // labelEW already includes E/W stagger
         intSprite.name = `sg:int:${alphaLabel}-${numericLabel}:lbl`;
         three.current?.scene.add(intSprite);
 
