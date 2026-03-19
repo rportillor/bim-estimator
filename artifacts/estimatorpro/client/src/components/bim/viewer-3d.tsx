@@ -1845,6 +1845,35 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         : 0;
       const staticFloorY = coerceWithDatum(0, 0, staticFloorElevRaw).z;
 
+      // ── 10m REFERENCE GRID ──────────────────────────────────────────────────────
+      // White lines every 10m, anchored at building origin (EW=0, NS=0).
+      // That is Grid A × Grid 9 = Three.js (0, staticFloorY, 0).
+      // Named sg:ref10m:* so the scene-clear filter removes them on re-render.
+      {
+        const REF_MAT = new THREE.LineBasicMaterial({ color: 0xFFFFFF, transparent: true, opacity: 0.30 });
+        const maxEW = 110;  // covers full rect + wing east extent
+        const maxNS = 55;   // covers rect (40.83m) + some buffer north
+        const STEP  = 10;
+        const fy    = staticFloorY;
+        const addRef = (ax: number, az: number, bx: number, bz: number) => {
+          const geo = new THREE.BufferGeometry();
+          geo.setAttribute('position', new THREE.BufferAttribute(
+            new Float32Array([ax, fy, az, bx, fy, bz]), 3
+          ));
+          const line = new THREE.Line(geo, REF_MAT);
+          line.name = `sg:ref10m:${ax},${az}-${bx},${bz}`;
+          three.current?.scene.add(line);
+        };
+        // EW lines — constant NS, running east: NS = 0, 10, 20 … maxNS
+        for (let ns = 0; ns <= maxNS; ns += STEP) {
+          addRef(0, -ns, maxEW, -ns);
+        }
+        // NS lines — constant EW, running north: EW = 0, 10, 20 … maxEW
+        for (let ew = 0; ew <= maxEW; ew += STEP) {
+          addRef(ew, 0, ew, -maxNS);
+        }
+      }
+
       // ── Colour scheme (PDF convention):
       //   X-axis lines (letter grid A–L, running E–W):    blue    (#1177CC)
       //   Y-axis lines (number grid 1–9,  running N–S):   amber   (#CC7700)
