@@ -1868,12 +1868,12 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       // ── Colour scheme (PDF convention):
       //   X-axis lines (letter grid A–L, running E–W):    blue    (#1177CC)
       //   Y-axis lines (number grid 1–9,  running N–S):   amber   (#CC7700)
-      //   Wing / angled lines (M–Y, 10–19, 27.16°):       magenta (#AA00CC)
+      //   Wing / angled lines (M–Y, 10–19, 27.16°):       lime    (#33BB00)
       //   CL transition lines (CLa / CL / CLb, 4.208°):   teal    (#00AA88)
       //     CL lines are distinct from wing lines — same angle family but separate structural zone.
       const COL_X_HEX   = 0x1177CC;  const COL_X_CSS   = '#1177CC';
       const COL_Y_HEX   = 0xCC7700;  const COL_Y_CSS   = '#CC7700';
-      const COL_ANG_HEX = 0xAA00CC;  const COL_ANG_CSS = '#AA00CC';
+      const COL_ANG_HEX = 0x33BB00;  const COL_ANG_CSS = '#33BB00';
       const COL_CL_HEX  = 0x00AA88;  const COL_CL_CSS  = '#00AA88';
       const TICK_STEP   = 10;  // metres between dimension ticks
       const TICK_HALF   = 2.0; // half-length of perpendicular tick (metres) — 4m total, visible from plan view
@@ -2381,7 +2381,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         // 3-colour dot system — label text will match
         const isCLlabel  = alphaLabel === 'CLa' || alphaLabel === 'CL' || alphaLabel === 'CLb';
         const isWingLabel = isAngled && !isCLlabel;
-        const markerColor = isCLlabel ? 0x00FFCC : isWingLabel ? 0xFF88FF : 0x44FF88;
+        const markerColor = isCLlabel ? 0x00FFCC : isWingLabel ? 0x88FF44 : 0x44AAFF;
         const markerMat = new THREE.MeshBasicMaterial({ color: markerColor, transparent: true, opacity: 0.7 });
         const marker = new THREE.Mesh(markerGeo, markerMat);
         marker.position.set(ew, staticFloorY + 0.1, -ns);
@@ -2405,7 +2405,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         intCtx.lineJoin = 'round';
         intCtx.strokeText(`${alphaLabel}-${numericLabel}`, 64, 20);
         // Text colour matches the dot colour for instant visual pairing
-        intCtx.fillStyle = isCLlabel ? '#00FFCC' : isWingLabel ? '#FF88FF' : '#FFE033';
+        intCtx.fillStyle = isCLlabel ? '#00FFCC' : isWingLabel ? '#88FF44' : '#FFE033';
         intCtx.fillText(`${alphaLabel}-${numericLabel}`, 64, 20);
         const intTex = new THREE.CanvasTexture(intCanvas);
         const intSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: intTex, transparent: true, depthTest: false }));
@@ -2625,7 +2625,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           <div className="mt-1.5 border-t border-slate-600 pt-1 font-semibold text-[10px] text-slate-300 uppercase tracking-wide">Gridlines</div>
           <div><span style={{color:'#1177CC'}} className="font-bold">■</span> A–L &nbsp;letter grid (E–W)</div>
           <div><span style={{color:'#CC7700'}} className="font-bold">■</span> 1–9 &nbsp;&nbsp;number grid (N–S)</div>
-          <div><span style={{color:'#AA00CC'}} className="font-bold">■</span> M–Y / 10–19 wing (27.16°)</div>
+          <div><span style={{color:'#33BB00'}} className="font-bold">■</span> M–Y / 10–19 wing (27.16°)</div>
           <div><span style={{color:'#00AA88'}} className="font-bold">■</span> CLa / CL / CLb &nbsp;(4.208°)</div>
           <div className="text-slate-400 text-[9px] mt-0.5">Ticks every 5 m</div>
         </div>
