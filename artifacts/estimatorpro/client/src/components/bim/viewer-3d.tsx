@@ -1702,13 +1702,14 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           const wallGeo = new THREE.BoxGeometry(wallLength, wallHeight, wallThickness);
           mesh = new THREE.Mesh(wallGeo, mat);
           
-          // Position at bottom edge (Y-up system)
-          mesh.position.set(midX, p.y + wallHeight/2, midY);
+          // Position at bottom edge (Y-up system).
+          // Building NS (y) maps to Three.js -Z (north = negative Z), so negate midY.
+          mesh.position.set(midX, p.y + wallHeight/2, -midY);
           mesh.rotation.y = rotation;
           
           // 🔗 ADD WALL CONNECTION INDICATORS
-          const startPoint = new THREE.Vector3(start.x, p.y + dims.height, start.y);
-          const endPoint = new THREE.Vector3(end.x, p.y + dims.height, end.y);
+          const startPoint = new THREE.Vector3(start.x, p.y + dims.height, -start.y);
+          const endPoint = new THREE.Vector3(end.x, p.y + dims.height, -end.y);
           
           // Add small spheres at connection points for debugging
           if(Math.random() < 0.1) { // Only show 10% for performance
