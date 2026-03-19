@@ -1466,8 +1466,13 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
             geo = new THREE.BoxGeometry(dims.width, thick, dims.depth);
             geo.translate(0, thick / 2, 0);
           }
-          color = 0xC8C8C0;               // light warm-gray concrete
-          materialProps.roughness = 0.8;
+          color = 0xBEBEB4;               // light warm-gray concrete
+          materialProps.roughness    = 0.85;
+          materialProps.metalness    = 0.05;
+          materialProps.flatShading  = false;          // normals flip after rotateX — must be smooth
+          materialProps.side         = THREE.DoubleSide; // render top + bottom face
+          materialProps.transparent  = true;
+          materialProps.opacity      = 0.45;           // semi-transparent so elements above stay visible
         } else if(isRoof){
           // Roof: Similar to floor but different color
           const thick = Math.min(dims.height, 0.4);
