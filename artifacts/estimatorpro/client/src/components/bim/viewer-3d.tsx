@@ -1399,7 +1399,8 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         // Site Work & Exterior
         const isLandscaping = /(landscape|plant|tree|shrub|grass|garden)/.test(type);
         const isDrainage = /(drainage|drain|gutter|downspout|catch.basin)/.test(type);
-        const isPaving = /(paving|asphalt|concrete.slab|sidewalk|driveway|parking)/.test(type);
+        const isParkingStall = /(parking.stall|parking_stall|parking.space|parking_space)/.test(type);
+        const isPaving = !isParkingStall && /(paving|asphalt|concrete.slab|sidewalk|driveway|parking)/.test(type);
         const isUtility = /(utility|gas|water.main|sewer.main|electrical.service)/.test(type);
         const _isSiteWork = isLandscaping || isDrainage || isPaving || isUtility;
         
@@ -1716,6 +1717,17 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           geo = new THREE.CylinderGeometry(Math.min(dims.width, dims.depth) / 2, Math.min(dims.width, dims.depth) / 2, dims.height, 6);
           color = 0x2F4F4F; // Dark slate gray for drainage
           materialProps.metalness = 0.3;
+        } else if(isParkingStall){
+          // Parking stall: thin flat rectangle (floor marking)
+          const stallW = (e.geometry?.dimensions?.width  || dims.width  || 2.6);
+          const stallD = (e.geometry?.dimensions?.depth  || dims.depth  || 5.5);
+          const stallH = 0.04; // 40mm marking thickness
+          geo = new THREE.BoxGeometry(stallW, stallH, stallD);
+          color = e.geometry?.accessible ? 0x1E90FF : 0xFFFF99; // Blue=HA, Yellow=standard
+          materialProps.roughness  = 0.9;
+          materialProps.metalness  = 0.0;
+          materialProps.transparent = true;
+          materialProps.opacity    = 0.70;
         } else if(isPaving){
           // Paving: Flat, gray surfaces
           geo = new THREE.BoxGeometry(dims.width, Math.max(dims.height, 0.15), dims.depth);
@@ -1809,6 +1821,9 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
             endSphere.position.copy(endPoint);
             root.add(endSphere);
           }
+        } else if(isParkingStall) {
+          // Parking stall: sit flat on floor surface (top of 40mm marking)
+          mesh.position.set(p.x, p.y + 0.02, p.z);
         } else if(isRamp) {
           // Circular ramp: position ring center at ramp center coords
           // p.x = EW, p.y = elevation (z), p.z = -NS (Three.js convention)
@@ -2698,11 +2713,16 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
             <span><span className="text-blue-500 font-bold">■</span> Y=N–S</span>
             <span><span className="text-green-500 font-bold">■</span> Z=Elev</span>
             <span className="text-slate-400 text-[9px]">Origin:A9=(0,0)</span>
-            <span className="ml-1 font-semibold text-slate-500 uppercase tracking-wide text-[9px]">Grid:</span>
+            <span className="mx-1 text-slate-300">|</span>
+            <span className="font-semibold text-slate-500 uppercase tracking-wide text-[9px]">Grid:</span>
             <span><span style={{color:'#1177CC'}} className="font-bold">■</span> A–L</span>
             <span><span style={{color:'#CC7700'}} className="font-bold">■</span> 1–9</span>
             <span><span style={{color:'#33BB00'}} className="font-bold">■</span> M–Y/10–19</span>
             <span><span style={{color:'#DD0099'}} className="font-bold">■</span> CL±</span>
+            <span className="mx-1 text-slate-300">|</span>
+            <span className="font-semibold text-slate-500 uppercase tracking-wide text-[9px]">Parking:</span>
+            <span><span style={{color:'#FFFF99',background:'#555',borderRadius:2,padding:'0 1px'}} className="font-bold">■</span> Stall</span>
+            <span><span style={{color:'#1E90FF'}} className="font-bold">■</span> HA</span>
           </div>
         )}
 
