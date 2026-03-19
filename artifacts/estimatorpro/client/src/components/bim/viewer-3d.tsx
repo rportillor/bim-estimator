@@ -2145,8 +2145,10 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
 
             for (let i = 0; i < myAtt.length - 1; i++) {
               const a = myAtt[i], b = myAtt[i+1];
-              // Perpendicular spacing = |coordB − coordA| / norm
-              const spacing_mm = Math.round(Math.abs(b.g.coord - a.g.coord) / norm * 1000);
+              // Same logic as A-L: raw coord difference (EW at NS=0).
+              // Chain runs along Grid-19 (mySE slope), so tick-to-tick distance
+              // = coord_diff × norm  (slope factor, same as A-L × 1 for vertical lines).
+              const spacing_mm = Math.round(Math.abs(b.g.coord - a.g.coord) * norm * 1000);
               addSpacingLbl(spacing_mm, (a.chainX+b.chainX)/2, (a.chainZ+b.chainZ)/2, `sg:dchain:my:${i}`);
             }
           }
@@ -2184,10 +2186,9 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
 
             for (let i = 0; i < n19Att.length - 1; i++) {
               const a = n19Att[i], b = n19Att[i+1];
-              // Perpendicular spacing = |Δconst| / norm  (const = coord + start_m*tanW)
-              const cA = a.g.coord + a.g.start_m * tanW;
-              const cB = b.g.coord + b.g.start_m * tanW;
-              const spacing_mm = Math.round(Math.abs(cA - cB) / norm * 1000);
+              // Same logic as 1-9: raw coord difference × norm (slope factor).
+              // 10-19 coord = NS at start_m; chain runs along Grid-Y slope.
+              const spacing_mm = Math.round(Math.abs(a.g.coord - b.g.coord) * norm * 1000);
               addSpacingLbl(spacing_mm, (a.chainX+b.chainX)/2, (a.chainZ+b.chainZ)/2, `sg:dchain:1019:${i}`);
             }
           }
@@ -2234,18 +2235,26 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
 
       for (const alpha of alphaLines) {
         for (const numeric of numericLines) {
-          // Extent overlap check
+          // Extent overlap check — must use full EW range for angled alpha lines
+          // (e.g. CL lines drift EW as NS increases, so alpha.coord alone is wrong).
           const tol = 5;
+          const tanA = Math.tan(alpha.angle_deg * (Math.PI / 180));
+          const tanN = Math.tan(numeric.angle_deg * (Math.PI / 180));
+
           const aMin = Math.min(alpha.start_m, alpha.end_m) - tol;
           const aMax = Math.max(alpha.start_m, alpha.end_m) + tol;
           const nMin = Math.min(numeric.start_m, numeric.end_m) - tol;
           const nMax = Math.max(numeric.start_m, numeric.end_m) + tol;
-          if (alpha.coord < nMin || alpha.coord > nMax) continue;
+
+          // Alpha line EW range over its NS extent
+          const aEW1 = alpha.coord + alpha.start_m * tanA;
+          const aEW2 = alpha.coord + alpha.end_m   * tanA;
+          const aEWMin = Math.min(aEW1, aEW2) - tol;
+          const aEWMax = Math.max(aEW1, aEW2) + tol;
+          if (aEWMax < nMin || aEWMin > nMax) continue;
           if (numeric.coord < aMin || numeric.coord > aMax) continue;
 
           // Compute intersection
-          const tanA = Math.tan(alpha.angle_deg * (Math.PI / 180));
-          const tanN = Math.tan(numeric.angle_deg * (Math.PI / 180));
           const denom = 1 + tanA * tanN;
           if (Math.abs(denom) < 1e-10) continue;
           const ns = (numeric.coord + (numeric.start_m - alpha.coord) * tanN) / denom;
@@ -2271,21 +2280,21 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           };
           three.current?.scene.add(marker);
 
-          // Label at intersection — small text showing "A-9" etc.
+          // Label at intersection — readable text showing "A-9" etc.
           const intCanvas = document.createElement('canvas');
-          intCanvas.width = 96; intCanvas.height = 24;
+          intCanvas.width = 128; intCanvas.height = 40;
           const intCtx = intCanvas.getContext('2d')!;
-          intCtx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-          intCtx.fillRect(0, 0, 96, 24);
+          intCtx.fillStyle = 'rgba(0,0,0,0.70)';
+          intCtx.fillRect(0, 0, 128, 40);
           intCtx.fillStyle = '#FFFFFF';
-          intCtx.font = '12px monospace';
+          intCtx.font = 'bold 18px monospace';
           intCtx.textAlign = 'center';
           intCtx.textBaseline = 'middle';
-          intCtx.fillText(`${alpha.label}-${numeric.label}`, 48, 12);
+          intCtx.fillText(`${alpha.label}-${numeric.label}`, 64, 20);
           const intTex = new THREE.CanvasTexture(intCanvas);
           const intSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: intTex, depthTest: false }));
-          intSprite.scale.set(1.2, 0.3, 1);
-          intSprite.position.set(ew, staticFloorY + 0.5, -ns); // north → -Z
+          intSprite.scale.set(2.8, 0.875, 1);   // 128:40 aspect, ~2.8m wide in world
+          intSprite.position.set(ew, staticFloorY + 1.0, -ns); // north → -Z, raised 1m
           intSprite.name = `sg:int:${alpha.label}-${numeric.label}:lbl`;
           three.current?.scene.add(intSprite);
 
