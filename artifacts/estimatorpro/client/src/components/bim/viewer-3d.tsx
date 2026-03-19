@@ -268,7 +268,7 @@ function createDimensionLabel(dims: any, elementType: string): THREE.Sprite | nu
   
   // Create sprite with canvas texture
   const texture = new THREE.CanvasTexture(canvas);
-  const spriteMaterial = new THREE.SpriteMaterial({ map: texture, alphaTest: 0.5 });
+  const spriteMaterial = new THREE.SpriteMaterial({ map: texture, alphaTest: 0.5, sizeAttenuation: false });
   const sprite = new THREE.Sprite(spriteMaterial);
   
   return sprite;
@@ -329,7 +329,7 @@ function createMeasurementText(text: string): THREE.Sprite | null {
   context.fillText(text, canvas.width / 2, canvas.height / 2 + 8);
   
   const texture = new THREE.CanvasTexture(canvas);
-  const spriteMaterial = new THREE.SpriteMaterial({ map: texture, alphaTest: 0.5 });
+  const spriteMaterial = new THREE.SpriteMaterial({ map: texture, alphaTest: 0.5, sizeAttenuation: false });
   return new THREE.Sprite(spriteMaterial);
 }
 
@@ -352,7 +352,7 @@ function createGridLabel(text: string, color: string = '#888888', fontSize: numb
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.needsUpdate = true;
-  const material = new THREE.SpriteMaterial({ map: texture, depthTest: false });
+  const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, sizeAttenuation: false });
   return new THREE.Sprite(material);
 }
 
@@ -1968,8 +1968,8 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         ctx2d.textBaseline = 'middle';
         ctx2d.fillText(g.label, BPIX/2, BPIX/2);
         const labelTex    = new THREE.CanvasTexture(lc);
-        const labelSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTex, depthTest: false }));
-        labelSprite.scale.set(1.0, 1.0, 1);  // sprite size in world units
+        const labelSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTex, depthTest: false, sizeAttenuation: false }));
+        labelSprite.scale.set(0.055, 0.055, 1);  // fixed screen-space size (sizeAttenuation:false)
         const dir = pt2.clone().sub(pt1).normalize();
         // axis='Y' non-angled (1–9 rectangular number lines): label goes to WEST (left) end
         // axis='Y' angled (10–19 wing lines) + letter lines + CL: label goes to the far end (pt2)
@@ -2004,7 +2004,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           if (g.label === 'A' || g.label === '9') {
             const DIM_OFFSET = 4;  // metres outside the building perimeter
             const dimLabel = createGridLabel(`${param}m`, '#999999', 16);
-            dimLabel.scale.set(1.2, 0.6, 1);
+            dimLabel.scale.set(0.11, 0.028, 1);  // fixed screen-space size
             if (g.label === 'A') {
               // Grid A is the west boundary — NS scale bar runs along its west side
               dimLabel.position.set(-DIM_OFFSET, staticFloorY + 1, -param);
@@ -2042,7 +2042,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         // Helper: spacing label — centred ON the dimension chain line (professional standard)
         const addSpacingLbl = (dist_mm:number, x:number, z:number, name:string) => {
           const lbl = createGridLabel(`${dist_mm}`, '#222222', 15);
-          lbl.scale.set(1.4, 0.64, 1);
+          lbl.scale.set(0.11, 0.056, 1);  // fixed screen-space size
           lbl.position.set(x, staticFloorY + 0.5, z);  // ON the chain line, slight Y lift
           lbl.name = name;
           three.current?.scene.add(lbl);
@@ -2295,7 +2295,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
             az = -(g.coord) + 1;
           }
           const angLbl = createGridLabel(`${g.angle_deg.toFixed(2)}°`, '#FF8800', 16);
-          angLbl.scale.set(1.6, 0.8, 1);
+          angLbl.scale.set(0.11, 0.056, 1);  // fixed screen-space size
           angLbl.position.set(ax, ay, az);
           angLbl.name = `sg:ang:${key}`;
           three.current?.scene.add(angLbl);
@@ -2420,8 +2420,8 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         intCtx.fillStyle = isCLlabel ? '#FF44CC' : isWingLabel ? '#88FF44' : '#FFE033';
         intCtx.fillText(`${alphaLabel}-${numericLabel}`, 64, 20);
         const intTex = new THREE.CanvasTexture(intCanvas);
-        const intSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: intTex, transparent: true, depthTest: false }));
-        intSprite.scale.set(1.0, 0.32, 1);
+        const intSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: intTex, transparent: true, depthTest: false, sizeAttenuation: false }));
+        intSprite.scale.set(0.13, 0.04, 1);  // fixed screen-space size
         intSprite.position.set(labelEW, labelY, -labelNS);  // quadrant-placed position
         intSprite.name = `sg:int:${alphaLabel}-${numericLabel}:lbl`;
         three.current?.scene.add(intSprite);
