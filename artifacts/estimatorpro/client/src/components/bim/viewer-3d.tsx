@@ -452,6 +452,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
     controls.panSpeed = 1.5;
     controls.rotateSpeed = 0.5;
     controls.minDistance = 0.05;  // allow zooming right up to the grid
+    (controls as any).zoomToCursor = true;  // zoom toward cursor position, not just orbit target
 
     // Navigation mapping — optimised for plan view:
     //   Left drag   → pan in all directions (hold + slide anywhere)
@@ -2459,7 +2460,10 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         elementTypes: Array.from(new Set(elements.map((e: any) => e.elementType)))
       });
 
-      controls.target.copy(center);
+      // Target the floor level (box.min.y) not the building centre — zooming in
+      // then naturally descends to the grid surface rather than stopping mid-building.
+      const floorTarget = new THREE.Vector3(center.x, box.min.y, center.z);
+      controls.target.copy(floorTarget);
       // Always restore Y-up for the default 3D view.
       // Plan View sets camera.up=(0,0,-1); this resets it on every scene rebuild.
       camera.up.set(0, 1, 0);
@@ -2471,7 +2475,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       // Offset (1, 0.8, 1.2): east, high, and south (+Z = south) → looks toward building
       const cameraDistance = Math.max(diag * 0.8, 50);
       const cameraOffset = new THREE.Vector3(1, 0.8, 1.2).normalize().multiplyScalar(cameraDistance);
-      camera.position.copy(center).add(cameraOffset);
+      camera.position.copy(floorTarget).add(cameraOffset);
       
       // Ensure camera can see the full building
       camera.near = Math.max(0.1, cameraDistance / 100);
@@ -2654,10 +2658,12 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
               // This undoes any camera.up change made by Plan View
               camera.up.set(0, 1, 0);
               // Camera NE of building: east=right, north (-Z) at top — cartesian convention
+              // Target floor level (bottom of bbox) so zoom-in reaches the grid surface
               const dist = Math.max(s.x, s.z) * 0.9 + 20;
-              controls.target.set(c.x, c.y, c.z);
+              const floorY = c.y - s.y * 0.5;
+              controls.target.set(c.x, floorY, c.z);
               const ne = new THREE.Vector3(1, 0.8, 1.2).normalize().multiplyScalar(dist);
-              camera.position.set(c.x + ne.x, c.y + ne.y, c.z + ne.z);
+              camera.position.set(c.x + ne.x, floorY + ne.y, c.z + ne.z);
               controls.update();
               camera.updateProjectionMatrix();
             }}
