@@ -2280,20 +2280,26 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           };
           three.current?.scene.add(marker);
 
-          // Label at intersection — readable text showing "A-9" etc.
+          // Label at intersection — floating CAD-style: yellow text with black outline,
+          // transparent background so no rectangle obscures geometry.
           const intCanvas = document.createElement('canvas');
           intCanvas.width = 128; intCanvas.height = 40;
           const intCtx = intCanvas.getContext('2d')!;
-          intCtx.fillStyle = 'rgba(0,0,0,0.70)';
-          intCtx.fillRect(0, 0, 128, 40);
-          intCtx.fillStyle = '#FFFFFF';
-          intCtx.font = 'bold 18px monospace';
+          intCtx.clearRect(0, 0, 128, 40);           // fully transparent — no rectangle
+          intCtx.font = 'bold 20px monospace';
           intCtx.textAlign = 'center';
           intCtx.textBaseline = 'middle';
+          // Black outline first for contrast against any background
+          intCtx.strokeStyle = '#000000';
+          intCtx.lineWidth = 4;
+          intCtx.lineJoin = 'round';
+          intCtx.strokeText(`${alpha.label}-${numeric.label}`, 64, 20);
+          // Bright CAD yellow fill — readable against both dark and light geometry
+          intCtx.fillStyle = '#FFE033';
           intCtx.fillText(`${alpha.label}-${numeric.label}`, 64, 20);
           const intTex = new THREE.CanvasTexture(intCanvas);
-          const intSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: intTex, depthTest: false }));
-          intSprite.scale.set(2.8, 0.875, 1);   // 128:40 aspect, ~2.8m wide in world
+          const intSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: intTex, transparent: true, depthTest: false }));
+          intSprite.scale.set(2.8, 0.875, 1);
           intSprite.position.set(ew, staticFloorY + 1.0, -ns); // north → -Z, raised 1m
           intSprite.name = `sg:int:${alpha.label}-${numeric.label}:lbl`;
           three.current?.scene.add(intSprite);
