@@ -3330,9 +3330,17 @@ Return JSON ONLY — no prose, no explanation:
 
       perimeter_walls: ctx + `TASK: Extract ONLY the EXTERIOR PERIMETER WALLS and FOUNDATION/RETAINING WALLS at the ${floor.name} level. Return NOTHING else.
 
-CRITICAL — USE GRID REFERENCES, NOT PIXEL ESTIMATES:
-Do NOT guess or estimate raw x/y coordinates. Instead, identify which grid lines each wall runs along.
-Read the grid bubble labels printed in circles around the drawing perimeter, then match each wall to its bounding grid lines.
+You are looking at a RENDERED IMAGE of the architectural drawing. Read it exactly as a human reviewer would:
+— Read the bold dimension text printed directly on the drawing (e.g. "37.775", "37.03", "41999")
+— Read the grid bubble labels (circles containing letters/numbers around the drawing perimeter)
+— Do NOT estimate pixel positions. Do NOT measure anything visually.
+
+BUILDING ORIENTATION IN THIS IMAGE:
+The plan may be rotated relative to true north. The BUILDING has two distinct structural sections:
+  1. RECTANGULAR SECTION: grid lines A–L (EW) × 1–9 (NS) — these walls are orthogonal (0° angle)
+  2. WING SECTION: grid lines M–Y (EW) × 10–19 (NS) — these walls are angled at 27.16° to the rectangular section
+Report ALL coordinates in the BUILDING coordinate system (EW metres east of Grid A, NS metres north of Grid 9),
+NOT in image pixel coordinates or true-north coordinates.
 
 THE MOORINGS GRID COORDINATE TABLE (metres from origin — Grid A = EW 0, Grid 9 = NS 0):
 
@@ -3371,12 +3379,23 @@ CASE 2 — Wall does NOT sit on a named gridline (e.g. perimeter walls with anno
       "end":   {"x": 41.999, "y": 37.775},
       "thickness_m": 0.30, "height_m": ${h.toFixed(2)}, "material": "concrete", "type": "foundation" }
 
+CASE 3 — Wall in the WING SECTION (angled 27.16° region, grids M–Y × 10–19):
+  These walls are NOT axis-aligned. Use grid references on both ends.
+  The system will compute the correct angled world-space position from the grid table.
+  Example: south perimeter of wing from Grid M/19 to Grid Y/19:
+    { "wall_id": "WW-001",
+      "grid_start": {"alpha": "M", "numeric": "19"},
+      "grid_end":   {"alpha": "Y", "numeric": "19"},
+      "thickness_m": 0.30, "height_m": ${h.toFixed(2)}, "material": "concrete", "type": "foundation",
+      "angle_deg": 27.16 }
+
 - type: "foundation" | "retaining" | "exterior"
 - For raw coordinates: x = EW metres from Grid A, y = NS metres from Grid 9
 - Read metre dimensions directly from bold annotation text on the drawing — do NOT estimate from pixels
+- For WING walls: look for the diagonal section of the plan — it forms a parallelogram-like shape attached to the right side of the rectangular block
 
 Return JSON ONLY — no prose:
-{ "perimeter_walls": [ { "wall_id", ["grid_start","grid_end" OR "start","end"], "thickness_m","height_m","material","type" }, ... ] }`,
+{ "perimeter_walls": [ { "wall_id", ["grid_start","grid_end" OR "start","end"], "thickness_m","height_m","material","type", "angle_deg"? }, ... ] }`,
 
       interior_walls: ctx + `TASK: Extract ONLY the INTERIOR PARTITION WALLS at the ${floor.name} level. Exclude exterior walls and structural columns.
 
@@ -3529,7 +3548,13 @@ Return JSON ONLY:
             location: { realLocation: { x: startCoord.x, y: startCoord.y, z: elev } },
             start: startCoord, end: endCoord,
           }),
-          properties: JSON.stringify({ material: w.material, type: w.type ?? elType, fireRating: w.fire_rating }),
+          properties: JSON.stringify({
+            material: w.material,
+            type: w.type ?? elType,
+            fireRating: w.fire_rating,
+            // angle_deg: present on WING section walls (27.16°), absent on rectangular walls
+            angle_deg: w.angle_deg ?? null,
+          }),
           quantity: len, unit: 'LM',
         } as any);
       }
@@ -3729,13 +3754,63 @@ Return JSON ONLY:
     const prompt = this.buildLayerPrompt(floor, layer, projectName);
     const docList = pdfBuffers.map(({ key }, i) => `  ${i + 1}. ${path.basename(key)}`).join('\n');
 
-    const content: any[] = [
-      ...pdfBuffers.map(({ buf }) => ({
-        type: 'document',
-        source: { type: 'base64', media_type: 'application/pdf', data: buf.toString('base64') },
-      })),
-      { type: 'text', text: `${prompt}\n\nDrawings provided (${pdfBuffers.length}):\n${docList}` },
-    ];
+    // ── Image-mode vs document-mode ───────────────────────────────────────────
+    // For spatial layers (walls, columns, slabs, etc.) render the drawing to a
+    // PNG image before sending to Claude.  This gives Claude Vision full spatial
+    // fidelity to read actual annotation text printed on the drawing rather than
+    // relying on PDF byte-stream parsing.  The process mirrors what a human
+    // reviewer does: look at the rendered drawing, read the bold dimension text,
+    // and cross-reference with the grid coordinate table in the prompt.
+    //
+    // Gridlines and MEP keep the document approach (text extraction is faster).
+    const SPATIAL_LAYERS = new Set([
+      'perimeter_walls', 'interior_walls', 'columns', 'slabs',
+      'doors', 'windows', 'stairs',
+    ]);
+
+    let content: any[];
+
+    if (SPATIAL_LAYERS.has(layer)) {
+      // Prefer the floor plan PDF for the current floor (A101=P1, A102=Ground, etc.)
+      const planBuf = (
+        pdfBuffers.find(b => /A10[1-6]|parking|underground|plan/i.test(path.basename(b.key)))
+        ?? pdfBuffers[0]
+      ).buf;
+      const imgBuf = await this.renderPdfToImage(planBuf, 200);
+
+      if (imgBuf) {
+        logger.info(`[extractLayer] IMAGE mode: ${(imgBuf.length / 1024).toFixed(0)} KB PNG → Claude Vision`);
+        content = [
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/png', data: imgBuf.toString('base64') },
+          },
+          {
+            type: 'text',
+            text: `${prompt}\n\nDrawing rendered from: ${path.basename(pdfBuffers[0].key)}`,
+          },
+        ];
+      } else {
+        // pdftoppm unavailable — fall back to document mode
+        logger.warn(`[extractLayer] renderPdfToImage failed → falling back to document mode`);
+        content = [
+          ...pdfBuffers.map(({ buf }) => ({
+            type: 'document',
+            source: { type: 'base64', media_type: 'application/pdf', data: buf.toString('base64') },
+          })),
+          { type: 'text', text: `${prompt}\n\nDrawings provided (${pdfBuffers.length}):\n${docList}` },
+        ];
+      }
+    } else {
+      // Non-spatial layers: document mode (faster, text is all that's needed)
+      content = [
+        ...pdfBuffers.map(({ buf }) => ({
+          type: 'document',
+          source: { type: 'base64', media_type: 'application/pdf', data: buf.toString('base64') },
+        })),
+        { type: 'text', text: `${prompt}\n\nDrawings provided (${pdfBuffers.length}):\n${docList}` },
+      ];
+    }
 
     const stream = anthropic.messages.stream({
       model: 'claude-sonnet-4-20250514',
@@ -3771,5 +3846,54 @@ Return JSON ONLY:
     }
 
     return this.parseLayerResponse(result, layer, floor);
+  }
+
+  /**
+   * Render the first page of a PDF to a PNG buffer using pdftoppm.
+   * This gives Claude Vision a crisp raster image with full spatial fidelity
+   * rather than passing the raw PDF byte stream as a document.
+   *
+   * pdftoppm is available in the Replit Nix environment and produces higher-
+   * quality output than pdf2pic for architectural drawings at fine detail.
+   *
+   * @param pdfBuffer  Raw PDF bytes
+   * @param dpi        Render resolution (200 = ~2400×1800 for A1 sheet, good balance)
+   * @returns PNG buffer, or null if pdftoppm is unavailable / fails
+   */
+  private async renderPdfToImage(pdfBuffer: Buffer, dpi = 200): Promise<Buffer | null> {
+    const { spawnSync } = await import('child_process');
+    const os = await import('os');
+    const ts = Date.now();
+    const tmpPdf = path.join(os.tmpdir(), `layer_${ts}.pdf`);
+    const tmpOut = path.join(os.tmpdir(), `layer_${ts}`);
+    try {
+      fs.writeFileSync(tmpPdf, pdfBuffer);
+      const result = spawnSync('pdftoppm', [
+        '-r', String(dpi),
+        '-f', '1', '-l', '1',
+        '-png',
+        tmpPdf,
+        tmpOut,
+      ], { timeout: 30_000 });
+
+      if (result.status !== 0) {
+        logger.warn(`[renderPdfToImage] pdftoppm exit ${result.status}: ${result.stderr?.toString().slice(0, 200)}`);
+        return null;
+      }
+      const pngPath = `${tmpOut}-1.png`;
+      if (!fs.existsSync(pngPath)) {
+        logger.warn(`[renderPdfToImage] PNG not found at ${pngPath}`);
+        return null;
+      }
+      const buf = fs.readFileSync(pngPath);
+      try { fs.unlinkSync(pngPath); } catch { /* non-fatal */ }
+      logger.info(`[renderPdfToImage] PNG rendered: ${(buf.length / 1024).toFixed(0)} KB at ${dpi} dpi`);
+      return buf;
+    } catch (e: any) {
+      logger.warn(`[renderPdfToImage] error: ${e?.message}`);
+      return null;
+    } finally {
+      try { if (fs.existsSync(tmpPdf)) fs.unlinkSync(tmpPdf); } catch { /* non-fatal */ }
+    }
   }
 }
