@@ -2068,27 +2068,76 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           addSpacingLbl(Math.round((b.coord - a.coord)*1000), (a.coord+b.coord)/2, SOUTH_Z, `sg:dchain:ew:${i}`);
         }
 
-        // ── CL zone chain: CLa → CL → CLb (same south level as A-L) ─────────
-        // CL_SPACING = 3.285 m = 3285 mm for each interval — read directly from
-        // the drawing.  The chain runs east-west at SOUTH_Z just like A-L.
-        // South ends of all three CL lines are at NS=0 (Grid 9 level, Z=0).
-        const clLines = MOORINGS_GRIDLINES
-          .filter(g => g.label === 'CLa' || g.label === 'CL' || g.label === 'CLb')
-          .sort((a, b) => a.coord - b.coord);  // west (CLa) → east (CLb)
+        // ── CL zone chain: CLa → CL → CLb — angled parallel to CL lines ────────
+        // The chain runs in the PERPENDICULAR-to-CL direction (clPerp), which is
+        // angled at CL_ANG=13.58° from horizontal.  Extension lines run PARALLEL
+        // to the CL gridlines (clAlong direction), mirroring M-Y chain geometry.
+        // All CL lines start at NS=0 (Grid 9, Three.js Z=0), so the chain is
+        // anchored on CLa's southward projection; each subsequent CL line is
+        // projected along clAlong onto that same chain line to get its attachment.
+        {
+          const tanCL  = Math.tan((WING_ANG / 2) * (Math.PI / 180));   // tan(13.58°)≈0.24156  CL_ANG=WING_ANG/2
+          const normCL = Math.sqrt(1 + tanCL * tanCL);          // ≈1.02898
 
-        if (clLines.length >= 2) {
-          // Chain line from CLa.coord to CLb.coord at SOUTH_Z
-          addLine2(clLines[0].coord, fl, SOUTH_Z, clLines[clLines.length-1].coord, fl, SOUTH_Z, DIM_GREY);
-          for (const g of clLines) {
-            // Extension: from Z=1 (just past Grid 9) to Z=SOUTH_Z-1 (1m before chain)
-            addLine2(g.coord, fl, 1, g.coord, fl, SOUTH_Z - 1, EXT_GREY);
-            // Tick ±0.8 at chain
-            addLine2(g.coord, fl, SOUTH_Z - 0.8, g.coord, fl, SOUTH_Z + 0.8, DIM_GREY);
-          }
-          // Spacing labels — known from drawing: each gap = CL_SPACING = 3285 mm
-          for (let i = 0; i < clLines.length - 1; i++) {
-            const a = clLines[i], b = clLines[i+1];
-            addSpacingLbl(3285, (a.coord + b.coord) / 2, SOUTH_Z, `sg:dchain:cl:${i}`);
+          // Along-CL unit vector in Three.js (northward = -Z)
+          const clAlong_x = tanCL / normCL;   //  0.23475
+          const clAlong_z = -1    / normCL;   // -0.97183
+
+          // Perpendicular-to-CL unit vector in Three.js (SE = +X, +Z)
+          const clPerp_x =  1    / normCL;   //  0.97183
+          const clPerp_z = tanCL / normCL;   //  0.23475
+
+          const CHAIN_OFFSET = 7;   // metres south of Grid 9
+          const TICK_H = 0.8;
+
+          const clLines = MOORINGS_GRIDLINES
+            .filter(g => g.label === 'CLa' || g.label === 'CL' || g.label === 'CLb')
+            .sort((a, b) => a.coord - b.coord);  // CLa < CL < CLb (west → east)
+
+          if (clLines.length >= 2) {
+            // Anchor: CLa south end (NS=0, Z=0) displaced CHAIN_OFFSET in -clAlong
+            const anchorX = clLines[0].coord - CHAIN_OFFSET * clAlong_x;
+            const anchorZ = 0               - CHAIN_OFFSET * clAlong_z;  // = +CHAIN_OFFSET/normCL
+
+            // Project each CL line onto the chain line through anchor in clPerp direction.
+            // Because EW_diff between consecutive CL lines = CL_SPACING, the projection
+            // parameter s = EW_diff / normCL (derived from the intersection equations).
+            const clAtt = clLines.map(g => {
+              const s = (g.coord - clLines[0].coord) / normCL;
+              return {
+                g,
+                refX: g.coord,  // south end X (at NS=0, Z=0)
+                refZ: 0,
+                chainX: anchorX + s * clPerp_x,
+                chainZ: anchorZ + s * clPerp_z,
+              };
+            });
+
+            // Chain line: CLa attachment → CLb attachment (runs in clPerp direction)
+            addLine2(clAtt[0].chainX, fl, clAtt[0].chainZ,
+                     clAtt[clAtt.length-1].chainX, fl, clAtt[clAtt.length-1].chainZ, DIM_GREY);
+
+            for (const att of clAtt) {
+              // Extension: 1 m past Grid 9 in -clAlong → 1 m past chain in -clAlong
+              // (parallel to CL lines, mirrors how A-L uses vertical extension lines)
+              addLine2(
+                att.refX   - 1*clAlong_x, fl, att.refZ   - 1*clAlong_z,
+                att.chainX - 1*clAlong_x, fl, att.chainZ - 1*clAlong_z,
+                EXT_GREY
+              );
+              // Tick ±TICK_H in clAlong direction at chain attachment
+              addLine2(
+                att.chainX - TICK_H*clAlong_x, fl, att.chainZ - TICK_H*clAlong_z,
+                att.chainX + TICK_H*clAlong_x, fl, att.chainZ + TICK_H*clAlong_z,
+                DIM_GREY
+              );
+            }
+
+            // Spacing labels: 3285 mm each (read from drawing — no calculation needed)
+            for (let i = 0; i < clAtt.length - 1; i++) {
+              const a = clAtt[i], b = clAtt[i+1];
+              addSpacingLbl(3285, (a.chainX+b.chainX)/2, (a.chainZ+b.chainZ)/2, `sg:dchain:cl:${i}`);
+            }
           }
         }
 
