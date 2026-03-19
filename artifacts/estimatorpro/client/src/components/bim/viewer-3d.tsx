@@ -2373,7 +2373,12 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         // Shift in the +X direction per slot so labels fan out east — stays at floor level
         const labelEW = ew + stackSlot * STAGGER_STEP;
         const labelNS = ns;
-        const labelY  = staticFloorY + 1.0; // always at floor + 1 m (no vertical stacking)
+        // CLa and CLb intersections are within 1–2 m of the adjacent K/L/M gridlines,
+        // so their labels overlap with rect-grid labels at floor+1.  Raise them +2 m
+        // so CLa/CLb labels float at floor+3 ("above") while rect/wing labels stay at
+        // floor+1 ("below") — the one-above-one-below split the user requested.
+        const isCLzone = alphaLabel === 'CLa' || alphaLabel === 'CLb';
+        const labelY  = staticFloorY + 1.0 + (isCLzone ? 2.0 : 0.0);
 
         // Intersection marker (sphere)
         const markerGeo = new THREE.SphereGeometry(0.3, 8, 6);
