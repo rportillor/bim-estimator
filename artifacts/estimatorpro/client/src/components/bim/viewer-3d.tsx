@@ -1850,11 +1850,12 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
       // That is Grid A × Grid 9 = Three.js (0, staticFloorY, 0).
       // Named sg:ref10m:* so the scene-clear filter removes them on re-render.
       {
-        const REF_MAT = new THREE.LineBasicMaterial({ color: 0xFFFFFF, transparent: true, opacity: 0.65, depthTest: false });
+        // Cyan (#00CCFF) — standard CAD reference-layer colour, distinct from all structural grid families
+        const REF_MAT = new THREE.LineBasicMaterial({ color: 0x00CCFF, transparent: true, opacity: 0.70, depthTest: false });
         const maxEW = 110;  // covers full rect + wing east extent
         const maxNS = 55;   // covers rect (40.83m) + some buffer north
         const STEP  = 10;
-        const fy    = staticFloorY + 0.02;  // 2 cm above floor to prevent z-fighting with slab
+        const fy    = staticFloorY;  // exactly at floor level
         const addRef = (ax: number, az: number, bx: number, bz: number) => {
           const geo = new THREE.BufferGeometry();
           geo.setAttribute('position', new THREE.BufferAttribute(
