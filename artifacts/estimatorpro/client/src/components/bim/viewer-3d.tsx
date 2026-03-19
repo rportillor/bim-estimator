@@ -1827,8 +1827,8 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
             root.add(endSphere);
           }
         } else if(isParkingStall) {
-          // Parking stall: sit flat on floor surface (top of 40mm marking)
-          mesh.position.set(p.x, p.y + 0.02, p.z);
+          // Parking space: painted line marking on slab top surface (+0.2m slab + tiny gap)
+          mesh.position.set(p.x, p.y + 0.21, p.z);
         } else if(isRamp) {
           // Circular ramp: position ring center at ramp center coords
           // p.x = EW, p.y = elevation (z), p.z = -NS (Three.js convention)

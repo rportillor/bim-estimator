@@ -2250,58 +2250,121 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // pipelineRouter — Sequential BIM extraction pipeline: start, status, confirm-grid, enrich
   app.use('/api/bim/pipeline', authenticateToken, (await import('./routes/pipeline-routes')).pipelineRouter);
 
-  // ── Vision-based element extraction with built-in validation ─────────────
-  // POST /api/bim/models/:modelId/extract-elements
-  // Body: { elementType: "exterior_wall", documentId?: string }
-  // Sends the uploaded PDF to Claude Vision, validates the result, and writes
-  // only clean elements to the DB — no manual surgery needed afterwards.
-  app.post('/api/bim/models/:modelId/extract-elements', authenticateToken, async (req: any, res: any) => {
-    const { modelId } = req.params;
-    const { elementType, documentId } = req.body ?? {};
-    try {
-      const { extractExteriorWalls } = await import('./services/bim-element-extractor');
-      const anthropic = req.app.get('anthropic') as import('@anthropic-ai/sdk').default;
+  // ── Vision-based element extraction ──────────────────────────────────────
+  // GET  /api/bim/vision/element-types  — list all types the pipeline supports
+  app.get('/api/bim/vision/element-types', authenticateToken, async (_req: any, res: any) => {
+    const { listSupportedElementTypes } = await import('./services/bim-extraction-registry');
+    res.json({ types: listSupportedElementTypes() });
+  });
 
-      if (!anthropic) {
-        return res.status(503).json({ error: 'Anthropic client not initialised on server' });
+  // POST /api/bim/vision/:modelId/extract
+  // Body: { elementType: "door" | "slab" | "all" | ..., storey?: "P1", documentId?: string }
+  // NOTE: Path is intentionally /vision/... to avoid conflicting with the legacy
+  //       QTO re-extraction route at /bim/models/:modelId/extract-elements
+  app.post('/api/bim/vision/:modelId/extract', authenticateToken, async (req: any, res: any) => {
+    const { modelId } = req.params;
+    const { elementType = 'all', storey = 'P1', documentId } = req.body ?? {};
+    try {
+      if (!process.env.ANTHROPIC_API_KEY) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set' });
+      const { default: Anthropic } = await import('@anthropic-ai/sdk');
+      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+      // Resolve the PDF
+      let pdfPath: string | null = null;
+      const uploadsDir = path.join(process.cwd(), 'uploads');
+
+      // Storey → preferred drawing name lookup
+      const STOREY_DRAWING: Record<string, string> = {
+        'P1': 'A101', 'P2': 'A102',
+        'GF': 'A201', 'Ground': 'A201',
+        '1': 'A202', '2': 'A203', '3': 'A204', '4': 'A205', '5': 'A206',
+      };
+      const preferredDrawing = STOREY_DRAWING[storey];
+
+      // PDF priority:
+      //   1. Specific documentId from request body
+      //   2. Drawing that matches the storey (A101 for P1, etc.) — single-page only
+      //   3. Most recent PDF in DB that is ≤100 pages
+      //   4. Any matching file in the uploads directory
+
+      if (documentId) {
+        const row = await pool.query('SELECT filename FROM documents WHERE id=$1', [documentId]);
+        const fn = row.rows[0]?.filename;
+        if (fn) pdfPath = path.join(uploadsDir, fn);
       }
 
-      // Find the PDF for this model (use supplied documentId or pick the first PDF upload)
-      const docRow = await pool.query(
-        `SELECT file_path FROM project_documents
-         WHERE project_id = (SELECT project_id FROM bim_models WHERE id=$1)
-           AND (file_type ILIKE '%pdf%' OR original_name ILIKE '%.pdf')
-           ${documentId ? 'AND id=$2' : ''}
-         ORDER BY created_at DESC LIMIT 1`,
-        documentId ? [modelId, documentId] : [modelId],
-      );
+      if (!pdfPath && preferredDrawing) {
+        const row = await pool.query(
+          `SELECT filename FROM documents
+           WHERE project_id = (SELECT project_id FROM bim_models WHERE id=$1)
+             AND original_name ILIKE $2
+             AND (page_count IS NULL OR page_count <= 100)
+           ORDER BY created_at DESC LIMIT 1`,
+          [modelId, `%${preferredDrawing}%`],
+        );
+        const fn = row.rows[0]?.filename;
+        if (fn) pdfPath = path.join(uploadsDir, fn);
+      }
 
-      // Fallback: scan the uploads directory for the A101 PDF
-      let pdfPath: string | null = docRow.rows[0]?.file_path ?? null;
       if (!pdfPath) {
-        const uploadsDir = path.join(process.cwd(), 'uploads');
+        const dbRow = await pool.query(
+          `SELECT filename FROM documents
+           WHERE project_id = (SELECT project_id FROM bim_models WHERE id=$1)
+             AND (file_type ILIKE '%pdf%' OR original_name ILIKE '%.pdf')
+             AND (page_count IS NULL OR page_count <= 100)
+           ORDER BY created_at DESC LIMIT 1`,
+          [modelId],
+        );
+        const fn = dbRow.rows[0]?.filename;
+        if (fn) pdfPath = path.join(uploadsDir, fn);
+      }
+
+      // Local fallback: scan uploads dir for the preferred drawing name or A101
+      if (!pdfPath || !fs.existsSync(pdfPath)) {
         if (fs.existsSync(uploadsDir)) {
-          const files = fs.readdirSync(uploadsDir).filter(f => f.toLowerCase().endsWith('.pdf'));
-          if (files.length) pdfPath = path.join(uploadsDir, files[0]);
+          const allPdfs = fs.readdirSync(uploadsDir).filter(f => f.toLowerCase().endsWith('.pdf'));
+          const preferred = preferredDrawing
+            ? allPdfs.find(f => f.toLowerCase().includes(preferredDrawing.toLowerCase()))
+            : null;
+          const parking = allPdfs.find(f => /underground.*parking/i.test(f) || /a101/i.test(f));
+          const chosen = preferred ?? parking ?? allPdfs[0] ?? '';
+          if (chosen) pdfPath = path.join(uploadsDir, chosen);
         }
       }
-      if (!pdfPath || !fs.existsSync(pdfPath)) {
-        return res.status(404).json({ error: 'No PDF found for this model' });
+
+      if (!pdfPath || !fs.existsSync(pdfPath)) return res.status(404).json({ error: 'No PDF found for this model' });
+      console.log(`[vision-extract] Using PDF: ${path.basename(pdfPath)} (storey=${storey})`);
+
+      // Storey → floor elevation map
+      const STOREY_ELEV: Record<string, number> = {
+        'P1': -4.65, 'P2': -9.30, 'GF': 0, 'Ground': 0,
+        '1': 3.2, '2': 6.4, '3': 9.6, '4': 12.8, '5': 16.0,
+      };
+      const floorElev = STOREY_ELEV[storey] ?? 0;
+
+      // Legacy single-type extractors (exterior_wall, slab, parking_stall) kept for backward compat
+      const { extractExteriorWalls, extractSlab, extractParkingSpaces } = await import('./services/bim-element-extractor');
+      const { extractElementType } = await import('./services/bim-extraction-registry');
+
+      if (elementType === 'exterior_wall') {
+        const r = await extractExteriorWalls(modelId, pdfPath, anthropic);
+        return res.json({ success: true, results: [{ elementType: 'exterior_wall', inserted: r.inserted, skipped: r.skipped, log: r.reasons }] });
+      }
+      if (elementType === 'slab') {
+        const r = await extractSlab(modelId, pdfPath, anthropic);
+        return res.json({ success: true, results: [{ elementType: 'slab', inserted: r.inserted, skipped: r.skipped, log: r.reasons }] });
+      }
+      if (elementType === 'parking_stall' || elementType === 'parking_space') {
+        const r = await extractParkingSpaces(modelId, pdfPath, anthropic);
+        return res.json({ success: true, results: [{ elementType: 'parking_stall', inserted: r.inserted, skipped: r.skipped, log: r.reasons }] });
       }
 
-      let extractionResult;
-      if (!elementType || elementType === 'exterior_wall') {
-        extractionResult = await extractExteriorWalls(modelId, pdfPath, anthropic);
-      } else {
-        return res.status(400).json({ error: `Extraction for element type "${elementType}" not yet implemented` });
-      }
+      // New registry-based extraction (handles any type or "all")
+      const results = await extractElementType(modelId, pdfPath, anthropic, elementType, storey, floorElev);
+      const totalInserted = results.reduce((s, r) => s + r.inserted, 0);
+      const totalSkipped  = results.reduce((s, r) => s + r.skipped,  0);
+      res.json({ success: true, totalInserted, totalSkipped, results });
 
-      res.json({
-        success:  true,
-        inserted: extractionResult.inserted,
-        skipped:  extractionResult.skipped,
-        log:      extractionResult.reasons,
-      });
     } catch (err: any) {
       console.error('[extract-elements]', err);
       res.status(500).json({ error: err.message ?? 'Extraction failed' });
