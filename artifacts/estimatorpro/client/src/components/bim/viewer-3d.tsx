@@ -2344,27 +2344,28 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         }
       }
 
-      // Pass 2 — 4-quadrant label placement (one uniform rule for every label).
-      // For each intersection try 4 candidate positions around the dot in order:
-      //   east, west, south, north  (each offset QUAD_R metres from the dot centre).
-      // The first candidate whose centre is at least LABEL_CLEAR metres from every
-      // already-placed label wins.  Same algorithm for all grid families — no special cases.
-      const QUAD_R     = 2.5;   // metres from dot to label centre
-      const LABEL_CLEAR = 2.5;  // minimum separation between any two placed label centres
+      // Pass 2 — label placement with 5 candidate positions per dot (one uniform rule).
+      // Priority order: at the dot, east, west, south, north.
+      // The first position whose centre is ≥ LABEL_CLEAR metres from every already-
+      // placed label wins.  If all 5 fail (very dense clusters like G/Ga), the label
+      // stays at its dot — accepting minimal overlap is better than large displacement.
+      const QUAD_R      = 1.8;   // metres from dot centre to offset positions
+      const LABEL_CLEAR = 2.5;   // minimum separation between any two placed label centres
       const QUAD_OFFSETS: [number, number][] = [
-        [ QUAD_R,  0     ],   // east  (right)
-        [-QUAD_R,  0     ],   // west  (left)
-        [ 0,       QUAD_R],   // south
-        [ 0,      -QUAD_R],   // north
+        [ 0,       0      ],  // at the dot  ← first preference
+        [ QUAD_R,  0      ],  // east
+        [-QUAD_R,  0      ],  // west
+        [ 0,       QUAD_R ],  // south
+        [ 0,      -QUAD_R ],  // north
       ];
       const lPlacedEW: number[] = new Array(allIntersections.length).fill(0);
       const lPlacedNS: number[] = new Array(allIntersections.length).fill(0);
 
       for (let i = 0; i < allIntersections.length; i++) {
         const { ew, ns } = allIntersections[i];
-        // Default: east quadrant (will be overridden if a clear slot is found)
-        let bestEW = ew + QUAD_OFFSETS[0][0];
-        let bestNS = ns + QUAD_OFFSETS[0][1];
+        // Default: stay at the dot (used if all 5 positions fail)
+        let bestEW = ew;
+        let bestNS = ns;
         for (const [dew, dns] of QUAD_OFFSETS) {
           const tryEW = ew + dew;
           const tryNS = ns + dns;
