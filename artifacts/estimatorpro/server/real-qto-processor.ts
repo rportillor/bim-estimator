@@ -3352,20 +3352,31 @@ WING SECTION — angled NS gridlines (NS at Grid M intersection):
   10=35.572  11=32.480  12=28.254  13=24.046  14=22.404
   15=18.667  16=12.457  17=6.579  18=4.480  19=-0.756
 
-For each wall segment return:
-{ "wall_id": "EW-001",
-  "grid_start": {"alpha": "A", "numeric": "9"},
-  "grid_end":   {"alpha": "L", "numeric": "9"},
-  "offset_m": 0,
-  "thickness_m": 0.30, "height_m": ${h.toFixed(2)}, "material": "concrete", "type": "foundation" }
-- grid_start / grid_end: the grid intersection at each end of the wall
-    alpha = the EW gridline label (A–Y or CLa/CL/CLb)
-    numeric = the NS gridline label (1–9 or 10–19)
-- offset_m: perpendicular offset in metres if the wall does NOT sit exactly on the grid line (0 in most cases)
+IMPORTANT — TWO CASES:
+
+CASE 1 — Wall runs exactly along a named gridline (most structural walls):
+  Use grid_start / grid_end references. The code will look up exact metre values.
+  Example: south wall runs along Grid 9 from A to L →
+    { "wall_id": "EW-001",
+      "grid_start": {"alpha": "A", "numeric": "9"},
+      "grid_end":   {"alpha": "L", "numeric": "9"},
+      "thickness_m": 0.30, "height_m": ${h.toFixed(2)}, "material": "concrete", "type": "foundation" }
+
+CASE 2 — Wall does NOT sit on a named gridline (e.g. perimeter walls with annotated dimensions):
+  Read the EXACT metre value printed on the drawing and use raw x/y coordinates.
+  Do NOT invent a grid reference if the wall is not on a gridline.
+  Example: north wall at NS=37.775m (read from bold annotation on drawing) running EW 37.03m:
+    { "wall_id": "EW-003",
+      "start": {"x": 4.969, "y": 37.775},
+      "end":   {"x": 41.999, "y": 37.775},
+      "thickness_m": 0.30, "height_m": ${h.toFixed(2)}, "material": "concrete", "type": "foundation" }
+
 - type: "foundation" | "retaining" | "exterior"
+- For raw coordinates: x = EW metres from Grid A, y = NS metres from Grid 9
+- Read metre dimensions directly from bold annotation text on the drawing — do NOT estimate from pixels
 
 Return JSON ONLY — no prose:
-{ "perimeter_walls": [ { "wall_id","grid_start","grid_end","offset_m","thickness_m","height_m","material","type" }, ... ] }`,
+{ "perimeter_walls": [ { "wall_id", ["grid_start","grid_end" OR "start","end"], "thickness_m","height_m","material","type" }, ... ] }`,
 
       interior_walls: ctx + `TASK: Extract ONLY the INTERIOR PARTITION WALLS at the ${floor.name} level. Exclude exterior walls and structural columns.
 
