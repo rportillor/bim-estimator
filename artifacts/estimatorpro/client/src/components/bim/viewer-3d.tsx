@@ -1728,11 +1728,11 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
           const stallD = (e.geometry?.dimensions?.depth  || dims.depth  || 5.5);
           const stallH = 0.04; // 40mm marking thickness
           geo = new THREE.BoxGeometry(stallW, stallH, stallD);
-          color = e.geometry?.accessible ? 0x1E90FF : 0xFFFF99; // Blue=HA, Yellow=standard
-          materialProps.roughness  = 0.9;
-          materialProps.metalness  = 0.0;
-          materialProps.transparent = true;
-          materialProps.opacity    = 0.70;
+          color = e.geometry?.accessible ? 0x00BFFF : 0xFF6600; // Cyan=HA, Orange=standard
+          materialProps.roughness   = 0.6;
+          materialProps.metalness   = 0.0;
+          materialProps.transparent = false;   // fully opaque so they show above the slab
+          materialProps.opacity     = 1.0;
         } else if(isPaving){
           // Paving: Flat, gray surfaces
           geo = new THREE.BoxGeometry(dims.width, Math.max(dims.height, 0.15), dims.depth);
@@ -2726,8 +2726,8 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
             <span><span style={{color:'#DD0099'}} className="font-bold">■</span> CL±</span>
             <span className="mx-1 text-slate-300">|</span>
             <span className="font-semibold text-slate-500 uppercase tracking-wide text-[9px]">Parking:</span>
-            <span><span style={{color:'#FFFF99',background:'#555',borderRadius:2,padding:'0 1px'}} className="font-bold">■</span> Stall</span>
-            <span><span style={{color:'#1E90FF'}} className="font-bold">■</span> HA</span>
+            <span><span style={{color:'#FF6600'}} className="font-bold">■</span> Stall</span>
+            <span><span style={{color:'#00BFFF'}} className="font-bold">■</span> HA</span>
           </div>
         )}
 
