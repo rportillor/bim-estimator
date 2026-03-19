@@ -1778,28 +1778,7 @@ export default function Viewer3D({ modelId, onElementSelect }: ViewerProps){
         }
         // ─────────────────────────────────────────────────────────────────────
 
-        // 📏 ADD DIMENSION LABELS: Canvas-based text for measurements
-        if(Math.random() < 0.3) { // Show dimensions for 30% of elements to avoid clutter
-          const dimensionText = createDimensionLabel(dims, type);
-          if(dimensionText) {
-            dimensionText.position.set(p.x, p.y + dims.height + 0.5, p.z);
-            dimensionText.scale.setScalar(Math.max(0.5, Math.min(2, dims.width / 5)));
-            root.add(dimensionText);
-          }
-        }
-
-        // 📐 ADD DISTANCE LINES: For walls, show length measurements
-        if(isWall && e.properties?.start && e.properties?.end && Math.random() < 0.2) {
-          const start = e.properties.start;
-          const end = e.properties.end;
-          const length = Math.sqrt(Math.pow(end.x - start.x, 2) + Math.pow(end.y - start.y, 2));
-          
-          // Create distance line with measurement
-          const distanceLine = createDistanceLine(start, end, length);
-          if(distanceLine) {
-            root.add(distanceLine);
-          }
-        }
+        // Element dimension labels and distance lines removed — properties shown in side panel on click
 
         // expand bbox (using Y-up coordinates: X=left/right, Y=up/down, Z=in/out)
         box.expandByPoint(new THREE.Vector3(p.x - dims.width/2, p.y, p.z - dims.depth/2));
